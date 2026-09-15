@@ -73,7 +73,14 @@ As of this writing nothing below has been read in depth, except autoresearch and
 
 **What it is.** From AI research: a system that stores each belief together with its justifications and revises beliefs when justifications change. Doyle's justification-based TMS (1979) and de Kleer's assumption-based TMS (1986), which tracks many contexts at once.
 
-**Where it lives in ours.** Facts with `cites`, `supersedes`, `corrects`, `ruled_out` with evidence, and drift reports. **Known gap:** no automatic propagation. Demoting evidence does not demote the facts built on it. The codebase-experts design proposes propagation via span hashes.
+**Where it lives in ours.** Facts with `cites`, `supersedes`, `corrects`, `ruled_out` with evidence, and drift reports.
+
+**Known gap, now prototyped (2026-09-15).** Automatic propagation was proven inside the database on SurrealDB 3.1.4, 7 of 7 checks passed:
+- a computed effective status
+- event rules that demote facts when evidence is downgraded or uncited
+- a cascade to conclusions
+
+Pattern: `engine/patterns/tms_propagation.surql`; results and risks: `notes/2026-09-15_automatic_demotion.md`. Not yet installed in any instance. The codebase-experts design extends it with span hashes.
 
 **Study questions:**
 - How exactly does a justification-based TMS propagate retraction, and what is the cost at scale?
