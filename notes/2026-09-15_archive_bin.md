@@ -41,6 +41,26 @@ Tested on SurrealDB 3.1.4, in a throwaway database. Pattern: `engine/patterns/ar
 - **Deleting a citation** fires both the demotion rule and the archive rule: the fact is demoted, and the removed citation is kept in the bin. Restoring the citation does not auto-restore the fact's status (demotion is one-way); the review queue records what to re-check.
 - **Purging a demotion's cause** from the archive must not delete the review record. Review items are artifacts with their own, longer retention.
 
+## Installed in instance 1 (2026-09-15)
+
+**What was installed**
+- Generated rules (one event per covered table, emitted on one line each, because the statement-at-a-time loader splits on line-ending semicolons).
+- **Knowledge and evidence tables:** archived with no expiry.
+- **Edges:** 90 days. **Review items:** 180 days. **Output citations:** 365 days.
+- A policy record sets the legal hold **on** by default, because the matter is active.
+- Helpers: delete-with-reason, list, restore (nodes first, gated fields deferred, then edges), hold, and release (release requires a reason).
+- A purge script: dry run prints NOT EXECUTED; each real run is logged with a count.
+
+**Tests: 14 of 14 passed**
+- An update archives nothing.
+- A deleted edge keeps in, out and fields, with an expiry, the hold on, and its reason.
+- A deleted fact is kept forever.
+- Restore brings back the fact and edge.
+- Held rows survive an expired purge; released expired artifacts are purged; knowledge survives.
+- The purge is logged.
+
+**No-churn proof on the real graph:** archive row counts were unchanged after a full seed re-apply and a full lens rebuild.
+
 ## Next steps
 1. Decide retention days per table per instance.
 2. Default legal hold on for active legal matters.

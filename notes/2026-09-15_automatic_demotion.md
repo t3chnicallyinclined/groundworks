@@ -95,6 +95,29 @@ fact:derived_only <- demoted, cause fact:base
 - **Where cascades stop:** stored demotion stops at conclusions; outputs are only flagged.
 - **What undoing a debunk does:** a revived fact does not auto-restore dependents; the review queue records what to re-check.
 
+## Installed in instance 1 (2026-09-15)
+
+**Install order:** loaders first, then truth maintenance, then the archive. Each step was backed up and tested before the next.
+
+**1. Loaders no longer churn edges** (`engine/patterns/edge_ids.py`).
+- Every loader-written edge now has a stable id derived from (scope, edge table, source, target, repeat index), and every write carries a run token.
+- After a successful load, a sweep deletes only edges of that scope not written by this run.
+- The sweep is skipped if any write in the run failed, so a failed write cannot delete the previous copy.
+- SurrealDB 3.1.4 behavior this relies on: `RELATE` with an existing explicit edge id updates the edge in place (no duplicate, no delete event).
+- Tests: 24 of 24 checks passed. Covered: the migration to stable ids, identical edge id sets across re-apply and rebuild, a removed edge swept, a failed statement blocking the sweep, both bulk label and lens loaders keeping identical id sets (several thousand edges each), and repeated live helper calls adding no duplicates.
+- The two-phase loader was simplified. Pass 1 now omits the gated field instead of writing NONE, so existing statuses are never transiently cleared.
+
+**2. Truth maintenance.**
+- Installed: a computed effective status plus events for grade drop, moved-outside-status, citation removal, source downgrade, authority unverified, and fact leaving confirmed.
+- Every effect is written to a review queue.
+- Tests: 19 of 19, including negative probes (unrelated edits fire nothing; one lost citation among several only flags) and one-way demotion.
+- The existing gate probe suites still pass.
+- On the real graph, stored and effective status agreed for every fact at install.
+
+**Lessons**
+- Test cleanups that delete throwaway rows now trigger demotion reviews and archive snapshots, so every test suite must also clean its review and archive rows, **reviews first, then archive** (deleting a review is itself archived).
+- A test helper using `UPDATE` on a record that was never created silently does nothing. Create first.
+
 ## Next steps
 1. Add `stale` to the status vocabulary in the gate (a human-owned change).
 2. Install the computed field first in any instance, since it carries no loader risk.
