@@ -1,0 +1,12 @@
+# never commit data or secrets
+data/
+corpus/
+labels/
+kb_data/
+*.db
+*.sqlite
+*.surql.data
+.env
+*.pdf
+__pycache__/
+.venv/
