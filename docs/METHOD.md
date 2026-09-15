@@ -159,6 +159,11 @@ Maps autoresearch onto knowledge work:
 | Keep only what a fixed evaluator says is better | autoresearch; hill-climbing on a fixed fitness function |
 | Model proposes, rules dispose | Neuro-symbolic systems |
 | Linking disjoint literatures | Literature-based discovery (Swanson ABC model); HypER; AGATHA |
+| Stage data, check it, only then publish | Write-audit-publish (data engineering) |
+| Raw, then validated, then curated layers | Medallion architecture (bronze, silver, gold) |
+| Each assertion packaged with its provenance | Nanopublications (assertion, provenance, publication info) |
+| Facts extracted at scale with confidence | Knowledge-base construction with knowledge fusion (e.g. Google's Knowledge Vault): confidence is a probability there; here promotion is a rule on evidence rank |
+| A claim's epistemic standing shown with it | Epistemic status labels; claim verification / fact-checking pipelines |
 
 **How it differs from RAG.** RAG retrieves a sample at question time from a store that accepts anything. This reads everything up front with proof of coverage, stores graded judgments and negatives, enforces write rules in the datastore, and runs adversarial roles. Retrieval (exact, graph, vector, lens) is one way of *using* the graph, not the method.
 
