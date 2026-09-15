@@ -1,5 +1,7 @@
 # Reading list for the methods brain
 
+See also `LINEAGE_STUDY.md`: the twelve known techniques the method is built from, with study questions and sources for each.
+
 Run these through the scholar pipeline (methods ladder: reproduction > primary read in full > independent reporting > vendor > aggregator). Each entry says what question the reading must answer, so extraction is goal-directed.
 
 **Status:** `found` = located by search on 2026-09-15, not yet read; `read` = read in full; `memory` = citation from memory, locate and verify before use. Nothing below has been read in full yet unless marked.

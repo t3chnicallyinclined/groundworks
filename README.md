@@ -35,6 +35,7 @@ This repository contains **no client or matter data**, ever:
 | `docs/ROADMAP.md` | Tracks for the engine, pilots and product, with acceptance tests |
 | `docs/DECISIONS.md` | Method-level decisions and open questions |
 | `notes/` | Dated design notes: how the idea developed and why |
+| `research/LINEAGE_STUDY.md` | The twelve known techniques inside the method (integrity constraints, write-audit-publish, medallion layers, truth maintenance, evidence grading, provenance, knowledge fusion, argumentation, verified annotation, recursive language models, autoresearch, neuro-symbolic), each with where it lives in our system, study questions and sources |
 | `research/READING_LIST.md` | Papers and repos to run the scholar over, with the question each should answer |
 | `research/SOURCES_2026-09-15.md` | Market and technology scan, graded by source rank |
 | `.claude/agents/scholar-architect.md` | The expert agent for designing and building the system |
