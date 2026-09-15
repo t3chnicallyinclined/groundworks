@@ -67,3 +67,51 @@ DEFINE EVENT OVERWRITE cascade_to_conclusions ON TABLE fact
 
 -- The status enum must include 'stale' (the gate's ASSERT list) before events 2-4
 -- can write it.
+
+-- ============================================================================
+-- 5. Debunk propagation with a review queue (supersedes events 3-4 for facts)
+--
+-- PROTOTYPE, proven on SurrealDB 3.1.4 on 2026-09-15 (throwaway database), 10 of
+-- 10 checks passed, cascade verified three levels deep. When a confirmed fact
+-- is ruled out, demoted or superseded, everything downstream is handled by kind:
+--   facts citing it:     demoted if it was their only valid justification,
+--                        otherwise flagged "weakened"
+--   conclusions it supported: unready if no confirmed support remains,
+--                        otherwise flagged "support weakened"
+--   conclusions it attacked:  flagged "adverse material debunked" (may help them)
+--   output citations to it:   verdict NEEDS_RECHECK and flagged
+-- Demotions re-fire this event, so the effect cascades through chains.
+-- Every effect is written to `review` with target, cause and kind.
+-- ============================================================================
+DEFINE EVENT OVERWRITE propagate_out ON TABLE fact
+  WHEN $event = 'UPDATE' AND $before.status = 'confirmed'
+   AND $after.status IN ['ruled_out','stale','superseded']
+  THEN {
+    FOR $d IN (SELECT VALUE in FROM cites WHERE out = $after.id) {
+      IF $d.status = 'confirmed' {
+        IF (count(SELECT VALUE id FROM $d->cites->passage WHERE read_as IN ['page_image','record_text'])
+            + count(SELECT VALUE id FROM $d->cites->fact WHERE status = 'confirmed')) = 0 {
+          UPDATE $d SET status = 'stale', stale_reason = 'justification lost: ' + <string> $after.id, stale_at = time::now();
+          CREATE review SET target = $d, cause = $after.id, kind = 'demoted_sole_justification_lost', at = time::now();
+        } ELSE {
+          CREATE review SET target = $d, cause = $after.id, kind = 'weakened_one_justification_lost', at = time::now();
+        };
+      };
+    };
+    FOR $a IN (SELECT VALUE out FROM supports WHERE in = $after.id) {
+      IF $a.ready = true AND count(SELECT VALUE id FROM $a<-supports<-fact WHERE status = 'confirmed') = 0 {
+        UPDATE $a SET ready = false, unready_reason = 'support lost: ' + <string> $after.id;
+        CREATE review SET target = $a, cause = $after.id, kind = 'conclusion_unready', at = time::now();
+      } ELSE {
+        CREATE review SET target = $a, cause = $after.id, kind = 'conclusion_support_weakened', at = time::now();
+      };
+    };
+    FOR $a IN (SELECT VALUE out FROM undercuts WHERE in = $after.id) {
+      CREATE review SET target = $a, cause = $after.id, kind = 'adverse_material_debunked', at = time::now();
+    };
+    FOR $b IN (SELECT VALUE in FROM resolves WHERE out = $after.id) {
+      UPDATE $b SET verdict = 'NEEDS_RECHECK', recheck_reason = 'target no longer confirmed: ' + <string> $after.id;
+      CREATE review SET target = $b, cause = $after.id, kind = 'citation_target_not_confirmed', at = time::now();
+    };
+  };
+-- Note: the output-citation verdict enum must include NEEDS_RECHECK.
