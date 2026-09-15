@@ -1,0 +1,107 @@
+# instance.yaml -- the eight answers, machine-readable.
+# Copy this folder to instances/<name>/ and fill it in with the design-instance skill.
+# Lines marked HUMAN-OWNED may not be changed by the improvement loop.
+
+name: example-instance
+version: 0.1.0
+
+# 1. GOAL: what we are trying to establish, and for whom ("direction" is relative to this holder)
+goal:
+  statement: "Establish whether <X> from <corpus>."
+  holder: "the party or team the directions are relative to"
+  success: "what a finished deliverable looks like"
+  off_limits: ["things never argued, claimed or done"]
+
+# 2. UNITS: smallest citable things, with how each is located
+units:
+  - type: page_line
+    locator: "{source} p.{page}:{line}"
+    id_pattern: "tl_{n}"
+    chunk_size: 220
+  - type: document_page
+    locator: "{doc_id} p.{page}"
+    id_pattern: "pg_{n}"
+    chunk_size: 45
+
+# 3. FIDELITY LADDER (strongest first). HUMAN-OWNED
+fidelity:
+  grades: [original, text_extract, secondary, agent, recollection]
+  confirming: [original, text_extract]
+  filing_grade: [original]
+
+# 4. STATUS AXIS: may the unit be used at all? HUMAN-OWNED
+status:
+  values: [usable, restricted, unusable]
+  usable: [usable]
+  resolver: "adapter name that decides status per unit"
+
+# optional: AUTHORITY AXIS for sources that bind or merely inform. HUMAN-OWNED
+authority:
+  ranks: [binding, persuasive, supporting, pointer]
+  verified_requires: official_text
+
+# 5. VOCABULARY
+vocabulary:
+  framework:
+    source: "authoritative document and location (e.g. guideline section, order page)"
+    transcribed_from: "page image / official text"
+    items:
+      - {code: f1, text: "verbatim item 1"}
+      - {code: f2, text: "verbatim item 2"}
+  issues: [issue_a, issue_b]
+  crosswalk: {issue_a: [f1], issue_b: [f1, f2]}
+  targets_file: targets.json         # e.g. findings, claims, requirements
+  conclusions_file: conclusions.json # e.g. arguments, hypotheses, root causes
+  tiers: [0, 1, 2, 3]
+  directions: [for_goal, against_goal, mixed, neutral]
+
+# 6. GATES. HUMAN-OWNED
+gates:
+  - id: confirmed_needs_primary
+    table: fact
+    field: status
+    value: confirmed
+    requires:
+      - {edge: cites, to: [unit, passage], where: "grade IN confirming AND status IN usable", min: 1}
+  - id: conclusion_ready
+    table: conclusion
+    field: ready
+    value: true
+    requires:
+      - {edge: supports, from: [unit, passage], where: "grade IN confirming AND status IN usable", min: 1}
+      - {edge: undercuts, min: 1}
+      - {edge: attacks, min: 1}
+    forbids:
+      - {edge: attacks, where: "verdict = 'fatal'"}
+      - {edge: attacks, where: "verdict = 'damaging' AND in.answer = NONE"}
+
+# 7. ROLES (skills, generated from templates with this vocabulary)
+roles:
+  - {skill: red-team, lenses: [adversary_1, adversary_2, skeptic]}
+  - {skill: cold-bench, lenses: [decision_maker_a, decision_maker_b, decision_maker_c]}
+  - {skill: premortem, categories: [category_1, category_2]}
+  - {skill: claim-audit, verdicts: [VERIFIED, MISMATCH, NOT_FOUND, OUTSIDE_STATUS, MISATTRIBUTED, INTERPOLATED, UNCHECKABLE]}
+
+# LENSES
+lenses:
+  - {name: framework, kind: framework_filing}
+  - {name: decision_maker, filter: "status IN usable AND grade IN confirming"}
+  - {name: adversary, filter: "dir = 'against_goal'", order: "tier DESC"}
+
+# 8. EVALUATOR. HUMAN-OWNED (entries may be added, never removed or loosened)
+evaluator:
+  regression_file: evals/known_errors.json
+  gate_probes: generated
+  label_agreement: {sample_chunks: 2, adjudicate: true}
+  judged_panel: {prompts: evals/panel/, hidden_from_writer: true}
+  outcome_metric: "a real-world outcome if one exists (time split, later decision), else none"
+
+# OPTIONAL MODULES
+staleness: {enabled: false}
+discovery: {enabled: false}
+
+privacy:
+  deny_list: "~/.xscholar/denylist.txt"   # outside the repo
+  providers_allowed: ["the model provider the owner approved"]
+
+human_owned: [fidelity, status, authority, gates, evaluator, privacy]

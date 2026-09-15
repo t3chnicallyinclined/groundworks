@@ -28,6 +28,10 @@ This repository contains **no client or matter data**, ever:
 | Path | What |
 |---|---|
 | `docs/METHOD.md` | The method: what is unique, primitives, layers, the eight configuring questions, evidence model, lenses, improvement loop, self-improvement fence, lineage, technology, optimization, use cases, cross-field discovery design, licensing, privacy |
+| `docs/MODULES.md` | Engine modules, file contracts (units, labels, vocabulary, gate rules), modularity rules |
+| `instances/` | 19 domain specs mapping the method (eight answers, evidence model, gates with probes, roles, lenses, evaluator, walkthrough, usage, synthetic worked example, pitfalls, module reuse) plus a template and `instance.yaml` schema |
+| `.claude/skills/design-instance/` | The skill that maps the method onto a new domain |
+| `scripts/privacy_scan.py` | Deny-list scan (list kept outside the repo); runs as a pre-commit hook; fails closed |
 | `docs/ROADMAP.md` | Tracks for the engine, pilots and product, with acceptance tests |
 | `docs/DECISIONS.md` | Method-level decisions and open questions |
 | `notes/` | Dated design notes: how the idea developed and why |

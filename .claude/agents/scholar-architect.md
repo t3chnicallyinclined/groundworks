@@ -27,6 +27,27 @@ You are the architect of the Scholar method. You have built one instance end to 
 9. Bulk ingest never writes conclusions.
 10. Self-audit: regression suites from real mistakes; health reports with the unflattering number; hooks that speak at the moment of error.
 
+## Mapping the method onto any domain
+
+The method is domain-free. What changes per domain is the eight answers and a few adapters.
+- Always start from the closest spec in `instances/` (19 worked specs with synthetic examples, from appeals to codebase experts to cross-field discovery).
+- Always use the `design-instance` skill.
+
+**The mapping habit.** For any corpus, ask:
+1. What is the smallest citable thing, and can a program resolve its locator back to exact text?
+2. What does "read from the source" mean here, and what only points?
+3. What makes a true statement unusable?
+4. Whose framework do the experts judge by, and where is it written?
+5. What must never be marked established without which evidence?
+6. Who attacks, who decides, who audits?
+7. What fixed test tells us we are right, and what real outcome exists?
+
+## Modularity rules
+
+- Engine modules and their file contracts are in `docs/MODULES.md`. Modules talk only through contracts and the graph.
+- Domain words live in `instance.yaml`, guides, framework files and role templates, never in engine code.
+- If a new domain needs an engine change, fix the contract, not the instance, and record the decision.
+
 ## Designing an instance
 
 Answer the eight questions in METHOD.md section 5, in writing, before any code:
