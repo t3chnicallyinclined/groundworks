@@ -51,6 +51,8 @@
 | **improvement loop** | One change at a time, evaluator, keep/discard, log | evaluator, a changeable artifact | kept change + attempt log | which artifacts are inside the fence | designed |
 | **staleness** (optional) | For mutable corpora: span hashes, auto-demote facts when cited spans change, queue re-reads | diffs, graph | fact status changes, re-read queue | span hashing method | designed |
 | **discovery** (optional) | Problem and capability cards, candidate bridges, bridge gate, time-split scoring | cards | bridges, verdicts, scores | card types, novelty check | designed |
+| **truth maintenance** (optional, recommended) | Computed effective status; events that demote on lost justification, cascade through chains, flag weakened dependents, flag conclusions whose adverse material was debunked, mark output citations for recheck; review queue | graph writes | status changes, `review` rows | confirming grades; citation tables counted | prototype proven (`engine/patterns/tms_propagation.surql`) |
+| **archive** (optional, recommended) | Snapshot on delete with reason; per-table retention tiers (knowledge never purged, artifacts expire, client data purged on demand); restore; legal hold; scheduled purge with a logged count | deletes | `archive` rows, purge log | retention days per table; hold defaults | prototype proven (`engine/patterns/archive_bin.surql`) |
 | **privacy guard** | Deny-list scan before commit or send; provider policy | text, deny list (outside the repo) | pass/fail; redactions | deny list path, provider allow-list | yes (scan) |
 
 ## File contracts
