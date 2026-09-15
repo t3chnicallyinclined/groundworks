@@ -212,6 +212,7 @@ Needs a corpus too large to read by hand, a goal, and a high cost of confident e
 | Incident postmortem | Root cause | Log line, change | Timestamped log | No root cause without reproduction | Service, security, management |
 | Reverse engineering | How it works | Address, disassembly line | Disassembly or reproduction | Confirmed only with code or reproduction | Emulator author, designer |
 | Codebase migration | What breaks | Function, call site, test | Passing test | No safe removal without coverage | Owner, security, performance |
+| **Self-updating project experts** | Correct, cited answers about how a codebase works, kept current | Symbol, file, test, commit, doc paragraph | Reproduction (test or trace) > code at pinned commit | Confirmed needs a live pinned span; facts auto-demote to stale when their span's hash changes | Architect, newcomer, security, performance, on-call |
 | Legislative history | Intent | Bill text, hearing line | Official record | No intent from commentary | Proponent, opponent, court |
 | Customer research | Why users leave | Interview quote, ticket | Verbatim with user id | No "users want" from one quote | Product, support, sales |
 | Reproducibility audit | Do results hold? | Figure, table, code cell | Re-run output | "Replicates" only after a run | Reviewer, authors, statistician |

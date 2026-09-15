@@ -37,6 +37,7 @@ The instance runs in its own private repository. This repo receives only generic
 | D2 | Time-split evaluator for D1 | Hit rate against a stated baseline |
 | D3 | Second domain instance from config (candidates: systematic review; incident postmortem) | Built without engine edits |
 | D4 | Self-improvement loop on labeling guides against the frozen evaluator | Kept changes logged with evaluator deltas; human-approved |
+| D5 | Codebase instance producing self-updating project experts (notes/2026-09-15_codebase_experts.md): symbol-hash locators, automatic staleness on commit, incremental re-read, generated charter sections with human-approved diffs | On a repo with hand-written charters: question-bank accuracy, stale-fact detection precision, and charter drift reported against the hand-written baseline |
 
 ## Track E: Product
 
