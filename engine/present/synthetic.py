@@ -156,6 +156,17 @@ REVIEW_POLICY = {
     "negations": ["no longer", "missing"],
     "check_first_max": 6,
     "spot_check": {"count": 4, "seed": 20260915},
+    # This instance's own promotion rules, re-checked over every rendered row (roadmap C18).
+    "rules": [
+        {"id": "established_needs_source_grade", "when": {"status": ["confirmed", "measured"]},
+         "requires": {"grade": ["primary", "benchmark"]}},
+        {"id": "established_needs_locator", "when": {"status": ["confirmed"]},
+         "requires": {"locators_min": 1}},
+        {"id": "answered_needs_answer_link", "when": {"answered": True},
+         "requires": {"links_prefix": ["answer:"]}},
+        {"id": "verified_citation_needs_locator", "when": {"kind": ["citation"], "verdict": ["verified"]},
+         "requires": {"locators_min": 1}},
+    ],
     "why_labels": {"status:open": "open decision, nothing checked yet",
                    "status:inferred": "inferred from other rows", "status:draft": "draft, not reviewed",
                    "status:stale": "source changed since read", "grade:agent": "agent grade (a model wrote it)",

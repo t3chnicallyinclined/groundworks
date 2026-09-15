@@ -35,11 +35,12 @@ DATASETS = {"incident": synthetic.incident, "legal": synthetic.legal}
 ALL = dict(DATASETS, review=synthetic.review)
 # The one-layer header the claims view keeps (v1.0).
 HEADER = re.compile(r"^Check first (\d+) \u00b7 Eliminated (\d+) \u00b7 Superseded (\d+) \u00b7 Established (\d+) "
-                    r"\u00b7 Total (\d+)$", re.M)
-# The two-layer header (v1.1): the five buckets still add up to the total; spot check is a sample.
+                    r"\u00b7 Total (\d+) \u00b7 Rule fails (\d+)$", re.M)
+# The two-layer header (v1.1/v1.2): the five buckets still add up to the total; the spot check sample
+# and the rule-fail count are reported apart.
 SCAN_HEADER = re.compile(r"^Check first (\d+) \u00b7 More to check (\d+) \u00b7 Eliminated (\d+) \u00b7 "
                          r"Superseded (\d+) \u00b7 Established (\d+) \u00b7 Total (\d+) \u00b7 "
-                         r"Spot check (\d+) of (\d+)$", re.M)
+                         r"Spot check (\d+) of (\d+) \u00b7 Rule fails (\d+)$", re.M)
 
 
 def scope_rows(doc, mode):
@@ -167,7 +168,7 @@ class Preservation(unittest.TestCase):
         for name, make in ALL.items():
             doc, pol = make()
             text = render.render(doc, "claims", pol)
-            n, k, s, m, t = map(int, HEADER.search(text).groups())
+            n, k, s, m, t, _r = map(int, HEADER.search(text).groups())
             self.assertEqual(n + k + s + m, t)
             self.assertEqual(t, len(scope_rows(doc, "claims")))
             self.assertEqual(len(entry_ids(section(text, "## Check first (%d)" % n))), n)
@@ -179,7 +180,7 @@ class Preservation(unittest.TestCase):
         for name, make in ALL.items():
             doc, pol = make()
             text = render.render(doc, "speedread", pol)
-            n, x, k, s, m, t, a, b = map(int, SCAN_HEADER.search(text).groups())
+            n, x, k, s, m, t, a, b, _r = map(int, SCAN_HEADER.search(text).groups())
             with self.subTest(dataset=name):
                 self.assertEqual(n + x + k + s + m, t)  # every row in exactly one bucket
                 self.assertEqual(t, len(doc["rows"]))
@@ -453,6 +454,8 @@ class Validation(unittest.TestCase):
             {"spot_check": {"seed": {}}},
             {"spot_check": {"n": 3}},
             {"spot_check": 5},
+            {"rules": [{"id": "a", "when": {"colour": ["x"]}, "requires": {"locators_min": 1}}]},
+            {"rules": [{"id": "a", "when": {"status": ["x"]}, "requires": {"nope": 1}}]},
             ["not", "an", "object"],
         ]
         for obj in bad:
@@ -512,7 +515,7 @@ class Features(unittest.TestCase):
         pol = policy.load(pol)
         names = {"needs_check", "needs_check_reasons", "eliminated", "superseded", "replaced_by", "established",
                  "high_impact", "unanswered_high_impact", "has_numbers", "has_negation", "locator_count",
-                 "relevance", "lens", "bucket"}
+                 "relevance", "lens", "bucket", "rule_check", "rule_fails", "rule_reason"}
         for row in features.validate_rows(doc)["rows"]:
             a = features.row_features(row, pol, doc["question"])
             self.assertEqual(a, features.row_features(row, pol, doc["question"]))
@@ -774,7 +777,7 @@ class TwoLayer(unittest.TestCase):
             lay = render.layout(valid, pol_obj, plan)
             text = render.render(doc, "speedread", settings)
             scan, _details = metrics.split_layers(text, "speedread")
-            n, x, k, s, m, t, _a, _b = map(int, SCAN_HEADER.search(text).groups())
+            n, x, k, s, m, t, _a, _b, _r = map(int, SCAN_HEADER.search(text).groups())
             with self.subTest(cap=cap):
                 self.assertLessEqual(len(lay["check"]), cap)
                 self.assertEqual(sorted(lay["check_ids"] + lay["more_ids"]), sorted(plan["check_first"]))
@@ -810,7 +813,7 @@ class TwoLayer(unittest.TestCase):
         everything = render.spot_sample(valid, policy.load(dict(pol, spot_check={"count": 999})), plan)
         self.assertEqual(everything, plan["established"])
         text = render.render(doc, "speedread", pol)
-        n, x, k, s, m, t, a, b = map(int, SCAN_HEADER.search(text).groups())
+        n, x, k, s, m, t, a, b, _r = map(int, SCAN_HEADER.search(text).groups())
         self.assertEqual((a, b), (len(sample), m))
         self.assertEqual(n + x + k + s + m, t)  # the sample is counted apart; the buckets still reconcile
         head = "## Spot check (random, %d of %d established)" % (a, b)
@@ -899,6 +902,235 @@ class TwoLayer(unittest.TestCase):
             with self.subTest(policy=bad):
                 with self.assertRaises(policy.PolicyError):
                     policy.load(bad)
+
+
+class RuleCheck(unittest.TestCase):
+    """C18: each row's labels re-checked against the instance's own promotion rules, shown inline."""
+
+    RULES = [
+        {"id": "established_needs_source_grade", "when": {"status": ["confirmed", "verified"]},
+         "requires": {"grade": ["page_image", "record_text"]}},
+        {"id": "answered_needs_answer_link", "when": {"answered": True},
+         "requires": {"links_prefix": ["answer:"]}},
+        {"id": "established_needs_locator", "when": {"status": ["confirmed"]},
+         "requires": {"locators_min": 1}},
+    ]
+
+    def row(self, **over):
+        row = {"id": "r1", "group": "g", "kind": "claim", "text": "The school was told on March 3, 2025",
+               "status": "confirmed", "grade": "page_image", "locators": ["Tr. 45:12"], "links": []}
+        row.update(over)
+        return features.validate_rows({"title": "t", "question": None, "groups": ["g"], "rows": [row]})["rows"][0]
+
+    def feats(self, **over):
+        return features.row_features(self.row(**over), policy.load({"rules": self.RULES}))
+
+    def test_a_status_upgraded_beyond_its_grade_fails_and_the_right_grade_passes(self):
+        bad = self.feats(status="confirmed", grade="agent")
+        self.assertEqual((bad["rule_check"], bad["rule_fails"]), ("fail", ["established_needs_source_grade"]))
+        self.assertEqual(bad["rule_reason"], "status confirmed but grade agent")
+        good = self.feats(status="confirmed", grade="record_text")
+        self.assertEqual((good["rule_check"], good["rule_fails"], good["rule_reason"]), ("pass", [], ""))
+        before = self.feats(status="open", grade="agent")  # before the upgrade no rule's "when" matches
+        self.assertEqual((before["rule_check"], before["rule_fails"]), ("not_checked", []))
+        none = self.feats(status="confirmed", grade=None, locators=[])
+        self.assertEqual(none["rule_fails"], ["established_needs_source_grade", "established_needs_locator"])
+        self.assertIn("status confirmed but grade none", none["rule_reason"])
+        self.assertIn("0 locators, needs 1", none["rule_reason"])
+
+    def test_answered_without_an_answer_link_fails_and_with_one_passes(self):
+        attack = {"id": "x1", "kind": "critique", "text": "The figure appears in a received exhibit",
+                  "status": None, "grade": None, "verdict": "damaging", "answered": True, "locators": []}
+        bad = self.feats(links=["argument:1"], **attack)
+        self.assertEqual((bad["rule_check"], bad["rule_fails"]), ("fail", ["answered_needs_answer_link"]))
+        self.assertEqual(bad["rule_reason"], "answered true but no link starting with answer:")
+        good = self.feats(links=["argument:1", "answer:7"], **attack)
+        self.assertEqual((good["rule_check"], good["rule_fails"], good["rule_reason"]), ("pass", [], ""))
+        unanswered = self.feats(links=["argument:1"], **dict(attack, answered=False))
+        self.assertEqual((unanswered["rule_check"], unanswered["rule_fails"]), ("not_checked", []))
+
+    def test_rule_matching_is_case_insensitive_and_reads_back_the_row(self):
+        pol = policy.load({"rules": [{"id": "verdict_rule", "when": {"verdict": ["MISMATCH"], "kind": ["citation"]},
+                                      "requires": {"links_min": 2}}]})
+        row = self.row(id="c1", kind="citation", status=None, grade=None, verdict="mismatch", links=["f1"])
+        f = features.row_features(row, pol)
+        self.assertEqual((f["rule_check"], f["rule_fails"]), ("fail", ["verdict_rule"]))
+        self.assertEqual(f["rule_reason"], "verdict mismatch, kind citation but 1 link, needs 2")
+        ok = features.row_features(self.row(id="c1", kind="citation", status=None, grade=None, verdict="MisMatch",
+                                            links=["f1", "f2"]), pol)
+        self.assertEqual(ok["rule_check"], "pass")
+
+    def test_eliminated_and_superseded_rows_are_never_flagged(self):
+        doc, pol = synthetic.review()
+        settings = dict(pol, rules=[{"id": "everything_needs_ten_locators", "when": {"kind": list(features.KINDS)},
+                                     "requires": {"locators_min": 10}}])
+        plan = plan_for(doc, settings)
+        exempt = plan["eliminated"] + plan["superseded"]
+        self.assertTrue(exempt)
+        for rid in exempt:
+            f = plan["features"][rid]
+            self.assertEqual((f["rule_check"], f["rule_fails"], f["rule_reason"]), ("not_checked", [], ""))
+        self.assertTrue(set(plan["rule_fail"]).isdisjoint(exempt))
+        self.assertEqual(len(plan["rule_fail"]), len(doc["rows"]) - len(exempt))  # every other row fails
+        text = render.render(doc, "speedread", settings)
+        for rid in exempt:
+            for line in text.split("\n"):
+                if "`%s`" % rid in line:
+                    self.assertNotIn(render.RULE_FAIL_LABEL, line, rid)
+
+    def test_a_rule_that_matches_nothing_leaves_every_row_not_checked_and_renders_no_section(self):
+        doc, pol = synthetic.incident()
+        settings = dict(pol, rules=[{"id": "never_matches", "when": {"status": ["no_such_status"]},
+                                     "requires": {"locators_min": 1}}])
+        plan = plan_for(doc, settings)
+        self.assertEqual({f["rule_check"] for f in plan["features"].values()}, {"not_checked"})
+        self.assertEqual(plan["rule_fail"], [])
+        for mode in render.MODES:
+            text = render.render(doc, mode, settings)
+            with self.subTest(mode=mode):
+                self.assertNotIn(render.RULE_SECTION, text)
+                self.assertNotIn(render.RULE_FAIL_LABEL, text)
+                self.assertTrue(metrics.preservation(scope_rows(doc, mode), text, settings, mode)["ok"])
+        for mode in ("speedread", "uncertain_first", "claims"):
+            self.assertIn("Rule fails 0", render.render(doc, mode, settings), mode)
+        self.assertNotIn("Rule fails", render.render(doc, "full", settings))
+
+    def test_the_marker_is_inline_and_bold_in_every_mode_but_full(self):
+        doc, pol = synthetic.review()  # REVIEW_POLICY declares this instance's rules
+        plan = plan_for(doc, pol)
+        fails = plan["rule_fail"]
+        self.assertTrue(fails)
+        for mode in ("speedread", "uncertain_first"):
+            text = render.render(doc, mode, pol)
+            for rid in fails:
+                mark = render.rule_mark(plan["features"][rid]["rule_fails"])
+                self.assertIn(mark, text, (mode, rid))
+                for line in text.split("\n"):
+                    if "`%s`" % rid in line:
+                        self.assertIn(mark, line, (mode, rid))  # wherever the row appears
+            quiet = next(rid for rid in plan["established"] if rid not in fails)
+            for line in text.split("\n"):
+                if "`%s`" % quiet in line:
+                    self.assertNotIn(render.RULE_FAIL_LABEL, line)  # rows that pass stay quiet
+        full = render.render(doc, "full", pol)
+        self.assertNotIn(render.RULE_FAIL_LABEL, full)
+        self.assertNotIn("Rule fails", full)
+        self.assertNotIn("**", full)
+
+    def test_header_counts_reconcile_with_rule_fails(self):
+        doc, pol = synthetic.review()
+        plan = plan_for(doc, pol)
+        fails = plan["rule_fail"]
+        text = render.render(doc, "speedread", pol)
+        n, x, k, s, m, t, _a, _b, r = map(int, SCAN_HEADER.search(text).groups())
+        self.assertEqual(n + x + k + s + m, t)  # a failing row is still counted once, in its own bucket
+        self.assertEqual(t, len(doc["rows"]))
+        self.assertEqual(r, len(fails))
+        self.assertGreater(r, 0)
+        head = "%s (%d)" % (render.RULE_SECTION, r)
+        self.assertEqual(entry_ids(section(text, head)), fails)
+        self.assertLess(text.index(head), text.index("## Check first"))  # first, before Check first
+        buckets = (row_ids(section(text, "## Check first (%d)" % n))
+                   + row_ids(section(text, "## More to check (%d)" % x))
+                   + entry_ids(section(text, "## Eliminated (%d)" % k))
+                   + entry_ids(section(text, "## Superseded (%d)" % s))
+                   + entry_ids(section(text, "## Established (%d)" % m)))
+        for rid in fails:
+            self.assertIn(rid, buckets)  # reported apart, never moved out of its bucket
+        self.assertRegex(render.render(doc, "uncertain_first", pol), r"(?m)· Rule fails %d$" % r)
+        claims = render.render(doc, "claims", pol)
+        cn, ck, cs, cm, ct, cr = map(int, HEADER.search(claims).groups())
+        self.assertEqual(cn + ck + cs + cm, ct)
+        self.assertEqual(cr, len([rid for rid in fails if plan["rows"][rid]["kind"] in render.CLAIM_KINDS]))
+
+    def test_preservation_stays_100_with_rules_on_and_fails_when_the_new_section_drops_a_row(self):
+        doc, pol = synthetic.review()
+        fails = plan_for(doc, pol)["rule_fail"]
+        self.assertTrue(fails)
+        for mode in render.MODES:
+            res = metrics.preservation(scope_rows(doc, mode), render.render(doc, mode, pol), pol, mode)
+            self.assertTrue(res["ok"], (mode, {c: res[c]["missing"] for c in metrics.CATEGORIES}))
+            self.assertEqual(res["pct"], 100.0)
+        # Break it: the new section takes a failing row and the rendering loses it from Details.
+        victim = fails[0]
+        real = render._details
+
+        def broken(doc_, pol_, plan_, order, bold):
+            return real(doc_, pol_, plan_, [rid for rid in order if rid != victim], bold)
+        with mock.patch.object(render, "_details", broken):
+            for mode in render.TWO_LAYER:
+                res = metrics.preservation(scope_rows(doc, mode), render.render(doc, mode, pol), pol, mode)
+                with self.subTest(mode=mode):
+                    self.assertFalse(res["ok"])
+                    self.assertIn(victim, res["ids"]["missing"])
+                    self.assertLess(res["pct"], 100.0)
+        for mode in render.MODES:  # restored
+            res = metrics.preservation(scope_rows(doc, mode), render.render(doc, mode, pol), pol, mode)
+            self.assertTrue(res["ok"], mode)
+            self.assertEqual(res["pct"], 100.0)
+
+    def test_metrics_report_rule_fails_and_planted_rows_flagged_by_type(self):
+        doc, pol = synthetic.review()
+        planted, manifest = plant.plant(doc, pol, seed=4, per_type=1)
+        res = metrics.compare(planted, pol, manifest)
+        self.assertTrue(res["all_preserved"])
+        rc = res["rule_check"]
+        self.assertEqual(rc["rules_declared"], [r["id"] for r in policy.load(pol).rules])
+        self.assertEqual(rc["fail"] + rc["pass"] + rc["not_checked"], res["rows_total"])
+        self.assertEqual(len(rc["fail_ids"]), rc["fail"])
+        self.assertTrue(rc["by_rule"])
+        for rule, hit in rc["by_rule"].items():
+            self.assertIn(rule, rc["rules_declared"])
+            self.assertEqual(hit["flagged"], len(hit["ids"]))
+        flag = res["planted_rule_flagged"]
+        self.assertEqual(flag["planted"], len(res["planted_ids"]))
+        self.assertEqual(sum(s["planted"] for s in flag["by_type"].values()), flag["planted"])
+        self.assertEqual(sum(s["flagged"] for s in flag["by_type"].values()), flag["flagged"])
+        self.assertTrue(set(flag["by_type"]) <= set(plant.TYPES))
+        self.assertGreaterEqual(flag["flagged"], 1)  # the planted status upgrade is flagged
+        self.assertEqual(flag["by_type"]["status_upgrade"]["flagged"], 1)
+        for mode in render.TWO_LAYER:
+            pos = res["modes"][mode]["first_line"]["rule_fail"]
+            self.assertEqual(sorted(pos), sorted(rc["fail_ids"]))
+            self.assertTrue(all(p is not None for p in pos.values()))
+            self.assertEqual(res["modes"][mode]["visible_within"]["40"]["rule_fail"]["of"], rc["fail"])
+        self.assertIsNone(metrics.compare(doc, pol).get("planted_rule_flagged"))
+
+    def test_policy_validation_rejects_malformed_rules(self):
+        good = {"id": "a", "when": {"status": ["confirmed"]}, "requires": {"locators_min": 1}}
+        bad = [
+            {"rules": {}},
+            {"rules": [[]]},
+            {"rules": [{k: v for k, v in good.items() if k != "id"}]},
+            {"rules": [{k: v for k, v in good.items() if k != "requires"}]},
+            {"rules": [dict(good, extra=1)]},
+            {"rules": [dict(good, when={"colour": ["red"]})]},
+            {"rules": [dict(good, requires={"grade_of": ["x"]})]},
+            {"rules": [dict(good, when={"status": []})]},
+            {"rules": [dict(good, requires={"grade": []})]},
+            {"rules": [dict(good, when={})]},
+            {"rules": [dict(good, requires={})]},
+            {"rules": [dict(good, when={"answered": "yes"})]},
+            {"rules": [dict(good, when={"status": "confirmed"})]},
+            {"rules": [dict(good, requires={"locators_min": -1})]},
+            {"rules": [dict(good, requires={"links_min": True})]},
+            {"rules": [dict(good, requires={"links_prefix": [""]})]},
+            {"rules": [dict(good, id="a b")]},
+            {"rules": [dict(good, id="a`b")]},
+            {"rules": [good, dict(good)]},
+        ]
+        for obj in bad:
+            with self.subTest(policy=obj):
+                with self.assertRaises(policy.PolicyError):
+                    policy.load(obj)
+        self.assertEqual(policy.validate({})["rules"], [])
+        self.assertEqual(policy.validate({"rules": self.RULES})["rules"], self.RULES)
+        self.assertEqual([r["id"] for r in policy.load({"rules": self.RULES}).rules],
+                         [r["id"] for r in self.RULES])
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "p.json").write_text(json.dumps({"rules": self.RULES}), encoding="utf-8")
+        self.assertEqual(len(policy.load(str(tmp / "p.json")).rules), len(self.RULES))
 
 
 if __name__ == "__main__":

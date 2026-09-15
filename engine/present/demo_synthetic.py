@@ -15,7 +15,7 @@ scan layer is what a reader reads before the Details section, so it is the size 
   planted_full.md, planted_speedread.md   what a reviewer would read in each arm
   metrics.json                            metrics.compare for the clean and the planted rows
   review_rows.json, review_policy.json    the design review: long texts, a wall of open critiques
-  review_full.md, review_speedread.md     where collapse, the overflow list and the spot check show
+  review_full.md, review_speedread.md     where collapse, the overflow, the spot check and a rule fail show
   review_metrics.json, scan_vs_full.txt   the scan layer measured against the full rendering
 
 Standard library only.
@@ -65,6 +65,12 @@ def _scan_vs_full(name, result):
         out.append("  %-15s scan layer %6d chars  %4d lines  (%d%% of full)  whole file %6d chars"
                    % (mode, m["scan_chars"], m["scan_lines"], round(100.0 * m["scan_chars"] / full), m["chars"]))
     out.append("  spot check: %d of %d established rows sampled" % (len(spot["sample"]), spot["of_established"]))
+    rules = result.get("rule_check") or {}
+    if rules.get("rules_declared"):
+        out.append("  rule re-check: %d fail, %d pass, %d not checked (rules: %s)"
+                   % (rules["fail"], rules["pass"], rules["not_checked"], ", ".join(rules["rules_declared"])))
+        for rule, hit in sorted(rules["by_rule"].items()):
+            out.append("    %-34s flags %d row(s): %s" % (rule, hit["flagged"], ", ".join(hit["ids"])))
     if result["planted_ids"]:
         out.append("  planted rows: %d, of which %d render as established and %d landed in the spot-check sample"
                    % (len(result["planted_ids"]), len(spot["planted_established"]), len(spot["planted_in_sample"])))

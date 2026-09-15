@@ -23,6 +23,7 @@ Section order in `speedread`:
 
 | # | Section | What it holds |
 |---|---|---|
+| 0 | `Fails its own rule (N)` | rows whose labels fail a declared promotion rule, with the rule id and reason (omitted when none) |
 | 1 | `Check first (N)` | the table, capped at `check_first_max`; unanswered high-impact critiques collapsed |
 | 2 | `Spot check (random, K of M established)` | a labelled random sample of established rows |
 | 3 | `Eliminated (K)` / `Superseded (S)` | short, always visible |
@@ -33,6 +34,10 @@ Section order in `speedread`:
 `Eliminated` and `Superseded` sit above `More to check` on purpose: they are short and high-value, and the overflow can be long. Everything above `Established` is still verification-first material.
 
 **Collapse.** Unanswered high-impact critiques that share a (target link, verdict, lens) become one scan line — `3 unanswered **damaging** critiques · lens X · target Y · ids `a`, `b`, `c`` — ordered most severe first (the order of `high_impact.verdict`). Every id is named on the line and every full critique is in Details, so nothing is hidden; a wall of open critiques just stops crowding out everything else.
+
+**Inline rule re-check (v1.2).** Every row's labels are re-checked against the policy's `rules`, and `rule_check` is `pass`, `fail` or `not_checked` (no rule's `when` matched). Rows that fail come **first**, under `## Fails its own rule (N)`, one scan line each with the failing rule id and a short reason (`status confirmed but grade agent`), and every line of a failing row anywhere in the rendering carries the bold marker `**RULE FAIL: <rule id>**`. Rows that pass carry no marker, so failures stand out. A failing row is still counted once in its own bucket and `Rule fails K` is reported separately in the header, like the spot check; `full` stays the plain baseline and never marks. It exists because six reviewers caught 0 of 12 relabelling errors (a status upgraded past its evidence, a verdict softened or marked answered): nothing in the text contradicts a false label, so no layout can surface it, but a mechanical re-check can.
+
+**What the marker does not mean.** It checks a row's *labels* against the *declared* rules. It is not the datastore gate and it does not prove the underlying evidence: a row can pass every rule and still be wrong, and a fail can mean the rule is too strict for this instance. **Rules never apply to rows in the eliminated or superseded classes** — a ruled-out claim is not expected to satisfy a promotion rule — so those rows are always `not_checked` and are never marked.
 
 **Spot check.** `spot_check` draws a deterministic random sample of *established* rows and shows it right after Check first, labelled as a random sample. Those rows stay in `Established` as well: it is a sample, not a move. It exists because planted errors that land in rows the policy calls established moved *later* in the v1.0 speedread — the hidden-risk case.
 
@@ -61,6 +66,7 @@ row = {"id": str (unique; no whitespace, backtick, pipe or backslash), "group": 
  "locator_patterns": [regex, ...], "negations": [word or phrase, ...],
  "check_first_max": 25,                      # cap on the Check first table; the rest go to More to check
  "spot_check": {"count": 5, "seed": null},   # null seed: a hash of the title
+ "rules": [{"id": str, "when": {...}, "requires": {...}}],   # the promotion rules, re-checked inline
  "why_labels": {"<status|grade|verdict>:<value>" or "unanswered_high_impact" or "unclassified": "reason"}}
 ```
 
@@ -69,10 +75,16 @@ An unknown key, a wrong type, a regex that does not compile or matches the empty
 - **`established.verdict`** marks a verdict that means "checked and good" — a `VERIFIED` citation is established, not unclassified. It may not also appear under `needs_check.verdict` or `high_impact.verdict`.
 - **`negations`** extend a built-in English list (not, no, never, none, nor, neither, cannot, without, nothing, nobody, nowhere and the n't contractions). An entry may be a **phrase of up to four words** (`"no longer"`): it matches whole, case-insensitively, across any run of whitespace, and beats the single words inside it.
 - **`spot_check.seed`** may be an int or a string. Leave it null for a per-title default, or set it per reviewer session.
+- **`rules`** declares the instance's own promotion rules (default `[]`: the feature is off). Each rule is `{"id", "when", "requires"}`. `when` selects rows by `status`, `grade`, `verdict` or `kind` (a non-empty list of values) and `answered` (`true`/`false`); `requires` holds when `status`, `grade` or `verdict` is one of a non-empty list, `locators_min`/`links_min` (integers ≥ 0) are met, or `links_prefix` matches (a link starts with one of a non-empty list). All of `when` must match and all of `requires` must hold. An unknown field, an empty list, a non-integer minimum, a duplicate or unusable `id`, or an empty `when`/`requires` raises `PolicyError`.
+
+```
+{"id": "established_needs_source_grade", "when": {"status": ["confirmed", "verified"]},
+ "requires": {"grade": ["page_image", "record_text"]}}
+```
 
 ## Features and buckets (`features.py`)
 
-Per row: `needs_check` and `needs_check_reasons`, `eliminated`, `superseded`, `replaced_by`, `established`, `high_impact`, `unanswered_high_impact` (answered is not true), `has_numbers`, `has_negation`, `locator_count`, `relevance` (share of the question's content words in the text, 0 to 1), `lens`, `bucket`. `classify` adds `links_eliminated`.
+Per row: `needs_check` and `needs_check_reasons`, `eliminated`, `superseded`, `replaced_by`, `established`, `high_impact`, `unanswered_high_impact` (answered is not true), `has_numbers`, `has_negation`, `locator_count`, `relevance` (share of the question's content words in the text, 0 to 1), `lens`, `bucket`, `rule_check`, `rule_fails` (failing rule ids) and `rule_reason`. `classify` adds `links_eliminated` and `rule_fail` (the failing rows, in input order). `check_rules(row, policy)` is the pure rule re-check; it needs no datastore, because every row already carries its status, grade, verdict, answered and links.
 
 Buckets are exclusive, first match wins: **eliminated** > **superseded** > **check first** (any reason) > **established** (status, grade or verdict established). A row that matches no class gets the reason `unclassified` and is checked first: unknown standing is something to check. So the header counts always add up to the total.
 
@@ -83,7 +95,7 @@ Check-first order: unanswered high impact, then linked to an eliminated row, the
 | Mode | What it shows |
 |---|---|
 | `full` | Baseline. Groups in given order, rows in input order, plain, one line per row: ``- `id` [status/verdict/grade; answered; lens L] text (locators)`` |
-| `speedread` | Two layers, as above. Header `Check first N · More to check X · Eliminated K · Superseded S · Established M · Total T · Spot check A of B`; the five buckets add up to T, the sample is counted apart. Bold numbers and dates, locators, negation words and phrases, status tokens |
+| `speedread` | Two layers, as above. Header `Check first N · More to check X · Eliminated K · Superseded S · Established M · Total T · Spot check A of B · Rule fails R`; the five buckets add up to T, the sample and the rule fails are counted apart. Bold numbers and dates, locators, negation words and phrases, status tokens |
 | `claims` | The **one-layer** v1.0 speedread over claim and conclusion rows only; a header line names every row of other kinds it leaves out. Unchanged in v1.1: it is already a partial view |
 | `uncertain_first` | The same two layers, plain: Needs check, Spot check, More to check, the other rows in input order, then Details |
 
@@ -104,7 +116,7 @@ Newlines inside values render as `<br>`; table cells backslash-escape `|` and `\
 | `plant.py TRUTH OUT --seed S --per-type K` | Seeded, deterministic errors: `status_upgrade`, `locator_shift`, `negation_drop`, `verdict_soften`, `number_change`. Targets alternate between rows that will render as established (the hard case) and rows that will not; `lands_in` records which. One error per row at most. Title prefix `[SEEDED TEST COPY] `, `seeded_test_copy: true`, and a manifest carrying the same banner. A shortfall is recorded and exits 1 |
 | `lookup.py TRUTH LOG ROW_ID --budget N` | Prints the true row and logs it; exit 3 once N lookups are used; exit 4 for an unknown id (does not use budget); refuses a seeded copy as truth |
 | `score.py MANIFEST FINDINGS [--log LOG]` | Caught (row and field match), missed, false alarms, wrong-field, duplicates, recall and precision, lookups used; split by mutation type and by `lands_in` |
-| `metrics.py ROWS [--manifest M]` | Chars and lines, **scan chars and scan lines**, preservation (must be 100%), the first line of each check-first and planted row **measured over the scan layer**, visible within 10, 20, 40 lines, and how many planted rows landed in the spot-check sample; exit 1 if any mode fails preservation |
+| `metrics.py ROWS [--manifest M]` | Chars and lines, **scan chars and scan lines**, preservation (must be 100%), the first line of each check-first, planted and rule-fail row **measured over the scan layer**, visible within 10, 20, 40 lines, how many planted rows landed in the spot-check sample, `rule_check` counts with the rows each rule flagged, and (with a manifest) `planted_rule_flagged` by mutation type; exit 1 if any mode fails preservation |
 | `demo_synthetic.py [--out DIR]` | Full vs speedread for the synthetic incident and the bigger design review, with a planted copy, metrics and a scan-layer-vs-full report |
 
 ### What preservation checks
@@ -148,4 +160,5 @@ python -m unittest discover -s engine/present -v
 - A collapsed group line shows ids, not leads. The group's rows are read in Details.
 - The spot check is a random sample, not a ranking: it says nothing about the rows it did not pick.
 - Relevance is plain token overlap. The claims view is deliberately partial; its header names what it leaves out.
-- No reviewer study has been run yet; the kit is built, and v1.1 is measured only on the mechanical side.
+- The rule re-check compares a row's labels with the declared rules. It is not the datastore gate, it does not read sources, and it proves nothing about the evidence behind a row. A rule that matches nothing leaves every row `not_checked` and renders no section; a rule that matches everything floods the section. Eliminated and superseded rows are never checked and never marked.
+- No reviewer study has been run yet; the kit is built, and v1.1 and v1.2 are measured only on the mechanical side.

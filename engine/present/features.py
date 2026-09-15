@@ -18,7 +18,11 @@ Features are computed at render time from one row, the policy and the question. 
 vector, never stored on the row and never summed into one number used for truth:
 
   needs_check, needs_check_reasons, eliminated, superseded, replaced_by, established, high_impact,
-  unanswered_high_impact, has_numbers, has_negation, locator_count, relevance (0-1), lens, bucket
+  unanswered_high_impact, has_numbers, has_negation, locator_count, relevance (0-1), lens, bucket,
+  rule_check ("pass"|"fail"|"not_checked"), rule_fails (failing rule ids), rule_reason
+
+rule_check re-runs the policy's own promotion rules (policy "rules") over the row's labels; see
+check_rules(). Eliminated and superseded rows are exempt and always "not_checked".
 
 classify() adds one cross-row feature, links_eliminated (linked ids that are eliminated), and the
 partition every view uses. Buckets are exclusive, first match wins:
@@ -140,6 +144,88 @@ def relevance(text, question):
     return round(len(q & tokens(text)) / len(q), 3)
 
 
+WHEN_ORDER = ("status", "grade", "verdict", "answered", "kind")
+REQUIRES_ORDER = ("status", "grade", "verdict", "locators_min", "links_min", "links_prefix")
+RULE_CHECKS = ("pass", "fail", "not_checked")
+
+
+def _when_matches(row, when):
+    """True when every declared "when" field matches this row (case-insensitive)."""
+    for field, want in when.items():
+        if field == "answered":
+            if row.get("answered") is not want:
+                return False
+            continue
+        value = row.get(field)
+        if not isinstance(value, str) or value.lower() not in want:
+            return False
+    return True
+
+
+def _when_reads(row, when):
+    """The matched side of the reason, in the row's own words: "status confirmed", "answered true"."""
+    parts = []
+    for field in WHEN_ORDER:
+        if field not in when:
+            continue
+        if field == "answered":
+            parts.append("answered %s" % ("true" if when[field] else "false"))
+        else:
+            parts.append("%s %s" % (field, row.get(field)))
+    return ", ".join(parts)
+
+
+def _requires_failures(row, requires):
+    """Short reader-facing descriptions of the clauses this row does not satisfy (empty: it passes)."""
+    out = []
+    for field in REQUIRES_ORDER:
+        if field not in requires:
+            continue
+        want = requires[field]
+        if field in ("status", "grade", "verdict"):
+            value = row.get(field)
+            if not (isinstance(value, str) and value.lower() in want):
+                out.append("%s %s" % (field, value if isinstance(value, str) and value.strip() else "none"))
+        elif field in ("locators_min", "links_min"):
+            key = "locators" if field == "locators_min" else "links"
+            count = len(row.get(key) or [])
+            if count < want:
+                out.append("%d %s, needs %d" % (count, key if count != 1 else key[:-1], want))
+        else:  # links_prefix
+            links = [x.lower() for x in (row.get("links") or [])]
+            if not any(link.startswith(prefix) for link in links for prefix in want):
+                out.append("no link starting with %s" % " or ".join(sorted(want)))
+    return out
+
+
+def check_rules(row, policy, exempt=False):
+    """Re-check one row's labels against the policy's promotion rules. Pure function of row + policy.
+
+    Returns (rule_check, failing rule ids, one short reason). rule_check is "fail" when a rule's
+    "when" matched this row and its "requires" did not hold, "pass" when at least one rule matched
+    and every matched rule held, and "not_checked" when no rule matched -- or when the row is exempt,
+    because a row in the eliminated or superseded class is never expected to satisfy a promotion rule.
+
+    This checks a row's labels against the declared rules. It is not the datastore gate, and it says
+    nothing about whether the underlying evidence is real.
+    """
+    pol = policy_mod.load(policy)
+    if exempt:
+        return "not_checked", [], ""
+    fails, reasons, matched = [], [], False
+    for rule in pol.rule_match:
+        if not _when_matches(row, rule["when"]):
+            continue
+        matched = True
+        missing = _requires_failures(row, rule["requires"])
+        if missing:
+            fails.append(rule["id"])
+            reasons.append("%s but %s" % (_when_reads(row, rule["when"]), " and ".join(missing)))
+    if fails:
+        return "fail", fails, "; ".join(reasons)
+    return ("pass" if matched else "not_checked"), [], ""
+
+
 def row_features(row, policy, question=None):
     """Named features of one row. Pure function of row, policy and question."""
     pol = policy_mod.load(policy)
@@ -171,6 +257,7 @@ def row_features(row, policy, question=None):
     if superseded:
         meta_rb = (row.get("meta") or {}).get("replaced_by")
         replaced_by = meta_rb if isinstance(meta_rb, str) and meta_rb else ((row.get("links") or [None])[0])
+    rule_check, rule_fails, rule_reason = check_rules(row, pol, exempt=eliminated or superseded)
     text = row.get("text") or ""
     return {
         "needs_check": bool(reasons),
@@ -187,6 +274,9 @@ def row_features(row, policy, question=None):
         "relevance": relevance(text, question),
         "lens": row.get("lens"),
         "bucket": bucket,
+        "rule_check": rule_check,
+        "rule_fails": rule_fails,
+        "rule_reason": rule_reason,
     }
 
 
@@ -207,5 +297,7 @@ def classify(doc, policy):
         feats[rid]["links_eliminated"] = [x for x in r["links"] if x in eliminated_ids and x != rid]
     plan = {b: [rid for rid in rows if feats[rid]["bucket"] == b] for b in BUCKETS}
     plan["check_first"].sort(key=lambda rid: check_first_key(feats[rid], index[rid]))
+    # rows that fail their own rule, in input order; they stay in their bucket as well
+    plan["rule_fail"] = [r["id"] for r in doc["rows"] if feats[r["id"]]["rule_fails"]]
     plan.update({"features": feats, "index": index, "rows": rows})
     return plan

@@ -13,7 +13,22 @@ a reader for each value. The engine owns no domain words; DEFAULT is generic.
      "high_impact": {"verdict": [...]},
      "locator_patterns": [regex, ...], "negations": [word or phrase, ...],
      "check_first_max": int >= 1, "spot_check": {"count": int >= 0, "seed": int|str|null},
+     "rules": [{"id": str, "when": {...}, "requires": {...}}, ...],
      "why_labels": {"<field>:<value>": "short reason shown to the reader"}}
+
+rules declare the instance's own promotion rules, re-checked over every rendered row (features.
+check_rules). Empty (the default) turns the feature off. A rule matches a row when every field of
+"when" matches, and passes when every clause of "requires" holds:
+
+    when      status | grade | verdict | kind (a non-empty list of values) or answered (true/false)
+    requires  status | grade | verdict (one of a non-empty list), locators_min | links_min (int >= 0),
+              links_prefix (a link starts with one of a non-empty list)
+
+    {"id": "established_needs_source_grade", "when": {"status": ["confirmed", "verified"]},
+     "requires": {"grade": ["page_image", "record_text"]}}
+
+Rules never apply to rows in the eliminated or superseded classes: a ruled-out claim is not expected
+to satisfy a promotion rule.
 
 Validation is loud: an unknown key, a wrong type, a regex that does not compile or matches the
 empty string, an empty negation or one longer than four words, or a value listed in two classes
@@ -52,7 +67,13 @@ FIELDS = {
 }
 LIST_KEYS = ("locator_patterns", "negations")
 SCALAR_KEYS = ("check_first_max", "spot_check")
-TOP_KEYS = tuple(FIELDS) + LIST_KEYS + SCALAR_KEYS + ("why_labels",)
+TOP_KEYS = tuple(FIELDS) + LIST_KEYS + SCALAR_KEYS + ("rules", "why_labels")
+RULE_KEYS = ("id", "when", "requires")
+WHEN_LIST_FIELDS = ("status", "grade", "verdict", "kind")
+WHEN_FIELDS = WHEN_LIST_FIELDS + ("answered",)
+REQUIRES_LIST_FIELDS = ("status", "grade", "verdict", "links_prefix")
+REQUIRES_INT_FIELDS = ("locators_min", "links_min")
+REQUIRES_FIELDS = REQUIRES_LIST_FIELDS + REQUIRES_INT_FIELDS
 SPOT_CHECK_KEYS = ("count", "seed")
 MAX_NEGATION_WORDS = 4
 REASON_FIELDS = ("status", "grade", "verdict")
@@ -96,6 +117,7 @@ DEFAULT = {
     "negations": [],
     "check_first_max": 25,
     "spot_check": {"count": 5, "seed": None},
+    "rules": [],
     "why_labels": {},
 }
 
@@ -131,6 +153,66 @@ def _str_list(value, where):
     if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
         raise PolicyError("%s must be a list of non-empty strings (got %r)" % (where, value))
     return list(value)
+
+
+def _rule_list(value, where):
+    """A non-empty list of non-empty strings. An empty list would be a clause nothing can satisfy."""
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) and v.strip() for v in value):
+        raise PolicyError("%s must be a non-empty list of non-empty strings (got %r)" % (where, value))
+    return list(value)
+
+
+def _validate_rules(value):
+    """The promotion rules re-checked over every rendered row. Unknown fields and empty lists raise."""
+    if not isinstance(value, list):
+        raise PolicyError("rules must be a list of rule objects (got %s)" % type(value).__name__)
+    out, seen = [], set()
+    for i, rule in enumerate(value):
+        where = "rules[%d]" % i
+        if not isinstance(rule, dict):
+            raise PolicyError("%s must be an object with keys %s" % (where, ", ".join(RULE_KEYS)))
+        unknown = sorted(set(rule) - set(RULE_KEYS))
+        if unknown:
+            raise PolicyError("unknown key(s) under %s: %s; allowed: %s"
+                              % (where, ", ".join(unknown), ", ".join(RULE_KEYS)))
+        missing = [k for k in RULE_KEYS if k not in rule]
+        if missing:
+            raise PolicyError("%s is missing %s" % (where, ", ".join(missing)))
+        rid = rule["id"]
+        if not isinstance(rid, str) or not rid.strip() or re.search(r"[\s`|\\]", rid):
+            raise PolicyError("%s id must be a non-empty string without whitespace, backticks, pipes or "
+                              "backslashes (got %r)" % (where, rid))
+        if rid in seen:
+            raise PolicyError("%s: duplicate rule id %r" % (where, rid))
+        seen.add(rid)
+        where = "rule %r" % rid
+        for name, part, allowed in (("when", rule["when"], WHEN_FIELDS),
+                                    ("requires", rule["requires"], REQUIRES_FIELDS)):
+            if not isinstance(part, dict) or not part:
+                raise PolicyError("%s: %s must be a non-empty object; fields: %s"
+                                  % (where, name, ", ".join(allowed)))
+            bad = sorted(set(part) - set(allowed))
+            if bad:
+                raise PolicyError("%s: unknown %s field(s): %s; allowed: %s"
+                                  % (where, name, ", ".join(bad), ", ".join(allowed)))
+        when = {}
+        for field, val in rule["when"].items():
+            if field == "answered":
+                if not isinstance(val, bool):
+                    raise PolicyError("%s: when.answered must be true or false (got %r)" % (where, val))
+                when[field] = val
+            else:
+                when[field] = _rule_list(val, "%s: when.%s" % (where, field))
+        requires = {}
+        for field, val in rule["requires"].items():
+            if field in REQUIRES_INT_FIELDS:
+                if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                    raise PolicyError("%s: requires.%s must be an integer >= 0 (got %r)" % (where, field, val))
+                requires[field] = val
+            else:
+                requires[field] = _rule_list(val, "%s: requires.%s" % (where, field))
+        out.append({"id": rid, "when": when, "requires": requires})
+    return out
 
 
 def validate(obj):
@@ -200,6 +282,8 @@ def validate(obj):
                                      or (isinstance(seed, str) and not seed.strip())):
                 raise PolicyError("spot_check.seed must be an integer, a non-empty string or null (got %r)" % (seed,))
             out["spot_check"]["seed"] = seed
+    if "rules" in obj:
+        out["rules"] = _validate_rules(obj["rules"])
     if "why_labels" in obj:
         labels = obj["why_labels"]
         if not isinstance(labels, dict):
@@ -236,6 +320,14 @@ class Policy:
         self.why_labels = {k.lower(): v for k, v in data["why_labels"].items()}
         self.check_first_max = data["check_first_max"]
         self.spot_check = dict(data["spot_check"])
+        self.rules = tuple(copy.deepcopy(r) for r in data["rules"])
+        # the same rules with their vocabularies lowercased once, for case-insensitive matching
+        self.rule_match = tuple(
+            {"id": r["id"],
+             "when": {f: (v if f == "answered" else frozenset(x.lower() for x in v)) for f, v in r["when"].items()},
+             "requires": {f: (v if f in REQUIRES_INT_FIELDS else frozenset(x.lower() for x in v))
+                          for f, v in r["requires"].items()}}
+            for r in self.rules)
 
     def severity(self, verdict):
         """Position of a verdict in high_impact.verdict (most severe first); large when not listed."""

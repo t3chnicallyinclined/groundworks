@@ -24,6 +24,11 @@ checks then cover the scan layer:
               they are exempt from this one -- scan_ids still requires them to be named.
 The claims view is checked over claim and conclusion rows (its header names the rows it leaves out).
 
+The inline rule re-check is reported too: rule_check counts pass, fail and not_checked over every
+row and names the rows each rule flagged; every mode reports the first scan line of each rule-fail
+row and how many are visible within K lines; and with a manifest, planted_rule_flagged says how many
+planted rows a rule flagged, split by mutation type. That is the number C18 is measured by.
+
     python metrics.py ROWS.json [--policy P.json] [--manifest MANIFEST.json]
 
 Exit 0 all modes preserved; 1 a mode failed preservation; 2 NOT EXECUTED.
@@ -168,17 +173,41 @@ def compare(doc, policy=None, manifest=None, modes=render.MODES, ks=KS):
                              "planted_in_sample": [rid for rid in planted_ids if rid in set(sample)],
                              "planted_established": planted_established},
               "modes": {}}
+    feats = plan["features"]
+    fail_ids = list(plan["rule_fail"])
+    by_rule = {}
+    for rid in fail_ids:
+        for rule in feats[rid]["rule_fails"]:
+            by_rule.setdefault(rule, []).append(rid)
+    checks = collections.Counter(feats[r["id"]]["rule_check"] for r in doc["rows"])
+    result["rule_check"] = {"rules_declared": [r["id"] for r in pol.rules],
+                            "fail": checks["fail"], "pass": checks["pass"], "not_checked": checks["not_checked"],
+                            "fail_ids": fail_ids,
+                            "by_rule": {rule: {"flagged": len(ids), "ids": ids} for rule, ids in by_rule.items()}}
+    if manifest is not None:
+        by_type = {}
+        for planted in manifest.get("entries", []):
+            slot = by_type.setdefault(planted["type"], {"planted": 0, "flagged": 0, "ids": []})
+            slot["planted"] += 1
+            if feats.get(planted["row_id"], {}).get("rule_fails"):
+                slot["flagged"] += 1
+                slot["ids"].append(planted["row_id"])
+        result["planted_rule_flagged"] = {"planted": len(planted_ids),
+                                          "flagged": sum(s["flagged"] for s in by_type.values()),
+                                          "by_type": by_type}
     for mode in modes:
         text = render.render(doc, mode, pol)
         scan, _details = split_layers(text, mode)
         scope = [r for r in doc["rows"] if mode != "claims" or r["kind"] in render.CLAIM_KINDS]
         pos_check, pos_planted = first_lines(check_ids, scan), first_lines(planted_ids, scan)
+        pos_rule = first_lines(fail_ids, scan)
         result["modes"][mode] = {
             "chars": len(text), "lines": len(text.splitlines()),
             "scan_chars": len(scan), "scan_lines": len(scan.splitlines()), "scope_rows": len(scope),
             "preservation": preservation(scope, text, pol, mode),
-            "first_line": {"check_first": pos_check, "planted": pos_planted},
-            "visible_within": {str(k): {"check_first": _within(pos_check, k), "planted": _within(pos_planted, k)}
+            "first_line": {"check_first": pos_check, "planted": pos_planted, "rule_fail": pos_rule},
+            "visible_within": {str(k): {"check_first": _within(pos_check, k), "planted": _within(pos_planted, k),
+                                        "rule_fail": _within(pos_rule, k)}
                                for k in ks},
         }
     result["all_preserved"] = all(m["preservation"]["ok"] for m in result["modes"].values())

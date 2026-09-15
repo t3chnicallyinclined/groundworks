@@ -14,7 +14,7 @@ Descriptive term: **evidence-gated knowledge graph built by exhaustive, verified
   - 9,101 units read by 77 agents; 77 of 77 chunks passed the verbatim validator.
   - Datastore gates proven by probe tests; lookup and compaction hooks live.
   - Four role skills; a regression suite of past errors; a framework lens with a factor matrix.
-- **Not in this repo:** the first instance's code and data. The instance code is still coupled to its matter; extracting a generic engine is roadmap Track C.
+- **Not in this repo:** any instance's code or data. **An instance lives in its own project** (its adapters, vocabularies, settings and material); this repo holds the method, the engine and domain specs with synthetic examples. Extracting the still-coupled generic parts from the first instance is roadmap Track C.
 
 ## Privacy boundary (non-negotiable)
 
@@ -28,6 +28,8 @@ This repository contains **no client or matter data**, ever:
 | Path | What |
 |---|---|
 | `docs/METHOD.md` | The method: what is unique, primitives, layers, the eight configuring questions, evidence model, lenses, improvement loop, self-improvement fence, lineage, technology, optimization, use cases, cross-field discovery design, licensing, privacy |
+| `docs/ARCHITECTURE.md` | The system: layers, invariants, what an instance supplies vs what is generated, each layer's fixed test, how to map a new domain, open design decisions |
+| `docs/TUNING.md` | Per layer: the knobs, defaults, how to measure a change, failure modes, measured starting points |
 | `docs/MODULES.md` | Engine modules, file contracts (units, labels, vocabulary, gate rules), modularity rules |
 | `instances/` | 19 domain specs mapping the method (eight answers, evidence model, gates with probes, roles, lenses, evaluator, walkthrough, usage, synthetic worked example, pitfalls, module reuse) plus a template and `instance.yaml` schema |
 | `.claude/skills/design-instance/` | The skill that maps the method onto a new domain |

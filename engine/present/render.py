@@ -21,6 +21,13 @@ Modes
   uncertain_first  the same two layers, plain: Needs check, Spot check, More to check, then the
                    other rows in input order, then Details
 
+Every mode except `full` re-checks each row's labels against the policy's own promotion rules
+(policy "rules"): rows that fail are listed first, under "## Fails its own rule (N)", with the
+failing rule id and a short reason, and every rendered line of a failing row carries the inline bold
+marker **RULE FAIL: <rule id>**. Rows that pass carry no marker, so failures stand out. A failing row
+is still counted once in its own bucket; the header reports "Rule fails K" separately, like the spot
+check. `full` stays the plain baseline.
+
 Every mode labels eliminated rows "ELIMINATED CLAIM (false)" and superseded rows
 "SUPERSEDED CLAIM (replaced by X)". A seeded test copy (rows.json "seeded_test_copy": true) starts
 with the line SEEDED TEST COPY - CONTAINS PLANTED ERRORS in every mode.
@@ -48,6 +55,8 @@ MODES = ("full", "speedread", "claims", "uncertain_first")
 TWO_LAYER = ("speedread", "uncertain_first")
 BANNER = "SEEDED TEST COPY - CONTAINS PLANTED ERRORS"
 ELIMINATED_LABEL = "ELIMINATED CLAIM (false)"
+RULE_FAIL_LABEL = "RULE FAIL"
+RULE_SECTION = "## Fails its own rule"
 CLAIM_KINDS = ("claim", "conclusion")
 DOT = " · "
 
@@ -164,8 +173,16 @@ def tag(row, bold=False):
     return "[%s]" % "; ".join(parts)
 
 
-def entry(plan, pol, rid, bold=False, with_locators=True, lead_only=False):
-    """One line for one row: the full text, or (lead_only) the scan layer's short lead."""
+def rule_mark(rule_ids):
+    """The inline marker a row that fails its own rule carries wherever it is rendered. Always bold."""
+    return "**%s: %s**" % (RULE_FAIL_LABEL, ", ".join(rule_ids))
+
+
+def entry(plan, pol, rid, bold=False, with_locators=True, lead_only=False, mark=False):
+    """One line for one row: the full text, or (lead_only) the scan layer's short lead.
+
+    mark adds the RULE FAIL marker when the row fails its own rule; every mode except `full` marks.
+    """
     row, feats = plan["rows"][rid], plan["features"][rid]
     prefix = ""
     if feats["bucket"] == "eliminated":
@@ -174,6 +191,8 @@ def entry(plan, pol, rid, bold=False, with_locators=True, lead_only=False):
         prefix = superseded_label(feats)
     if prefix:
         prefix = _b(prefix, bold) + ": "
+    if mark and feats["rule_fails"]:
+        prefix += rule_mark(feats["rule_fails"]) + ": "
     text, cut = lead(row["text"]) if lead_only else (row["text"], False)
     if bold:
         text = emphasize(text, pol)
@@ -185,8 +204,25 @@ def entry(plan, pol, rid, bold=False, with_locators=True, lead_only=False):
     return oneline(s)
 
 
-def scan_entry(plan, pol, rid, bold=False, with_locators=True):
-    return entry(plan, pol, rid, bold, with_locators, lead_only=True)
+def scan_entry(plan, pol, rid, bold=False, with_locators=True, mark=False):
+    return entry(plan, pol, rid, bold, with_locators, lead_only=True, mark=mark)
+
+
+def rule_fail_ids(doc, plan, scope=None):
+    """Rows that fail their own rule, in input order. Each one is still counted in its own bucket."""
+    return [r["id"] for r in doc["rows"]
+            if plan["features"][r["id"]]["rule_fails"] and (scope is None or r["id"] in scope)]
+
+
+def rule_fail_section(plan, ids, line_fn):
+    """The section that comes first: one scan line per failing row, with its rule id and reason."""
+    if not ids:
+        return []
+    out = ["", "%s (%d)" % (RULE_SECTION, len(ids))]
+    for rid in ids:
+        feats = plan["features"][rid]
+        out.append("- %s - rule %s: %s" % (line_fn(rid), ", ".join(feats["rule_fails"]), feats["rule_reason"]))
+    return out
 
 
 def why(plan, pol, rid):
@@ -235,7 +271,7 @@ def check_entries(plan, pol):
     return entries
 
 
-def group_line(plan, pol, item, bold=False):
+def group_line(plan, pol, item, bold=False, mark=False):
     """The one scan line that stands for a collapsed group of critiques. Every id is named."""
     parts = ["%d unanswered %s critiques" % (len(item["ids"]), _b(item["verdict"] or "-", bold))]
     if item["lens"]:
@@ -243,13 +279,16 @@ def group_line(plan, pol, item, bold=False):
     if item["target"]:
         parts.append("target %s" % item["target"])
     parts.append("ids " + ", ".join("`%s`" % rid for rid in item["ids"]))
+    fails = [rule for rid in item["ids"] for rule in plan["features"][rid]["rule_fails"]]
+    if mark and fails:
+        parts.append(rule_mark(list(dict.fromkeys(fails))))
     return oneline(DOT.join(parts))
 
 
-def entry_line(plan, pol, item, bold=False, with_locators=True):
+def entry_line(plan, pol, item, bold=False, with_locators=True, mark=False):
     if item["collapsed"]:
-        return group_line(plan, pol, item, bold)
-    return scan_entry(plan, pol, item["ids"][0], bold, with_locators)
+        return group_line(plan, pol, item, bold, mark)
+    return scan_entry(plan, pol, item["ids"][0], bold, with_locators, mark)
 
 
 def entry_why(plan, pol, item):
@@ -309,7 +348,7 @@ def layout(doc, pol, plan):
 
 def _details(doc, pol, plan, order, bold):
     out = ["", "%s (%d)" % (DETAILS_PREFIX, len(order))]
-    out += ["- " + entry(plan, pol, rid, bold) for rid in order]
+    out += ["- " + entry(plan, pol, rid, bold, mark=True) for rid in order]
     return out
 
 
@@ -333,38 +372,42 @@ def _spot_section(doc, pol, plan, lay, bold):
         return []
     out = ["", "## Spot check (random, %d of %d established)" % (len(lay["spot"]), len(lay["established"])),
            SPOT_NOTE]
-    out += ["- " + scan_entry(plan, pol, rid, bold) for rid in lay["spot"]]
+    out += ["- " + scan_entry(plan, pol, rid, bold, mark=True) for rid in lay["spot"]]
     return out
 
 
 def _speedread(doc, pol, plan):
     lay = layout(doc, pol, plan)
+    fails = rule_fail_ids(doc, plan)
     out = _head(doc)
     out.append(DOT.join([
         "Check first %d" % lay["check_rows"], "More to check %d" % lay["more_rows"],
         "Eliminated %d" % len(lay["eliminated"]), "Superseded %d" % len(lay["superseded"]),
         "Established %d" % len(lay["established"]), "Total %d" % lay["total"],
-        "Spot check %d of %d" % (len(lay["spot"]), len(lay["established"]))]))
+        "Spot check %d of %d" % (len(lay["spot"]), len(lay["established"])),
+        "Rule fails %d" % len(fails)]))
+    out += rule_fail_section(plan, fails, lambda rid: scan_entry(plan, pol, rid, True, mark=True))
     out += ["", "## Check first (%d)" % lay["check_rows"]]
     if lay["check"]:
         out += ["| # | What | Why check | Where |", "|---|---|---|---|"]
         for n, item in enumerate(lay["check"], 1):
-            out.append("| %d | %s | %s | %s |" % (n, cell(entry_line(plan, pol, item, True, with_locators=False)),
+            out.append("| %d | %s | %s | %s |" % (n, cell(entry_line(plan, pol, item, True, with_locators=False,
+                                                                     mark=True)),
                                                   cell(entry_why(plan, pol, item)),
                                                   cell(entry_locators(plan, item, True))))
     out += _spot_section(doc, pol, plan, lay, True)
     out += ["", "## Eliminated (%d)" % len(lay["eliminated"])]
-    out += ["- " + scan_entry(plan, pol, rid, True) for rid in lay["eliminated"]]
+    out += ["- " + scan_entry(plan, pol, rid, True, mark=True) for rid in lay["eliminated"]]
     out += ["", "## Superseded (%d)" % len(lay["superseded"])]
-    out += ["- " + scan_entry(plan, pol, rid, True) for rid in lay["superseded"]]
+    out += ["- " + scan_entry(plan, pol, rid, True, mark=True) for rid in lay["superseded"]]
     out += ["", "## More to check (%d)" % lay["more_rows"]]
-    out += ["- %s - check: %s" % (entry_line(plan, pol, item, True), entry_why(plan, pol, item))
+    out += ["- %s - check: %s" % (entry_line(plan, pol, item, True, mark=True), entry_why(plan, pol, item))
             for item in lay["more"]]
     out += ["", "## Established (%d)" % len(lay["established"])]
     for group in doc["groups"]:
         ids = [rid for rid in lay["established"] if plan["rows"][rid]["group"] == group]
         if ids:
-            out += ["### " + oneline(group)] + ["- " + scan_entry(plan, pol, rid, True) for rid in ids]
+            out += ["### " + oneline(group)] + ["- " + scan_entry(plan, pol, rid, True, mark=True) for rid in ids]
     order = lay["check_ids"] + lay["eliminated"] + lay["superseded"] + lay["more_ids"] + lay["established"]
     return out + _details(doc, pol, plan, order, True)
 
@@ -377,25 +420,27 @@ def _speedread_flat(doc, pol, plan, scope=None, notes=()):
     sup = [rid for rid in plan["superseded"] if keep(rid)]
     est = [rid for rid in plan["established"] if keep(rid)]
     total = len(check) + len(elim) + len(sup) + len(est)
+    fails = rule_fail_ids(doc, plan, scope)
     out = _head(doc)
     out.append(DOT.join(["Check first %d" % len(check), "Eliminated %d" % len(elim), "Superseded %d" % len(sup),
-                         "Established %d" % len(est), "Total %d" % total]))
+                         "Established %d" % len(est), "Total %d" % total, "Rule fails %d" % len(fails)]))
     out += list(notes)
+    out += rule_fail_section(plan, fails, lambda rid: entry(plan, pol, rid, True, mark=True))
     out += ["", "## Check first (%d)" % len(check)]
     if check:
         out += ["| # | What | Why check | Where |", "|---|---|---|---|"]
         for n, rid in enumerate(check, 1):
             locs = plan["rows"][rid]["locators"]
             where = oneline("; ".join(_b(loc, True) for loc in locs)) if locs else "-"
-            out.append("| %d | %s | %s | %s |" % (n, cell(entry(plan, pol, rid, True, with_locators=False)),
+            out.append("| %d | %s | %s | %s |" % (n, cell(entry(plan, pol, rid, True, with_locators=False, mark=True)),
                                                  cell(why(plan, pol, rid)), cell(where)))
-    out += ["", "## Eliminated (%d)" % len(elim)] + ["- " + entry(plan, pol, rid, True) for rid in elim]
-    out += ["", "## Superseded (%d)" % len(sup)] + ["- " + entry(plan, pol, rid, True) for rid in sup]
+    out += ["", "## Eliminated (%d)" % len(elim)] + ["- " + entry(plan, pol, rid, True, mark=True) for rid in elim]
+    out += ["", "## Superseded (%d)" % len(sup)] + ["- " + entry(plan, pol, rid, True, mark=True) for rid in sup]
     out += ["", "## Established (%d)" % len(est)]
     for group in doc["groups"]:
         ids = [rid for rid in est if plan["rows"][rid]["group"] == group]
         if ids:
-            out += ["### " + oneline(group)] + ["- " + entry(plan, pol, rid, True) for rid in ids]
+            out += ["### " + oneline(group)] + ["- " + entry(plan, pol, rid, True, mark=True) for rid in ids]
     return out
 
 
@@ -416,17 +461,22 @@ def _uncertain_first(doc, pol, plan):
     lay = layout(doc, pol, plan)
     check = set(lay["check_ids"] + lay["more_ids"])
     rest = [r["id"] for r in doc["rows"] if r["id"] not in check]
+    fails = rule_fail_ids(doc, plan)
     out = _head(doc)
     out.append(DOT.join(["Needs check %d" % lay["check_rows"], "More to check %d" % lay["more_rows"],
                          "Other %d" % len(rest), "Total %d" % lay["total"],
-                         "Spot check %d of %d" % (len(lay["spot"]), len(lay["established"]))]))
+                         "Spot check %d of %d" % (len(lay["spot"]), len(lay["established"])),
+                         "Rule fails %d" % len(fails)]))
+    out += rule_fail_section(plan, fails, lambda rid: scan_entry(plan, pol, rid, mark=True))
     out += ["", "## Needs check (%d)" % lay["check_rows"]]
-    out += ["- %s - check: %s" % (entry_line(plan, pol, item), entry_why(plan, pol, item)) for item in lay["check"]]
+    out += ["- %s - check: %s" % (entry_line(plan, pol, item, mark=True), entry_why(plan, pol, item))
+            for item in lay["check"]]
     out += _spot_section(doc, pol, plan, lay, False)
     out += ["", "## More to check (%d)" % lay["more_rows"]]
-    out += ["- %s - check: %s" % (entry_line(plan, pol, item), entry_why(plan, pol, item)) for item in lay["more"]]
+    out += ["- %s - check: %s" % (entry_line(plan, pol, item, mark=True), entry_why(plan, pol, item))
+            for item in lay["more"]]
     out += ["", "## Other rows, input order (%d)" % len(rest)]
-    out += ["- " + scan_entry(plan, pol, rid) for rid in rest]
+    out += ["- " + scan_entry(plan, pol, rid, mark=True) for rid in rest]
     return out + _details(doc, pol, plan, lay["check_ids"] + lay["more_ids"] + rest, False)
 
 
