@@ -47,7 +47,7 @@ def a_file(**changes):
 class InstanceDir:
     """A copy of the demo's config in a temporary directory, with whatever regression file a test wants."""
 
-    def __init__(self, regression=None, raw=None, declared="evals/known_errors.json"):
+    def __init__(self, regression=None, raw=None, declared="evals/known_errors.json", pins="match"):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.tmp.name)
         data = demo_data()
@@ -57,6 +57,10 @@ class InstanceDir:
             path = self.root / declared
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(raw if raw is not None else json.dumps(regression).encode("utf-8"))
+            if pins == "match" and regression is not None:      # the pinned id list a well-kept file has beside it
+                pins = [entry.get("id") for entry in regression.get("entries") or []]
+            if isinstance(pins, list):
+                evaluator.pinned_path(path).write_text(json.dumps({"ids": pins}), encoding="utf-8")
 
     def __enter__(self):
         return self
@@ -250,6 +254,55 @@ class RunTests(unittest.TestCase):
                 writers.append("open(%s)" % ast.unparse(node))
         allowed = {"labels_dir / (chunk['id'] + '.jsonl')", "path", "pathlib.Path(args.json_out)"}
         self.assertTrue(set(writers) <= allowed, "unexpected write targets in evaluator.py: %s" % (set(writers) - allowed))
+
+
+class PinnedIdTests(unittest.TestCase):
+    """A known error deleted from the regression file between commits is refused, as a removed mutation id is.
+    Measured 2026-09-16 before the fix: a copy of the demo with KE003 deleted ran `2 entries | 2 still caught`,
+    exit 0; the runner only checked that the file did not change DURING a run."""
+
+    def two(self):
+        second = copy.deepcopy(a_file()["entries"][0])
+        second["id"] = "KE901"
+        return a_file(entries=[a_file()["entries"][0], second])
+
+    def main(self, inst_dir, *args):
+        # main() reads INSTANCE_DIR/instance.yaml: the demo's own, which declares evals/known_errors.json as InstanceDir does
+        (inst_dir.root / "instance.yaml").write_bytes((DEMO_DIR / "instance.yaml").read_bytes())
+        with mock.patch("builtins.print") as printed:
+            code = evaluator.main([str(inst_dir.root)] + list(args))
+        return code, " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+
+    def test_a_known_error_deleted_from_the_file_is_refused_naming_its_id(self):
+        with InstanceDir(regression=a_file(), pins=["KE900", "KE901"]) as inst_dir:
+            inst = config.load(inst_dir.root / "instance.json")
+            with self.assertRaises(evaluator.RegressionFileError) as raised:
+                evaluator.run(inst, DEMO_DIR, config.regression_file_path(inst), say=lambda *a: None)
+            self.assertIn("KE901 is pinned", str(raised.exception))
+            code, out = self.main(inst_dir, "--check")
+            self.assertEqual(code, 1, out)
+            self.assertIn("KE901", out)
+        with InstanceDir(regression=self.two()) as inst_dir:
+            self.assertEqual(self.main(inst_dir, "--check")[0], 0)
+
+    def test_an_entry_that_is_not_pinned_is_refused(self):
+        with InstanceDir(regression=self.two(), pins=["KE900"]) as inst_dir:
+            code, out = self.main(inst_dir, "--check")
+        self.assertEqual(code, 1, out)
+        self.assertIn("KE901 is not pinned", out)
+
+    def test_a_regression_file_with_no_pinned_list_is_not_executed(self):
+        with InstanceDir(regression=a_file(), pins=None) as inst_dir:
+            code, out = self.main(inst_dir, "--check")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no pinned id list", out)
+
+    def test_the_demo_and_the_template_pin_every_entry(self):
+        for inst_dir in (DEMO_DIR, ROOT / "instances" / "_template"):
+            with self.subTest(instance=inst_dir.name):
+                path = config.regression_file_path(config.load(inst_dir / "instance.yaml"))
+                data, _ = evaluator.read_file(path)
+                self.assertEqual(sorted(evaluator.check_pins(path, data)), sorted(e["id"] for e in data["entries"]))
 
 
 class TestCommandWiringTests(unittest.TestCase):

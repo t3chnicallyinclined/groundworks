@@ -41,7 +41,15 @@ could not run: no server, a fixture that did not build). Exit 0 only when every 
 REGRESSED or a malformed file; 2 on any NOT EXECUTED or a file with no entries. The summary is the last line.
 
 The runner never writes the regression file: it opens it read-only and checks its SHA-256 is unchanged at
-the end, so nothing a check runs can rewrite the evaluator it is judged by. Standard library only.
+the end, so nothing a check runs can rewrite the evaluator it is judged by.
+
+PINNED IDS. Beside the file, `<name>.ids.json` (`known_errors.ids.json`) lists every entry id, as
+tests/harness/mutations_ids.json does for the mutation registry: {"doc": "...", "ids": ["KE001", ...]}. An id
+pinned there and gone from the file is REFUSED (exit 1), and so is an entry not pinned (add it in the same
+change). Without the list the run is NOT EXECUTED (exit 2). The hash check above only covers one run: until
+2026-09-16 deleting an entry between commits was not caught at all (measured: a copy of the demo with KE003
+removed ran `2 entries | 2 still caught`, exit 0). Removing a pin as well takes a human, and shows in review.
+Standard library only.
 """
 import argparse
 import contextlib
@@ -192,6 +200,36 @@ def read_file(path):
     except UnicodeDecodeError as exc:
         raise RegressionFileError("regression file %s is not UTF-8: %s" % (path, exc)) from exc
     return parse(text, str(path)), hashlib.sha256(raw).hexdigest()
+
+
+def pinned_path(path):
+    """The pinned id list beside a regression file: known_errors.json -> known_errors.ids.json."""
+    path = pathlib.Path(path)
+    return path.with_name(path.stem + ".ids.json")
+
+
+def check_pins(path, data):
+    """The pinned ids, when every one is still in the file and every entry is pinned. RegressionFileError
+    naming each removed or unpinned id; NotExecuted when there is no pinned list to check against."""
+    pins = pinned_path(path)
+    if not pins.is_file():
+        raise NotExecuted("no pinned id list %s beside the regression file, so a deleted entry could not be "
+                          "detected; create it with every entry id: {\"ids\": [...]}" % pins)
+    try:
+        pinned = json.loads(pins.read_bytes().decode("utf-8")).get("ids")
+    except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+        raise RegressionFileError("pinned id list %s is not a JSON object with ids: %s" % (pins, exc)) from exc
+    if not isinstance(pinned, list) or not all(isinstance(i, str) for i in pinned):
+        raise RegressionFileError("pinned id list %s must hold ids: a list of entry id strings" % pins)
+    ids = [entry["id"] for entry in data["entries"]]
+    problems = ["%s is pinned in %s but no longer in the regression file: removing a known error takes a human"
+                % (gone, pins.name) for gone in sorted(set(pinned) - set(ids))]
+    problems += ["%s is not pinned in %s: add it there in the same change" % (new, pins.name)
+                 for new in sorted(set(ids) - set(pinned))]
+    if problems:
+        raise RegressionFileError("regression file %s does not match its pinned ids:\n  - %s"
+                                  % (path, "\n  - ".join(problems)))
+    return pinned
 
 
 # ---- a throwaway server ------------------------------------------------------------------------------
@@ -436,6 +474,7 @@ def run_validator(check, inst, work):
 def run(inst, inst_dir, path, url=None, ns="xscholar_eval", labels_dir=None, say=print, writer_factory=None):
     """Judge every entry. Returns (results, sha256). The file is read once, and its hash re-checked at the end."""
     data, digest = read_file(path)
+    check_pins(path, data)                      # a removed known error fails before anything runs
     results = []
     with tempfile.TemporaryDirectory(prefix="xscholar-eval-") as tmp:
         for entry in data["entries"]:
@@ -508,8 +547,9 @@ def main(argv=None):
         path = config.regression_file_path(inst)
         if args.check:
             data, digest = read_file(path)
-            print("EVALUATOR  %s  %s (sha256 %s) | %d entries | format ok | NOT EXECUTED (--check runs nothing)"
-                  % (inst.id, path, digest[:12], len(data["entries"])))
+            pinned = check_pins(path, data)
+            print("EVALUATOR  %s  %s (sha256 %s) | %d entries, %d pinned | format ok | NOT EXECUTED (--check runs nothing)"
+                  % (inst.id, path, digest[:12], len(data["entries"]), len(pinned)))
             return 0 if data["entries"] else 2
         proc = None
         try:

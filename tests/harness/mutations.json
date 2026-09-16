@@ -2309,12 +2309,84 @@
    "needs_db": false
   },
   {
+   "id": "M323",
+   "guard": "evaluator run checks the pinned ids before judging any entry",
+   "defect": "checks lane 9",
+   "file": "xscholar/evaluator.py",
+   "anchor": "    check_pins(path, data)                      # a removed known error fails before anything runs\n",
+   "replacement": "    pass\n",
+   "must_fail": [
+    "tests.test_evaluator.PinnedIdTests.test_a_known_error_deleted_from_the_file_is_refused_naming_its_id"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M324",
+   "guard": "a known error deleted from the regression file is refused by id",
+   "defect": "checks lane 9",
+   "file": "xscholar/evaluator.py",
+   "anchor": "for gone in sorted(set(pinned) - set(ids))]",
+   "replacement": "for gone in []]",
+   "must_fail": [
+    "tests.test_evaluator.PinnedIdTests.test_a_known_error_deleted_from_the_file_is_refused_naming_its_id"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M325",
+   "guard": "a regression entry that is not pinned is refused",
+   "defect": "checks lane 9",
+   "file": "xscholar/evaluator.py",
+   "anchor": "for new in sorted(set(ids) - set(pinned))]",
+   "replacement": "for new in []]",
+   "must_fail": [
+    "tests.test_evaluator.PinnedIdTests.test_an_entry_that_is_not_pinned_is_refused"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M326",
+   "guard": "a regression file with no pinned id list is NOT EXECUTED",
+   "defect": "checks lane 9",
+   "file": "xscholar/evaluator.py",
+   "anchor": "    if not pins.is_file():\n        raise NotExecuted(",
+   "replacement": "    if not pins.is_file():\n        return []\n        raise NotExecuted(",
+   "must_fail": [
+    "tests.test_evaluator.PinnedIdTests.test_a_regression_file_with_no_pinned_list_is_not_executed"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M327",
+   "guard": "evaluator --check checks the pinned ids",
+   "defect": "checks lane 9",
+   "file": "xscholar/evaluator.py",
+   "anchor": "            pinned = check_pins(path, data)\n",
+   "replacement": "            pinned = []\n",
+   "must_fail": [
+    "tests.test_evaluator.PinnedIdTests.test_a_known_error_deleted_from_the_file_is_refused_naming_its_id",
+    "tests.test_evaluator.PinnedIdTests.test_an_entry_that_is_not_pinned_is_refused"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
    "id": "M322",
-   "guard": "the template documents the base a relative evaluator.regression_file resolves against",
+   "guard": "a relative evaluator.regression_file resolves against the config's own folder, as the template and demo now document",
    "defect": "checks lane 8",
-   "file": "instances/_template/instance.yaml",
-   "anchor": "  # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository\n",
-   "replacement": "  # regression_file: a relative path, not the repository\n",
+   "file": "xscholar/config.py",
+   "anchor": "        base_dir = pathlib.Path(inst.source).resolve().parent\n",
+   "replacement": "        base_dir = pathlib.Path.cwd()\n",
+   "note": "A comment cannot carry a break (lint refuses an anchor inside a comment), so the break is on the behaviour the new comment documents; the test checks both the comment and the behaviour. config.py is not edited by this entry.",
    "must_fail": [
     "tests.test_evaluator.ConfigRefusalTests.test_the_template_and_the_demo_say_what_a_relative_regression_file_resolves_against"
    ],
