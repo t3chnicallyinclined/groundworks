@@ -80,7 +80,7 @@ As of this writing nothing below has been read in depth, except autoresearch and
 - event rules that demote facts when evidence is downgraded or uncited
 - a cascade to conclusions
 
-Pattern: `engine/patterns/tms_propagation.surql`; results and risks: `notes/2026-09-15_automatic_demotion.md`. Not yet installed in any instance. The codebase-experts design extends it with span hashes.
+Pattern: `xscholar/patterns/tms_propagation.surql`; results and risks: `notes/2026-09-15_automatic_demotion.md`. Not yet installed in any instance. The codebase-experts design extends it with span hashes.
 
 **Study questions:**
 - How exactly does a justification-based TMS propagate retraction, and what is the cost at scale?

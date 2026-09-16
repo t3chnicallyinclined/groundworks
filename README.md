@@ -33,12 +33,12 @@ This repository contains **no client or matter data**, ever:
 | `docs/MODULES.md` | Engine modules, file contracts (units, labels, vocabulary, gate rules), modularity rules |
 | `instances/` | 19 domain specs mapping the method (eight answers, evidence model, gates with probes, roles, lenses, evaluator, walkthrough, usage, synthetic worked example, pitfalls, module reuse) plus a template and `instance.yaml` schema |
 | `.claude/skills/design-instance/` | The skill that maps the method onto a new domain |
-| `engine/panel/` | Panel module: several lenses judge one target under a program-checked protocol (`PROTOCOL.md`, `panel.py`, tests, `NOTICE.md`) |
+| `xscholar/panel/` | Panel module: several lenses judge one target under a program-checked protocol (`PROTOCOL.md`, `panel.py`, tests, `NOTICE.md`) |
 | `.claude/skills/panel/` | The skill that runs a panel |
-| `engine/mcp/` | MCP front door: domain-free tools over an instance adapter, status envelope, launch-stamped provenance, no raw query or delete tools |
-| `engine/embed/` | Local embeddings and a retrieval bake-off (keyword, dense, hybrid) with confidence intervals; models adopted only if they beat keyword search |
+| `xscholar/mcp/` | MCP front door: domain-free tools over an instance adapter, status envelope, launch-stamped provenance, no raw query or delete tools |
+| `xscholar/embed/` | Local embeddings and a retrieval bake-off (keyword, dense, hybrid) with confidence intervals; models adopted only if they beat keyword search |
 | `docs/LICENSING.md`, `THIRD_PARTY_NOTICES.md`, `scripts/license_check.py` | Licensing policy, notices, and the commit-time license check |
-| `engine/patterns/` | Proven datastore patterns: truth maintenance, archive bin, stable edge ids |
+| `xscholar/patterns/` | Proven datastore patterns: truth maintenance, archive bin, stable edge ids |
 | `scripts/privacy_scan.py` | Deny-list scan (list kept outside the repo); runs as a pre-commit hook; fails closed |
 | `docs/ROADMAP.md` | Tracks for the engine, pilots and product, with acceptance tests |
 | `docs/DECISIONS.md` | Method-level decisions and open questions |
@@ -49,15 +49,48 @@ This repository contains **no client or matter data**, ever:
 | `.claude/agents/scholar-architect.md` | The expert agent for designing and building the system |
 | `CLAUDE.md` | Rules for any session working in this repo |
 
-## Try it (five minutes, nothing to download but SurrealDB)
+## Start here
+
+**Prerequisites:** Python 3.11+ and the SurrealDB binary (`https://surrealdb.com/install`, or set `XSCHOLAR_SURREAL` to its path). Nothing else; the core has no third-party dependencies.
 
 ```
-python scripts/run_instance.py instances/demo-incident --memory 8025
+git clone https://github.com/t3chnicallyinclined/xscholar.git
+cd xscholar
+python -m xscholar.cli test                                      # every suite + the license check (about 20 s)
+python scripts/run_instance.py instances/demo-incident --memory 8025   # a whole instance, end to end
 ```
 
-That runs a complete non-legal instance on a throwaway in-memory database: config, generated schema and gates, a reject-and-accept probe per rule, intake, chunking, labelling (a stand-in rule labeller; real instances use agents), the verbatim validator, the loader, and a walkthrough where the datastore refuses each premature promotion and says exactly what is missing. Outputs land in `instances/demo-incident/out/`.
+The demo runs a complete non-legal instance on a throwaway in-memory database: config, generated schema and gates, a reject-and-accept probe for every rule, intake, chunking, labelling (a stand-in rule labeller; real instances use agents), the verbatim validator, the loader, and a walkthrough in which the datastore refuses each premature promotion and says exactly what is missing. Outputs land in `instances/demo-incident/out/`.
 
-To map your own domain: copy `instances/demo-incident/`, answer the eight questions in `instance.yaml`, write an adapter that yields units with exact locators, and run the same command.
+### If you are an agent working in this repository
+
+1. Read `CLAUDE.md` first. Its rules are binding: no instance data here, verify before claiming, gates tested both ways, checks that pass by default are the enemy, the evaluator is human-owned, licensing by class.
+2. Run `python -m xscholar.cli test` before and after any change. Green is the only definition of done.
+3. Read `docs/ARCHITECTURE.md` (what the system is, and who is at the gate), then `docs/TUNING.md` (what each layer's knobs do), then `docs/MODULES.md` (the file contracts you will write against).
+4. To add a capability: put generic code under `xscholar/<module>/`, tests under `tests/`, and test it with a non-legal synthetic instance. Domain words never enter engine code.
+5. To map a new domain: use the `design-instance` skill, or copy `instances/demo-incident/`, answer the eight questions in `instance.yaml`, write an adapter that yields units with exact locators, and run the same command. The instance lives in **its own project**, never here.
+6. Record decisions in `docs/DECISIONS.md`, dated reasoning in `notes/`, and every new dependency or adapted item in `THIRD_PARTY_NOTICES.md` (the pre-commit check enforces it).
+7. Report the unflattering number next to the flattering one. Say UNKNOWN rather than guess.
+
+### If you are a person deciding whether to use this
+
+Read `docs/METHOD.md` section 1 (one paragraph) and section 12 (which domains fit), then run the demo above and read its output: each REFUSED line is the method working.
+
+## Layout of the engine
+
+| Path | What |
+|---|---|
+| `xscholar/config.py` | The instance config: the eight answers, validated, as the single source of truth |
+| `xscholar/gates.py` | Generates the datastore schema, the promotion gates, and a reject-and-accept probe per rule |
+| `xscholar/db.py` | Minimal SurrealDB client that fails loudly |
+| `xscholar/pipeline/` | intake, chunker, validator, loader, and the typed write surface |
+| `xscholar/panel/` | Several lenses judge one target under a program-checked protocol |
+| `xscholar/present/` | Renderings for human verification, with the inline rule re-check |
+| `xscholar/mcp/` | The MCP front door agents use |
+| `xscholar/embed/` | Local embeddings and the retrieval bake-off |
+| `xscholar/patterns/` | Proven datastore patterns |
+| `tests/` | Every suite; `python -m xscholar.cli test` runs them all |
+| `scripts/` | The instance runner, the privacy scan, the license check |
 
 ## License
 

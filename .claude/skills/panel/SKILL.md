@@ -5,7 +5,7 @@ description: Run a deliberation panel of lenses on one target (a conclusion, arg
 
 # Run a panel
 
-The protocol, prompts and file layout are in `engine/panel/PROTOCOL.md`. Read it first. The program is `engine/panel/panel.py`; it decides whether the protocol was followed, not you.
+The protocol, prompts and file layout are in `xscholar/panel/PROTOCOL.md`. Read it first. The program is `xscholar/panel/panel.py`; it decides whether the protocol was followed, not you.
 
 ## Steps
 
@@ -14,12 +14,12 @@ The protocol, prompts and file layout are in `engine/panel/PROTOCOL.md`. Read it
    - Options and objection categories come from the role's `panel:` entry in `instance.yaml`.
    - Choose `weighted_seat` now, or `null`. Say why in one sentence to the user.
    - Build each seat's evidence packet from its lens view, with locators.
-2. `python engine/panel/panel.py lock runs/<panel_id>`
+2. `python xscholar/panel/panel.py lock runs/<panel_id>`
 3. **Round 1:** one subagent per seat, all in one message, using the round-1 prompt. Save each returned answer **verbatim** to `round1/<seat>.md`.
-4. `python engine/panel/panel.py anonymize runs/<panel_id>`. If it fails, re-prompt only the named seats for their stance line.
+4. `python xscholar/panel/panel.py anonymize runs/<panel_id>`. If it fails, re-prompt only the named seats for their stance line.
 5. **Round 2:** one subagent per seat, all in one message, using the round-2 prompt with `round1_anon.md` and the seat's own round-1 answer. Save verbatim to `round2/<seat>.md`.
-6. `python engine/panel/panel.py check runs/<panel_id>`. For each `OWED` line, send the printed re-prompt to that seat only (continue the same subagent when possible), and save its full revised answer over the old file. Repeat. **Budget:** 2 re-prompts per seat per condition; then stop and report "protocol not satisfied" with the owed list.
-7. `python engine/panel/panel.py tally runs/<panel_id>`.
+6. `python xscholar/panel/panel.py check runs/<panel_id>`. For each `OWED` line, send the printed re-prompt to that seat only (continue the same subagent when possible), and save its full revised answer over the old file. Repeat. **Budget:** 2 re-prompts per seat per condition; then stop and report "protocol not satisfied" with the owed list.
+7. `python xscholar/panel/panel.py tally runs/<panel_id>`.
    - **Exit 0:** write each row of `verdicts.jsonl` through the instance's write surface as a lens-keyed critique at agent grade.
    - **Exit 3 (split):** show the human each option's weight and its strongest argument, plus the minority report. Do not write a consensus.
 8. **Report:** seats and weighted seat, result, weights, minority report, enforcement counts, and the "cannot check" list from PROTOCOL.md.

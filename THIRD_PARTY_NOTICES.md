@@ -6,7 +6,7 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 
 | Item | Author | Source | License | Our files | License copy | Changes |
 |---|---|---|---|---|---|---|
-| Council of High Intelligence (panel protocol ideas, stance line format, tally arithmetic, two instruction phrases) | nyk | https://github.com/0xNyk/council-of-high-intelligence @ `94f9a90d62cb5963a7ee64340206465e1c86c146` | MIT, Copyright (c) 2026 nyk | `engine/panel/` | `engine/panel/NOTICE.md` | Stated in the NOTICE |
+| Council of High Intelligence (panel protocol ideas, stance line format, tally arithmetic, two instruction phrases) | nyk | https://github.com/0xNyk/council-of-high-intelligence @ `94f9a90d62cb5963a7ee64340206465e1c86c146` | MIT, Copyright (c) 2026 nyk | `xscholar/panel/` | `xscholar/panel/NOTICE.md` | Stated in the NOTICE |
 
 ## Runtime and development dependencies (used, not modified)
 
@@ -27,13 +27,13 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 
 | Model | License | Use |
 |---|---|---|
-| BAAI/bge-m3 | MIT | `engine/embed` bake-off; vectors in instance 1's derived database |
-| Qwen/Qwen3-Embedding-0.6B | Apache-2.0 | `engine/embed` bake-off candidate |
+| BAAI/bge-m3 | MIT | `xscholar/embed` bake-off; vectors in instance 1's derived database |
+| Qwen/Qwen3-Embedding-0.6B | Apache-2.0 | `xscholar/embed` bake-off candidate |
 | pySHACL, Apache Jena, sentence-transformers, transformers | Apache-2.0 | |
 | RDF4J | BSD-3-Clause | |
 | FAISS, LadybugDB | MIT | |
 | Neo4j Graph Data Science | GPLv3 or commercial | Hosted analytics only; never shipped without a lawyer's review |
-| Python MCP SDK, import `mcp` | MIT (package metadata, version 1.26.0) | Used by `engine/mcp` |
+| Python MCP SDK, import `mcp` | MIT (package metadata, version 1.26.0) | Used by `xscholar/mcp` |
 | PyTorch, import `torch` | BSD-3-Clause | Embedding runtime (separate environment) |
 | sentence-transformers, import `sentence_transformers`; transformers, import `transformers` | Apache-2.0 | Embedding runtime |
 | NumPy, import `numpy` | BSD-3-Clause | Embedding runtime |

@@ -18,18 +18,20 @@ import time
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-for sub in ("engine", "engine/pipeline", "engine/present"):
-    sys.path.insert(0, str(ROOT / sub))
-import config  # noqa: E402
-import db as dbmod  # noqa: E402
-import gates  # noqa: E402
-import intake  # noqa: E402
-import chunker  # noqa: E402
-import validator  # noqa: E402
-import loader  # noqa: E402
-import write  # noqa: E402
+import pathlib as _pathlib, sys as _sys
+if __package__ in (None, ""):  # run as a plain script: make the repo root importable
+    _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
+from xscholar import config  # noqa: E402
+from xscholar import db as dbmod  # noqa: E402
+from xscholar import gates  # noqa: E402
+from xscholar.pipeline import intake  # noqa: E402
+from xscholar.pipeline import chunker  # noqa: E402
+from xscholar.pipeline import validator  # noqa: E402
+from xscholar.pipeline import loader  # noqa: E402
+from xscholar.pipeline import write  # noqa: E402
 
-SURREAL = pathlib.Path.home() / "AppData" / "Local" / "SurrealDB" / "surreal.exe"
+from xscholar import surreal_bin  # noqa: E402
+SURREAL = surreal_bin.find()
 
 
 def load_module(path):
@@ -40,6 +42,8 @@ def load_module(path):
 
 
 def start_memory(port):
+    if not SURREAL:
+        raise SystemExit("NOT EXECUTED: " + surreal_bin.MISSING)
     proc = subprocess.Popen([str(SURREAL), "start", "--bind", "127.0.0.1:%d" % port, "--user", "root",
                              "--pass", "root", "memory"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(80):

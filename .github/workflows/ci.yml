@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install SurrealDB (for the gate and loader tests)
+        run: |
+          curl -sSf https://install.surrealdb.com | sh
+          echo "$HOME/.surrealdb" >> "$GITHUB_PATH"
+      - name: Run every suite and the license check
+        run: python -m xscholar.cli test
+      - name: Demo instance end to end
+        run: python scripts/run_instance.py instances/demo-incident --memory 8025

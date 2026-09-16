@@ -75,7 +75,7 @@ def scenario(writer, report):
     """The walkthrough: what an agent would do, with the gate answering each step.
 
     `report(step, outcome)` records each line for the runner. Every refusal here is the point."""
-    from write import GateRefusal  # engine/pipeline on sys.path by the runner
+    from xscholar.pipeline.write import GateRefusal
 
     writer.propose("pool_exhausted", "The database connection pool was exhausted from 11:40",
                    reasoning_type="direct_quote")
