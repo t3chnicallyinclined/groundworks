@@ -2241,6 +2241,29 @@
    "needs_db": true,
    "commit": "uncommitted",
    "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)"
+  },
+  {
+   "id": "M318",
+   "guard": "chunk_by groups every unit sharing a value, not only adjacent ones",
+   "defect": "V2-22(e)",
+   "file": "xscholar/pipeline/chunker.py",
+   "edits": [
+    {
+     "anchor": "    groups = {}                                    # insertion-ordered: first appearance of each value\n    for row in rows:\n        key = str((row.get(\"locator\") or {}).get(chunk_by))\n        groups.setdefault(key, []).append(row)\n",
+     "replacement": "    groups = []\n    for row in rows:\n        key = str((row.get(\"locator\") or {}).get(chunk_by))\n        if groups and groups[-1][0] == key:\n            groups[-1][1].append(row)\n        else:\n            groups.append((key, [row]))\n"
+    },
+    {
+     "anchor": "    for group in groups.values():\n",
+     "replacement": "    for _, group in groups:\n"
+    }
+   ],
+   "must_fail": [
+    "tests.test_pipeline.ChunkByTests.test_units_sharing_a_value_stay_together_when_the_input_interleaves_them",
+    "tests.test_invariants.ChunkerInvariantTests.test_a_chunk_by_value_spans_two_slices_only_when_it_alone_exceeds_the_chunk_size"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
   }
  ]
 }

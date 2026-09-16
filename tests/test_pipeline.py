@@ -131,6 +131,14 @@ class ChunkByTests(Base):
         self.assertTrue(all(d.isdisjoint(e) for i, d in enumerate(days) for e in days[i + 1:]))
         self.assertEqual(sum(len(p) for p in pieces), 30)
 
+    def test_units_sharing_a_value_stay_together_when_the_input_interleaves_them(self):
+        days = ["d1", "d2", "d1", "d3", "d2", "d1"]
+        rows = [dict(log(i + 1, "l%d" % i), locator={"host": "h", "file": "f", "line": i + 1, "ts": d})
+                for i, d in enumerate(days)]
+        pieces = list(chunker._pieces(rows, 3, "ts"))
+        self.assertEqual([[r["locator"]["ts"] for r in p] for p in pieces], [["d1", "d1", "d1"], ["d2", "d2", "d3"]])
+        self.assertEqual([r["locator"]["line"] for r in pieces[0]], [1, 3, 6])     # input order kept within a day
+
     def test_a_day_larger_than_the_size_is_split_not_dropped(self):
         rows = [dict(log(i, "x"), locator={"host": "h", "file": "f", "line": i, "ts": "same"}) for i in range(1, 24)]
         pieces = list(chunker._pieces(rows, 10, "ts"))
