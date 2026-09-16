@@ -71,3 +71,25 @@ The instance runs in its own private repository. This repo receives only generic
 | E4 | Buyer interviews: appellate boutiques, public defender appellate units; then research groups |
 | E5 | License audit of every borrowed artifact |
 | E6 | Multi-tenant system of record decision (SurrealDB vs Postgres with extensions) |
+
+## v0.2 (started 2026-09-15; baseline tag v0.1.0b1)
+
+Each item ships with tests both ways, a non-legal synthetic proof, and a line in CHANGELOG.
+
+| # | Item | Acceptance |
+|---|---|---|
+| V2-1 | **Lens builder from config** (`xscholar/lens/`): each `lenses:` entry becomes a datastore view; a framework lens files labels under transcribed framework nodes; `lens_view` MCP tool | A lens view returns nothing its own standard excludes (probe both ways); the framework matrix counts for and against per node |
+| V2-2 | **Bitemporal claims** (B12): `valid_from`/`valid_to` (true in the source) and `learned_at`/`status_history` (when we knew) on facts, written by events; an as-of query helper | "What did the graph say on date X" returns the status held then, checked against a pre-change export |
+| V2-3 | **Per-agent credentials** (C12): a datastore user per launch identity with table and row permissions from the config (readers cannot promote; a seat writes critiques only under its lens; nobody but the loader writes labels) | Probes both ways per role; the MCP server launches with a per-agent credential instead of root |
+| V2-4 | **Change-feed work queue** (B11): CHANGEFEED on claim and critique tables; a worker that stores its versionstamp and resumes after a stop with nothing missed; first consumers: stale re-check and archive | Stop the worker mid-stream, restart, every change processed exactly once |
+| V2-5 | **Role skills and a drift guard generated from config** (C1 remainder, C8): `.claude/skills/<role>/SKILL.md` per role from templates plus the instance vocabulary; CI fails when a seat, lens, option or category in the config is absent from a generated skill or a doc | Regenerate is idempotent; a planted mismatch fails the guard |
+| V2-6 | **Compose packaging** (tier 1): `Dockerfile`, `compose.yaml` with the SurrealDB image, health checks, an export cron, an optional GPU profile | A fresh machine runs the demo with one compose command |
+| V2-7 | **Marker wording experiment** (C20), on the first instance with its session's help | Status-upgrade catch rate reported against the 0 of 9 baseline |
+
+## Beyond v0.2
+
+| Track | What |
+|---|---|
+| v0.3 product | Tenants and per-viewer scopes; a human lens UI over the reading layer; Kubernetes when there are tenants; commercial SurrealDB license before any tenant gets schema control |
+| Research | Cross-field discovery pilot with the time-split evaluator (D1, D2); methods brain over the reading list (C5); SHACL shapes as the portable gate spec (C13); PROV and nanopublication export (C14); the improvement loop inside its fence (D4) |
+| Instances | A public appeals demo from a published decision (C4); a second real domain from config (D3); the codebase-experts pilot (D5) |
