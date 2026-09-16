@@ -9,12 +9,16 @@ follows is answered by the stranger.
 
 No SurrealDB binary needed: a plain listening socket is enough to occupy a port.
 """
+import ast
 import contextlib
+import http.server
 import importlib.util
 import pathlib
 import socket
 import sys
+import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -28,6 +32,42 @@ def load_run_instance():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# 8050 and up: throwaway ports for this suite's own stand-in servers. The suites own 8023-8034,
+# 8025 is the README demo port and 8040 is CI's baseline port; 8001-8003 are live databases.
+STRANGER = 8052
+DOOMED = 8053
+
+
+class _Answers(http.server.BaseHTTPRequestHandler):
+    """A stranger on the port. It answers /health exactly as a SurrealDB would."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, *args):
+        pass
+
+
+@contextlib.contextmanager
+def stranger_on(port):
+    server = http.server.HTTPServer(("127.0.0.1", port), _Answers)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _calls(node, name):
+    return any(isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) == name
+               for n in ast.walk(node))
 
 
 @contextlib.contextmanager
@@ -62,25 +102,82 @@ class PortGuardTests(unittest.TestCase):
         self.assertIn("already in use", str(raised.exception))
         self.assertIn(str(port), str(raised.exception))
 
-    def test_every_suite_that_starts_a_server_checks_its_port_first(self):
-        """A new server suite that forgets the guard is the defect coming back."""
-        for path in sorted(ROOT.glob("tests/test_*.py")):
-            text = path.read_text(encoding="utf-8")
-            if "surreal_bin.MISSING" not in text:
-                continue   # not a suite that starts a server
-            with self.subTest(suite=path.name):
-                self.assertIn("surreal_bin.port_in_use(PORT)", text,
-                              "%s starts a throwaway server without refusing an occupied port" % path.name)
+    def test_start_memory_will_not_trust_a_health_answer_from_a_server_it_did_not_start(self):
+        """The residual race, reproduced: the port was free when it was checked and taken a moment
+        later, so our own `surreal start` cannot bind and dies -- but the stranger answers /health
+        first, and the whole demo used to run against their database and report success. Measured
+        before the fix: start_memory returned a process whose poll() was still None."""
+        run_instance = load_run_instance()
+        run_instance.SURREAL = sys.executable   # stands in for a server that cannot bind and exits
+        with stranger_on(STRANGER):
+            with mock.patch.object(surreal_bin, "port_in_use", return_value=False):
+                with self.assertRaises(SystemExit) as raised:
+                    run_instance.start_memory(STRANGER)
+        self.assertIn("NOT EXECUTED", str(raised.exception))
+        self.assertIn("our own SurrealDB exited", str(raised.exception))
+        self.assertIn("by PID (never by name)", str(raised.exception))
 
-    def test_no_two_suites_share_a_port(self):
+    def test_start_memory_says_so_loudly_when_its_own_server_exits_at_once(self):
+        run_instance = load_run_instance()
+        run_instance.SURREAL = sys.executable
+        self.assertFalse(surreal_bin.port_in_use(DOOMED), "this test needs %d free" % DOOMED)
+        with self.assertRaises(SystemExit) as raised:
+            run_instance.start_memory(DOOMED)
+        self.assertIn("exited at once", str(raised.exception))
+
+    def test_port_in_use_sees_a_listener_bound_to_every_interface(self):
+        """A stranger who binds 0.0.0.0 holds 127.0.0.1 too, and our server will not bind."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("", 0))
+        sock.listen(1)
+        try:
+            self.assertTrue(surreal_bin.port_in_use(sock.getsockname()[1]))
+        finally:
+            sock.close()
+
+    def test_every_suite_that_starts_a_server_refuses_an_occupied_port(self):
+        """A new server suite that forgets the guard is the defect coming back. Reading the source
+        for the call is not enough: the guard is the `if` and the `raise`, and a call whose result
+        goes nowhere reads exactly like one that stops the suite."""
+        checked = 0
+        for path in sorted(ROOT.glob("tests/test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            if not _calls(tree, "Popen"):
+                continue   # not a suite that starts its own server
+            checked += 1
+            with self.subTest(suite=path.name):
+                guards = [n for n in ast.walk(tree)
+                          if isinstance(n, ast.If) and _calls(n.test, "port_in_use")
+                          and any(isinstance(inner, ast.Raise) for inner in ast.walk(n))]
+                self.assertTrue(guards, "%s starts a throwaway server without refusing an occupied "
+                                        "port and stopping" % path.name)
+        self.assertGreater(checked, 1, "no suite was examined; the walk found nothing to check")
+
+    def suite_ports(self):
         ports = {}
         for path in sorted(ROOT.glob("tests/test_*.py")):
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if line.startswith("PORT = "):
-                    port = int(line.split("=")[1].strip())
-                    self.assertNotIn(port, ports, "%s and %s both use port %d" % (ports.get(port), path.name, port))
-                    ports[port] = path.name
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PORT" for t in node.targets):
+                    ports.setdefault(node.value.value, []).append(path.name)
+        return ports
+
+    def test_no_two_suites_share_a_port(self):
+        ports = self.suite_ports()
         self.assertTrue(ports)
+        for port, users in ports.items():
+            self.assertEqual(len(users), 1, "%s all use port %d" % (" and ".join(users), port))
+
+    def test_no_suite_uses_a_port_that_belongs_to_something_else(self):
+        """8001-8003 are live databases and killing or writing into one has cost real data; 8025 is
+        the README demo port and 8040 is CI's baseline port. The suites own 8023-8034."""
+        reserved = {8001: "a live database", 8002: "a live database", 8003: "a live database",
+                    8025: "the README demo port", 8040: "CI's gate-baseline port"}
+        for port, users in self.suite_ports().items():
+            with self.subTest(port=port):
+                self.assertNotIn(port, reserved, "%s uses %d, which is %s"
+                                 % (users[0], port, reserved.get(port)))
+                self.assertTrue(8023 <= port <= 8034, "%s uses %d, outside the suites' range 8023-8034"
+                                % (users[0], port))
 
 
 if __name__ == "__main__":

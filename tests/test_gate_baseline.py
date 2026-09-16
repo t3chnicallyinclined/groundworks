@@ -49,5 +49,28 @@ class BaselineTests(unittest.TestCase):
                 self.assertTrue(report.get("rules"), "%s has no probe results to compare against" % path)
 
 
+    def test_nothing_automated_can_rewrite_a_baseline(self):
+        """The file is the check. A pipeline that regenerates it before comparing would report
+        "unchanged or stronger" for every future weakening, and the diff a human is meant to read
+        would never appear in a pull request. Only the tool that takes the flag may name it."""
+        watched = (sorted(ROOT.glob(".github/workflows/*.yml")) + sorted(ROOT.glob("scripts/*.py"))
+                   + [ROOT / "xscholar" / "cli.py"])
+        self.assertTrue(watched)
+        for path in watched:
+            with self.subTest(file=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("--write-baseline", text,
+                                 "%s regenerates a gate baseline; only a human at a terminal may" % path)
+                self.assertNotIn("write_baseline", text, "%s regenerates a gate baseline" % path)
+
+    def test_ci_compares_against_a_baseline_that_is_committed(self):
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("--baseline", ci, "CI does not compare the gates against any baseline")
+        named = [word for word in ci.split() if word.endswith("gate_baseline.json")]
+        self.assertTrue(named, "CI names no baseline file")
+        for name in named:
+            self.assertTrue((ROOT / name).exists(), "CI compares against %s, which is not committed" % name)
+
+
 if __name__ == "__main__":
     unittest.main()

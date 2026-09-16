@@ -46,6 +46,9 @@ def load_module(path):
     return module
 
 
+SETTLE = 0.5   # how long our own server is given to die before its health answer is believed
+
+
 def start_memory(port):
     if not SURREAL:
         raise SystemExit("NOT EXECUTED: " + surreal_bin.MISSING)
@@ -63,9 +66,20 @@ def start_memory(port):
                              "something else may hold the port" % (port, proc.returncode))
         try:
             urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=1)
-            return proc
         except Exception:
             time.sleep(0.25)
+            continue
+        # Something answered. That is not the same as OUR server answering: the port check above is
+        # a moment in time, and a stranger who bound the port just after it leaves our own process
+        # failing to bind and dying a beat later -- by which time we have already been answered, and
+        # would run the whole demo against their database. Measured: the health poll returned while
+        # poll() was still None. Let our process settle and ask again before trusting the answer.
+        time.sleep(SETTLE)
+        if proc.poll() is not None:
+            raise SystemExit("NOT EXECUTED: something is answering on %d but our own SurrealDB exited "
+                             "(exit %s); the port was taken between the check and the start. Stop that "
+                             "process by PID (never by name) or choose another port." % (port, proc.returncode))
+        return proc
     proc.kill()
     raise SystemExit("NOT EXECUTED: throwaway SurrealDB did not start on %d" % port)
 

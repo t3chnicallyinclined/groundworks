@@ -272,35 +272,64 @@ def spec(inst):
     return out
 
 
+def _clause_key(clause):
+    return (clause["kind"], clause["edge"], clause["where"])
+
+
 def compare_baseline(baseline, report, current_spec):
     """Every way a gate can get weaker between runs. Returns a list of plain-language failures."""
     failures = []
     old_rules = (baseline.get("spec") or {}).get("rules") or {}
     new_rules = current_spec["rules"]
+    if not old_rules:
+        # A baseline that pins nothing agrees with every config, including one with no gates at all.
+        # Read as "unchanged or stronger" it is worse than no baseline, because it looks like a check.
+        return ["the baseline pins no rules at all, so it cannot fail and is not a baseline; "
+                "write one with --write-baseline and commit it"]
     for rule_id, was in old_rules.items():
         now = new_rules.get(rule_id)
         if now is None:
             failures.append("rule %s is in the baseline and gone from the config" % rule_id)
             continue
-        old_clauses = {(c["kind"], c["edge"], c["where"]): c for c in was["clauses"]}
-        new_clauses = {(c["kind"], c["edge"], c["where"]): c for c in now["clauses"]}
-        for key, clause in old_clauses.items():
-            if key not in new_clauses:
-                kind, edge, where = key
+        # The clauses can be untouched while the rule stops guarding the write it was written for:
+        # move it to another table or field, or point it at another value, and nothing it requires
+        # applies to the promotion any more.
+        for part in ("table", "field", "value"):
+            if part in was and was[part] != now.get(part):
+                failures.append("rule %s now gates a different write: %s was %r, is now %r"
+                                % (rule_id, part, was[part], now.get(part)))
+        # Clauses are matched one for one, not by set membership. Two clauses that read the same are
+        # two requirements, and dropping one of them is a weakening a set would hide.
+        unmatched = list(now["clauses"])
+        for clause in was["clauses"]:
+            same = [c for c in unmatched if _clause_key(c) == _clause_key(clause)]
+            if not same:
+                kind, edge, where = _clause_key(clause)
                 failures.append("rule %s lost a %s clause on %s%s"
                                 % (rule_id, kind, edge, " where %s" % where if where else ""))
-            elif new_clauses[key]["min"] < clause["min"]:
+                continue
+            best = max(same, key=lambda c: c["min"])
+            unmatched.remove(best)
+            if best["min"] < clause["min"]:
                 failures.append("rule %s lowered min on %s from %s to %s"
-                                % (rule_id, key[1], clause["min"], new_clauses[key]["min"]))
+                                % (rule_id, clause["edge"], clause["min"], best["min"]))
     old_entries = {e["rule"]: e for e in (baseline.get("report") or {}).get("rules") or []}
-    for entry in (report or {}).get("rules") or []:   # report is optional: the spec half needs no database
-        was = old_entries.get(entry["rule"])
-        if not was:
-            continue
-        for flag in ("reject", "wrong_evidence_reject", "accept"):
-            if was.get(flag) is True and entry.get(flag) is not True:
-                failures.append("rule %s: %s was true in the baseline, now %r"
-                                % (entry["rule"], flag, entry.get(flag)))
+    if report is not None:   # report is optional: the spec half needs no database
+        now_entries = {e["rule"]: e for e in report.get("rules") or []}
+        for entry in now_entries.values():
+            was = old_entries.get(entry["rule"])
+            if not was:
+                continue
+            for flag in ("reject", "wrong_evidence_reject", "accept"):
+                if was.get(flag) is True and entry.get(flag) is not True:
+                    failures.append("rule %s: %s was true in the baseline, now %r"
+                                    % (entry["rule"], flag, entry.get(flag)))
+        # A rule that was probed and now produces no probe result at all is the same loss as a flag
+        # going false, and reading only the entries that arrived would never notice it.
+        for rule_id in old_entries:
+            if rule_id in new_rules and rule_id not in now_entries:
+                failures.append("rule %s was probed in the baseline and this run produced no probe "
+                                "result for it" % rule_id)
     return failures
 
 
@@ -366,6 +395,13 @@ def main(argv=None):
     parser.add_argument("--baseline", help="compare this run against a committed baseline; a gate that got weaker fails")
     parser.add_argument("--write-baseline", help="write the baseline file (human-owned: commit it and review every change)")
     args = parser.parse_args(argv)
+    same_file = (args.write_baseline and args.baseline
+                 and pathlib.Path(args.write_baseline).resolve() == pathlib.Path(args.baseline).resolve())
+    if same_file:
+        print("NOT EXECUTED: --write-baseline and --baseline name the same file (%s). The run would "
+              "grade itself against what it had just written, and would pass whatever the gates say. "
+              "Write it, review the diff, then compare against it." % args.baseline)
+        return 2
     inst = config.load(args.instance)
     if args.emit == "schema":
         print(schema_surql(inst)); return 0
