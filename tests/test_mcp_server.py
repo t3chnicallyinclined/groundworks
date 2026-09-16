@@ -27,6 +27,7 @@ if __package__ in (None, ""):  # run as a plain script: make the repo root impor
 from xscholar.mcp import adapter as contract  # noqa: E402
 from xscholar.panel import panel  # noqa: E402
 from xscholar.mcp import server  # noqa: E402
+from xscholar.mcp import code_state  # noqa: E402
 
 from xscholar.present import metrics  # noqa: E402
 
@@ -272,6 +273,12 @@ def list_tools(srv):
 PROV = contract.Provenance("agent_test_7", "critic")
 
 
+def verified_guard():
+    """An engine code guard that reads a verified, unchanged commit: these suites test the tools, not the checkout
+    they happen to run from (tests/test_mcp_guard.py tests the guard)."""
+    return code_state.CodeGuard(reader=lambda: code_state.git_state("0" * 40, code_state.VERIFIED_BRANCH))
+
+
 class ToolContract:
     """Mixin: the same tests for every synthetic instance. Subclasses set DATASET."""
     DATASET = None
@@ -279,7 +286,7 @@ class ToolContract:
     def setUp(self):
         self.ds = self.DATASET
         self.adapter = FakeAdapter(self.ds)
-        self.srv = server.build_server(self.adapter, PROV)
+        self.srv = server.build_server(self.adapter, PROV, guard=verified_guard())
 
     def tool(self, name, **args):
         return run_tool(self.srv, name, args)
@@ -390,7 +397,8 @@ class ToolContract:
         self.assertEqual(stored["answered_by"], PROV.by())
 
     def test_launch_lens_is_enforced(self):
-        srv = server.build_server(self.adapter, contract.Provenance("agent_l", "critic", self.ds["lenses"][0]))
+        srv = server.build_server(self.adapter, contract.Provenance("agent_l", "critic", self.ds["lenses"][0]),
+                                  guard=verified_guard())
         other = self.ds["lenses"][1]
         out = run_tool(srv, "critique_add", {"target": self.ds["target"], "lens": other, "head": "h",
                                              "verdict": self.ds["blocking_verdict"]})
@@ -462,7 +470,7 @@ class ToolContract:
         self.assertEqual(len(calls), 1)
 
     def test_adapter_without_presentation_refuses_views(self):
-        srv = server.build_server(PlainFakeAdapter(self.ds), PROV)
+        srv = server.build_server(PlainFakeAdapter(self.ds), PROV, guard=verified_guard())
         out = run_tool(srv, "eliminated_claims", {"view": "full"})
         self.assertEqual(out["status"], "invalid_argument")
         self.assertIn("'full'", out["error"])
@@ -592,10 +600,11 @@ class PanelTools(unittest.TestCase):
             "options": ["accept", "reject"], "objection_categories": ["evidence", "timeline", "alternative"],
             "weighted_seat": None, "seats": SEATS}), encoding="utf-8")
         self.adapter = FakeAdapter(INCIDENT)
-        self.coord = server.build_server(self.adapter, contract.Provenance("coordinator_1", "coordinator"), self.root)
+        self.coord = server.build_server(self.adapter, contract.Provenance("coordinator_1", "coordinator"), self.root,
+                                         guard=verified_guard())
 
     def seat_server(self, seat):
-        return server.build_server(self.adapter, contract.Provenance(seat, "seat"), self.root)
+        return server.build_server(self.adapter, contract.Provenance(seat, "seat"), self.root, guard=verified_guard())
 
     def submit(self, srv, rnd, seat, text):
         return run_tool(srv, "panel_submit", {"run_dir": str(self.run_dir), "round": rnd, "seat": seat, "text": text})
@@ -655,7 +664,12 @@ class PanelTools(unittest.TestCase):
         self.assertEqual(sorted((o["condition"], o["seat"]) for o in st["data"]["owed"]), expected)
         self.assertIn(("missing_answer", "seat_north"), expected)
         mine = run_tool(self.seat_server("seat_south"), "panel_status", {"run_dir": str(self.run_dir)})
-        self.assertTrue(all(o["seat"] == "seat_south" for o in mine["data"]["owed"]))
+        # `all()` over an empty list is True: a seat filter that dropped every entry used to pass here. The seat's
+        # own entries must be present, and be exactly the coordinator's entries for that seat.
+        expected_mine = sorted((c, s) for c, s in expected if s == "seat_south")
+        self.assertTrue(expected_mine, "the fixture must owe seat_south something, or this check proves nothing")
+        self.assertEqual(sorted((o["condition"], o["seat"]) for o in mine["data"]["owed"]), expected_mine)
+        self.assertEqual(mine["data"]["owed_count"], len(expected_mine))
 
     def test_seat_not_on_panel_and_path_outside_root(self):
         panel.lock(self.run_dir)

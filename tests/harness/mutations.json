@@ -1980,6 +1980,362 @@
     "tests.test_config.VerdictDefinitionTests.test_a_new_instance_starts_from_required_originals_owned_by_a_human"
    ],
    "needs_db": false
+  },
+  {
+   "id": "M200",
+   "guard": "every MCP write tool runs the engine code guard before the adapter",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "        seen[\"found\"] = guard.check_write(tool)\n",
+   "replacement": "        seen[\"found\"] = guard.assess()\n",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_a_branch_other_than_main_refuses_every_write_and_reads_still_work"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M201",
+   "guard": "a server started from a branch other than main refuses writes",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if start[\"branch\"] != self.branch:",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_a_branch_other_than_main_refuses_every_write_and_reads_still_work"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M202",
+   "guard": "a server started with uncommitted changes refuses writes",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "            if start[\"dirty\"]:\n",
+   "replacement": "            if False:\n",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_uncommitted_changes_at_startup_refuse_every_write"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M203",
+   "guard": "a new commit after startup makes the server STALE",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if now[\"commit\"] != start[\"commit\"] or now[\"branch\"] != start[\"branch\"]:",
+   "replacement": "if now[\"branch\"] != start[\"branch\"]:",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_a_new_commit_on_main_after_startup_is_stale",
+    "tests.test_mcp_guard.RealGitTests.test_a_new_commit_after_startup_makes_the_process_stale"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M204",
+   "guard": "a branch switch at the same commit makes the server STALE",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if now[\"commit\"] != start[\"commit\"] or now[\"branch\"] != start[\"branch\"]:",
+   "replacement": "if now[\"commit\"] != start[\"commit\"]:",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_a_branch_switch_at_the_same_commit_is_stale",
+    "tests.test_mcp_guard.RealGitTests.test_switching_branch_after_startup_makes_the_process_stale"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M205",
+   "guard": "an engine code state that could not be read at startup is UNKNOWN, never verified",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if start[\"kind\"] != KIND_GIT:",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_unknown_at_startup_is_never_verified"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M206",
+   "guard": "uncommitted changes made after startup refuse writes",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if now[\"dirty\"] and not start[\"dirty\"]:",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_changes_made_after_startup_refuse_writes"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M207",
+   "guard": "XSCHOLAR_ALLOW_UNVERIFIED=1 lets writes through",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if found[\"problems\"] and not self.allow_unverified:",
+   "replacement": "if found[\"problems\"]:",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_the_override_lets_writes_through_and_health_says_so_first"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M208",
+   "guard": "health puts the override WARNING first",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "    if engine.get(\"WARNING\"):\n        out[\"WARNING\"] = engine[\"WARNING\"]\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_the_override_lets_writes_through_and_health_says_so_first"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M209",
+   "guard": "the override is set only by the exact value 1",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "return (env.get(ALLOW_ENV) or \"\").strip() == \"1\"",
+   "replacement": "return (env.get(ALLOW_ENV) or \"\").strip().lower() in (\"1\", \"true\")",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_the_override_is_read_from_the_environment_only_as_1"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M210",
+   "guard": "health carries the engine code state when the datastore is down",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "            out[\"engine_code\"] = engine\n",
+   "replacement": "            pass\n",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_health_reports_the_engine_code_state_first_even_when_the_datastore_is_down"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M211",
+   "guard": "build_server without a guard reads the real checkout",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "guard = guard if guard is not None else code_state.CodeGuard.from_environment()",
+   "replacement": "guard = guard if guard is not None else code_state.CodeGuard(reader=lambda: code_state.git_state(\"0\" * 40, \"main\"))",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_build_server_without_a_guard_reads_the_real_checkout"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M212",
+   "guard": "an engine inside another repository does not borrow its git history",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if not _same_path(top, root):",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_guard.RealGitTests.test_an_engine_inside_someone_elses_repository_does_not_borrow_its_history"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M213",
+   "guard": "untracked files count as uncommitted only inside the package",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "if code == \"??\" and not path.startswith(PACKAGE_DIR):",
+   "replacement": "if code == \"??\":",
+   "must_fail": [
+    "tests.test_mcp_guard.RealGitTests.test_uncommitted_changes_count_tracked_anywhere_and_untracked_only_in_the_package"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M214",
+   "guard": "a staged rename's source path is not read as a second entry",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "        if code[0] in \"RC\":\n",
+   "replacement": "        if False:\n",
+   "must_fail": [
+    "tests.test_mcp_guard.RealGitTests.test_a_staged_rename_is_listed_once_and_does_not_shift_the_next_entry"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M215",
+   "guard": "the guard re-reads the checkout at every write, not only at startup",
+   "file": "xscholar/mcp/code_state.py",
+   "anchor": "now = self._reader() if now is None else now",
+   "replacement": "now = self.at_start if now is None else now",
+   "must_fail": [
+    "tests.test_mcp_guard.GuardTests.test_a_new_commit_on_main_after_startup_is_stale",
+    "tests.test_mcp_guard.GuardTests.test_a_verified_unchanged_commit_serves_writes"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M216",
+   "guard": "the health summary surfaces a key named NOT_EXECUTED",
+   "file": "xscholar/mcp/health_summary.py",
+   "anchor": "                if NOT_EXECUTED.search(str(key)):\n",
+   "replacement": "                if False:\n",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_every_planted_problem_surfaces_at_any_depth",
+    "tests.test_mcp_guard.SummaryTests.test_detail_false_keeps_the_summary_and_drops_the_detail_and_true_is_the_default"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M217",
+   "guard": "the health summary surfaces a string saying NOT_EXECUTED",
+   "file": "xscholar/mcp/health_summary.py",
+   "anchor": "            if NOT_EXECUTED.search(obj):\n",
+   "replacement": "            if False:\n",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_every_planted_problem_surfaces_at_any_depth",
+    "tests.test_mcp_guard.SummaryTests.test_problems_inside_lists_still_surface"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M218",
+   "guard": "the health summary surfaces a false ok flag",
+   "file": "xscholar/mcp/health_summary.py",
+   "anchor": "if isinstance(value, bool) and value is False and str(key).lower() in FLAG_KEYS:",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_every_planted_problem_surfaces_at_any_depth",
+    "tests.test_mcp_guard.SummaryTests.test_problems_inside_lists_still_surface"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M219",
+   "guard": "the health summary surfaces a non-zero drift number inside a list",
+   "file": "xscholar/mcp/health_summary.py",
+   "anchor": "if obj or not in_list:",
+   "replacement": "if not in_list:",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_problems_inside_lists_still_surface"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M220",
+   "guard": "a non-zero drift number puts the summary headline at ATTENTION",
+   "file": "xscholar/mcp/health_summary.py",
+   "anchor": "    attention += [\"drift: %s = %s\" % (p, v) for p, v in out[\"drift\"].items() if v]\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_every_planted_problem_surfaces_at_any_depth"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M221",
+   "guard": "an engine code state other than VERIFIED leads the summary",
+   "file": "xscholar/mcp/health_summary.py",
+   "anchor": "if engine_code is not None and engine_code.get(\"verdict\") != \"VERIFIED\":",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_an_engine_code_state_that_is_not_verified_is_the_first_thing_said"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M222",
+   "guard": "health detail=false omits the detail",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "out[\"instance\"] = instance if detail else (",
+   "replacement": "out[\"instance\"] = instance if True else (",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_detail_false_keeps_the_summary_and_drops_the_detail_and_true_is_the_default"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M223",
+   "guard": "the health summary is derived from the adapter's detail",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "out[\"summary\"] = health_summary.summarize(instance, engine)",
+   "replacement": "out[\"summary\"] = health_summary.summarize({}, engine)",
+   "must_fail": [
+    "tests.test_mcp_guard.SummaryTests.test_detail_false_keeps_the_summary_and_drops_the_detail_and_true_is_the_default"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
+  },
+  {
+   "id": "M224",
+   "guard": "a seat's panel_status shows that seat's owed re-prompts (the seat-filter test is not vacuous)",
+   "file": "xscholar/mcp/panel_io.py",
+   "anchor": "            if only is None or sid == only:\n",
+   "replacement": "            if only is None:\n",
+   "must_fail": [
+    "tests.test_mcp_server.PanelTools.test_panel_status_reports_owed_reprompts"
+   ],
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
+   "needs_db": false
   }
  ]
 }
