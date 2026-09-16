@@ -356,6 +356,33 @@ Then read `consistency.report` (every row standing at a gated value its gate no 
 
 ---
 
+## 7m. Links to missing records are refused, gated fields need a list, and a schema re-apply keeps permissions
+
+Measured on SurrealDB 3.1.6; `notes/2026-09-16_gates_lane_enforced_edges_and_domains.md` has the tables.
+
+- **Every relation table is now `ENFORCED`.** `RELATE` to a record that does not exist is refused (`The record
+  'x:y' does not exist`) instead of storing a link to nothing. **ENFORCED does not check links already stored.** After
+  re-applying the schema, `gates --apply` prints `DANGLING: <n> <edge> edge(s)` for each edge table holding links to a
+  missing record and **exits 1**. Repair or delete them, then run it again. A load or a `Writer.cite`/`relate` that names
+  a record not written yet now fails loudly; write the endpoint first.
+- **Re-applying the schema is now safe after access and the change feed.** Tables are `DEFINE TABLE IF NOT EXISTS`
+  then `ALTER TABLE`, so PERMISSIONS and CHANGEFEED survive (before: 14 of 20 demo tables reset to PERMISSIONS NONE, 5
+  changefeeds dropped). Step 3's "re-apply the changefeed after every schema re-apply" is no longer needed for that
+  reason, and harmless. The flip side: a schema re-apply no longer resets a hand-widened PERMISSIONS clause; re-apply
+  access for that, and run `python -m xscholar.live_schema`.
+- **Your config may refuse to load:** a gate rule whose field has no enumerated domain (no vocabulary list, no
+  `one_of`, not a bool), a gate `value` outside the field's values, or a clause `where` term (`field = literal`,
+  `field IN [...]`) on such a field or with a value outside its list. Each is named. Give the field `one_of`. A
+  misspelt value there was being stored and silently dropped the row out of evidence, or, in a `forbids` clause,
+  let the forbidden row through.
+- **A rule that only forbids no longer reports as misbehaving** when it is correct. If you had learnt to ignore that
+  line, stop: it now means something.
+- **Rules that used to report MISSING PROBE now run:** staged evidence behind an independence rule, and the originals
+  probes of a rule that needs an independent promoter, run on provisioned probe credentials. They need access applied
+  (they say so by name when it is not). Your baseline's report may gain flags; regenerate and review it (step 4).
+
+---
+
 ## 8. What this release does NOT give you
 
 - **No container.** Deliberate, see step 2.

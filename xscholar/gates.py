@@ -1121,11 +1121,10 @@ class ProbeRunner:
 
     def sql(self, stmt):
         if isinstance(stmt, CredentialStatement):
-            if stmt.stem not in self.identities:
-                why = self.prepare([stmt])
-                if why:
-                    from xscholar import db as dbmod
-                    raise dbmod.DbError(why)
+            if stmt.stem not in self.identities:     # prepare() is the one place that provisions, and says why not
+                from xscholar import db as dbmod
+                raise dbmod.DbError("probe credentials %s were never prepared for rule %s; nothing ran as root in their "
+                                    "place" % (stmt.stem, stmt.rule["id"]))
             return self.identities[stmt.stem][stmt.key].sql(stmt)
         return self.db.sql(stmt)
 
