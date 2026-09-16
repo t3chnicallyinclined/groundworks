@@ -26,10 +26,12 @@ ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
             "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access",
-            "authority", "staleness", "discovery", "tables", "edges"}
+            "authority", "staleness", "discovery", "tables", "edges", "verdicts"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
+# optional sections that, WHEN PRESENT, are a bar the owner sets and no role may turn
+HUMAN_OWNED_IF_PRESENT = ["verdicts"]
 
 # ---- the graph shape ---------------------------------------------------------------------------
 #
@@ -345,6 +347,17 @@ class Instance:
     def status_values(self):
         return list(self.status["values"])
 
+    def verdict_meanings(self):
+        """What each critique verdict MEANS here, in the owner's words. Empty when undefined.
+
+        The verdict names are an engine constant; what separates one from another is a judgement
+        about this instance's risk, and it belongs to the owner. Measured on the first real instance:
+        of 53 `fatal` verdicts, 32 came from one role mapping its own three options onto the three
+        verdicts by position -- a reviewer saying "not on this draft" was recorded as permanently
+        terminal. A role handed three buttons with no labels presses the top one.
+        """
+        return dict(self.data.get("verdicts") or {})
+
     def unit_names(self):
         return [u["name"] for u in self.units]
 
@@ -515,8 +528,29 @@ def validate(data):
         if len(set(ids)) != len(ids):
             problems.append("gate ids must be unique")
 
+    if "verdicts" in data:
+        meanings = data["verdicts"]
+        if not isinstance(meanings, dict) or not meanings:
+            problems.append("verdicts must be a mapping of verdict name -> what it means here")
+        else:
+            from xscholar.gates import CRITIQUE_VERDICTS
+            unknown = sorted(set(meanings) - set(CRITIQUE_VERDICTS))
+            if unknown:
+                problems.append("verdicts: unknown verdict(s) %s; the engine's are %s"
+                                % (", ".join(unknown), ", ".join(CRITIQUE_VERDICTS)))
+            undefined = [v for v in CRITIQUE_VERDICTS if v not in meanings]
+            if undefined:
+                problems.append("verdicts: %s left undefined. Define every verdict or none: a partly "
+                                "defined set is the case where a role reaches for the one with no "
+                                "meaning attached" % ", ".join(undefined))
+            for name, text in meanings.items():
+                if not isinstance(text, str) or len(text.strip()) < 10:
+                    problems.append("verdicts.%s: say in a sentence what it means here; %r is not a "
+                                    "definition a role can act on" % (name, text))
+
     owned = data["human_owned"] or []
     missing = [k for k in MUST_BE_HUMAN_OWNED if k not in owned]
+    missing += [k for k in HUMAN_OWNED_IF_PRESENT if k in data and k not in owned]
     if missing:
         problems.append("human_owned must include %s (CLAUDE.md rule 6)" % ", ".join(missing))
 

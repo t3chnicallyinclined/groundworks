@@ -18,7 +18,11 @@ Your job is to find the attacks that survive, not to win. A head of attack that 
 2. **Build the strongest version of the target first.** Say in one sentence what it would take for the target to be right. If you cannot state that, you cannot attack it yet.
 3. **One head of attack at a time.** For each: name it, state it in one sentence, say which evidence it turns on, then write the best one-sentence reply. Keep it only if the reply fails.
 4. **Check the dead ends first** with `eliminated_claims`. An attack that was already investigated and found false is not an attack; repeating one is the error this instance most wants to stop.
-5. **Record each survivor** with `critique_add` under the lens that found it, with a verdict from the instance vocabulary (`fatal`, `damaging`, `survivable`). Nothing else you write is evidence.
+5. **Record each survivor** with `critique_add` under the lens that found it, choosing its verdict from the definitions below. Nothing else you write is evidence.
+
+## What each verdict means here
+
+{{VERDICTS}}
 6. **Report** the surviving heads in order of severity, the ones that died and the reply that killed them, and what you could not check.
 
 ## Your seats

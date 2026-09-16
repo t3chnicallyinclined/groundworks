@@ -166,4 +166,15 @@ privacy:
   deny_list: "~/.xscholar/denylist.txt"     # outside the repo; the scan fails closed without it
   providers_allowed: ["the model provider the owner approved"]
 
-human_owned: [gates, fidelity, status, evaluator, privacy]
+# OPTIONAL but strongly advised. What each critique verdict MEANS here. The three names are an engine
+# constant; what separates them is a judgement about YOUR risk, so it is yours to write and no role
+# may turn it. Leave this out and every role is told, in its own skill, that nobody has defined them.
+# Measured on the first real instance: 32 of 53 `fatal` verdicts came from one role mapping its own
+# three review options onto these three BY POSITION. Under the readiness gate, `fatal` has no
+# `answered` escape, so each of those was permanently terminal.
+verdicts:
+  fatal: "Nothing could cure this conclusion: no rewrite, no further evidence. It ends the conclusion and has no answered escape."
+  damaging: "A real problem that blocks readiness until answered on the record. Anything curable by evidence or a rewrite belongs here."
+  survivable: "Recorded so the next reader sees it was considered; it does not block."
+
+human_owned: [gates, fidelity, status, evaluator, privacy, verdicts]

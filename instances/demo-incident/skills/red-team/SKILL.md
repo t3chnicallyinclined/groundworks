@@ -3,7 +3,7 @@ name: red-team
 description: Attack a conclusion, claim or draft section in the demo_incident instance the way each seated lens would, keeping only the heads of attack that survive a one-sentence reply, and record each survivor as a lens-keyed critique. Use before a conclusion is relied on, before it is written up, and after any new evidence lands. Triggers on "red team this", "attack this", "what survives reply", "stress-test this point", "what will the other side say".
 ---
 <!-- GENERATED from demo_incident by xscholar.skills; edit the config, not this file -->
-<!-- content-sha256: a1f73193029ac50142faa74b084926927701a9744c561191b54052642953d90e -->
+<!-- content-sha256: 772494fc6885f717a2ce29f8a50944dc3568649e6862d0204069d09b732804cc -->
 
 # Red team a conclusion in demo_incident
 
@@ -19,7 +19,15 @@ Your job is to find the attacks that survive, not to win. A head of attack that 
 2. **Build the strongest version of the target first.** Say in one sentence what it would take for the target to be right. If you cannot state that, you cannot attack it yet.
 3. **One head of attack at a time.** For each: name it, state it in one sentence, say which evidence it turns on, then write the best one-sentence reply. Keep it only if the reply fails.
 4. **Check the dead ends first** with `eliminated_claims`. An attack that was already investigated and found false is not an attack; repeating one is the error this instance most wants to stop.
-5. **Record each survivor** with `critique_add` under the lens that found it, with a verdict from the instance vocabulary (`fatal`, `damaging`, `survivable`). Nothing else you write is evidence.
+5. **Record each survivor** with `critique_add` under the lens that found it, choosing its verdict from the definitions below. Nothing else you write is evidence.
+
+## What each verdict means here
+
+- `fatal` -- Nothing could cure this: no rewrite and no further evidence. It ends the conclusion, and it has no answered escape in the readiness gate. Not for a conclusion that is merely unsupported as written.
+- `damaging` -- A real problem that blocks readiness until it is answered on the record. Use it for anything curable by better evidence, a narrower claim or a rewrite, including not as currently written. Most surviving heads belong here.
+- `survivable` -- Worth recording so the next reader sees it was considered, but it does not block. A weakness the conclusion can carry.
+
+These are the holder's definitions, not yours. **Never map another scale onto them by position** -- if your own rubric has three levels, that is a coincidence, not a translation. Choose the verdict whose definition above actually fits, and if none does, choose the weaker one and say why in the critique text.
 6. **Report** the surviving heads in order of severity, the ones that died and the reply that killed them, and what you could not check.
 
 ## Your seats

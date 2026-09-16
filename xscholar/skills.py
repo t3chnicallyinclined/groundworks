@@ -28,7 +28,9 @@ import sys
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, gates  # noqa: E402
+from xscholar import config
+from xscholar import gates  # noqa: E402
+from xscholar.gates import CRITIQUE_VERDICTS  # noqa: E402
 
 TEMPLATE_DIR = pathlib.Path(__file__).resolve().parent / "skills_templates"
 PLACEHOLDER = re.compile(r"\{\{([A-Z_]+)\}\}")
@@ -274,6 +276,32 @@ def _clause_words(rule, clause, inst, count=1):
     return words
 
 
+def _verdicts_block(inst):
+    """What each verdict means HERE, in the owner's words, or a loud note that nobody has said.
+
+    A role that records a critique chooses among three verdict names the engine fixes. What separates
+    them is a judgement about this instance's risk, and until it is written down the role invents it.
+    Measured on the first real instance: 32 of 53 `fatal` verdicts came from one role mapping its own
+    three options onto the three verdicts BY POSITION. Under the default readiness gate `fatal` has no
+    `answered` escape, so each of those was permanently terminal.
+    """
+    meanings = inst.verdict_meanings()
+    if not meanings:
+        return ("**Nobody has written down what these mean here.** The config has no `verdicts:` "
+                "section, so the choice between them is yours to invent -- which is exactly how a "
+                "reviewer's \"not on this draft\" becomes a permanently terminal verdict. Ask the "
+                "holder to define them, and until then prefer the weaker verdict and say why in the "
+                "critique text.\n\n"
+                + "\n".join("- `%s` -- not defined for this instance" % v for v in CRITIQUE_VERDICTS))
+    lines = ["- `%s` -- %s" % (name, meanings[name]) for name in CRITIQUE_VERDICTS if name in meanings]
+    lines.append("")
+    lines.append("These are the holder's definitions, not yours. **Never map another scale onto them "
+                 "by position** -- if your own rubric has three levels, that is a coincidence, not a "
+                 "translation. Choose the verdict whose definition above actually fits, and if none "
+                 "does, choose the weaker one and say why in the critique text.")
+    return "\n".join(lines)
+
+
 def _gates_block(inst):
     lines = ["What the datastore refuses, whatever any skill, lens or panel says. A refusal is an answer: "
              "read it, supply what it names, and never work around it.", ""]
@@ -379,6 +407,7 @@ def blocks(inst, role):
         "SEATS": _seats_block(inst, role),
         "PANEL": _panel_block(inst, role),
         "GATES": _gates_block(inst),
+        "VERDICTS": _verdicts_block(inst),
         "TOOLS": _tools_block(inst, role),
         "PRIVACY": _privacy_block(inst),
     }

@@ -13,7 +13,8 @@ import unittest
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config  # noqa: E402
+from xscholar import config
+from xscholar import gates  # noqa: E402
 
 DEMO = pathlib.Path(__file__).resolve().parents[1] / "instances" / "demo-incident" / "instance.yaml"
 
@@ -226,5 +227,66 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("tiers", message)
 
 
-if __name__ == "__main__":
+
+class VerdictDefinitionTests(unittest.TestCase):
+    """The bar between `fatal` and `damaging` is the owner's, and it must be written down.
+
+    The verdict NAMES are an engine constant (gates.CRITIQUE_VERDICTS). What separates one from
+    another is a judgement about an instance's risk, and until 2026-09-16 it was written nowhere:
+    the red-team template handed a seat three buttons with no labels. Measured on the first real
+    instance: of 53 `fatal` verdicts, 32 came from one role mapping its own three review options
+    onto these three BY POSITION, so a reviewer's "not on this draft" was recorded as permanently
+    terminal -- `fatal` has no `answered` escape in the default readiness gate.
+    """
+
+    def base(self):
+        return json.loads(json.dumps(config.load(DEMO).data))
+
+    def test_the_demo_and_the_template_both_define_every_verdict(self):
+        for path in (DEMO, DEMO.parents[1] / "_template" / "instance.yaml"):
+            with self.subTest(instance=path.parent.name):
+                meanings = config.load(path).verdict_meanings()
+                self.assertEqual(sorted(meanings), sorted(gates.CRITIQUE_VERDICTS), meanings)
+
+    def test_an_instance_may_leave_them_undefined(self):
+        """Optional: making it mandatory would break every config that predates it."""
+        data = self.base()
+        data.pop("verdicts", None)
+        data["human_owned"] = [k for k in data["human_owned"] if k != "verdicts"]
+        self.assertEqual(config.load(data).verdict_meanings(), {})
+
+    def test_defining_only_some_of_them_is_refused(self):
+        """A partly defined set is the case where a role reaches for the one with no meaning."""
+        data = self.base()
+        data["verdicts"].pop("damaging")
+        with self.assertRaises(config.ConfigError) as raised:
+            config.load(data)
+        self.assertIn("damaging", str(raised.exception))
+        self.assertIn("undefined", str(raised.exception))
+
+    def test_a_verdict_the_engine_does_not_have_is_refused(self):
+        data = self.base()
+        data["verdicts"]["catastrophic"] = "a verdict the engine has never heard of"
+        with self.assertRaises(config.ConfigError) as raised:
+            config.load(data)
+        self.assertIn("catastrophic", str(raised.exception))
+
+    def test_a_definition_too_short_to_act_on_is_refused(self):
+        data = self.base()
+        data["verdicts"]["fatal"] = "bad"
+        with self.assertRaises(config.ConfigError) as raised:
+            config.load(data)
+        self.assertIn("not a definition", str(raised.exception))
+
+    def test_defining_them_without_owning_them_is_refused(self):
+        """A bar the owner sets is not a bar a role may turn."""
+        data = self.base()
+        data["human_owned"] = [k for k in data["human_owned"] if k != "verdicts"]
+        with self.assertRaises(config.ConfigError) as raised:
+            config.load(data)
+        self.assertIn("human_owned", str(raised.exception))
+        self.assertIn("verdicts", str(raised.exception))
+
+
+if __name__ == "__main__":   # last, so running this file directly runs every class in it
     unittest.main()

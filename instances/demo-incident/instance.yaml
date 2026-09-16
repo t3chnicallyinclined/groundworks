@@ -148,7 +148,18 @@ evaluator:
     sample_chunks: 2
     adjudicate: true
 
-human_owned: [gates, fidelity, status, evaluator, privacy]
+
+# What each critique verdict MEANS here. The names are an engine constant; what separates them is a
+# judgement about this instance's risk, so it is the owner's to write and no role may turn it.
+# Measured on the first real instance: of 53 `fatal` verdicts, 32 came from one role mapping its own
+# three review options onto these three by position -- a reviewer saying "not on this draft" was
+# recorded as permanently terminal. Under the readiness gate below, `fatal` has no `answered` escape.
+verdicts:
+  fatal: "Nothing could cure this: no rewrite and no further evidence. It ends the conclusion, and it has no answered escape in the readiness gate. Not for a conclusion that is merely unsupported as written."
+  damaging: "A real problem that blocks readiness until it is answered on the record. Use it for anything curable by better evidence, a narrower claim or a rewrite, including not as currently written. Most surviving heads belong here."
+  survivable: "Worth recording so the next reader sees it was considered, but it does not block. A weakness the conclusion can carry."
+
+human_owned: [gates, fidelity, status, evaluator, privacy, verdicts]
 
 privacy:
   deny_list: "~/.xscholar/denylist.txt"
