@@ -2307,6 +2307,20 @@
    "commit": "uncommitted",
    "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
    "needs_db": false
+  },
+  {
+   "id": "M322",
+   "guard": "the template documents the base a relative evaluator.regression_file resolves against",
+   "defect": "checks lane 8",
+   "file": "instances/_template/instance.yaml",
+   "anchor": "  # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository\n",
+   "replacement": "  # regression_file: a relative path, not the repository\n",
+   "must_fail": [
+    "tests.test_evaluator.ConfigRefusalTests.test_the_template_and_the_demo_say_what_a_relative_regression_file_resolves_against"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
   }
  ]
 }

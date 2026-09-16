@@ -11,7 +11,9 @@ Why. `evaluator.regression_file` has been required by config since the first com
 improvement must beat (docs/METHOD.md s.15, the Lessons loop) had never run once: a check that did nothing,
 in the evaluator itself (docs/TESTING.md s.3).
 
-THE FILE (human-owned; entries may be added, never removed or loosened):
+THE FILE (human-owned; entries may be added, never removed or loosened). `evaluator.regression_file` in instance.yaml:
+a relative path resolves against the folder that instance.yaml is in (config.regression_file_path), not the
+repository root and not the working directory.
 
     {"format": "xscholar.known_errors/1",
      "entries": [{"id": "KE001",

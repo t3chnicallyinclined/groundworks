@@ -95,6 +95,20 @@ class ConfigRefusalTests(unittest.TestCase):
         self.assertEqual(config.regression_file_path(inst, base_dir=DEMO_DIR),
                          (DEMO_DIR / "evals" / "known_errors.json").resolve())
 
+    def test_the_template_and_the_demo_say_what_a_relative_regression_file_resolves_against(self):
+        """In real use the file resolved against the config's folder while every other path in that config was
+        written from the repository root, and nothing beside the key said which base applies (2026-09-16)."""
+        for path in (ROOT / "instances" / "_template" / "instance.yaml", DEMO_DIR / "instance.yaml"):
+            with self.subTest(instance=path.parent.name):
+                lines = path.read_text(encoding="utf-8").splitlines()
+                key = next(i for i, ln in enumerate(lines) if ln.strip().startswith("regression_file:"))
+                comment = " ".join(ln.strip().lstrip("#").strip() for ln in lines[max(0, key - 4):key]
+                                   if ln.strip().startswith("#")).lower()
+                self.assertIn("the folder this instance.yaml is in", comment, lines[max(0, key - 4):key + 1])
+                with InstanceDir(regression=a_file(), declared="evals/known_errors.json") as inst_dir:
+                    inst = config.load(inst_dir.root / "instance.json")
+                    self.assertEqual(config.regression_file_path(inst).parent.parent, inst_dir.root.resolve())
+
     def test_the_demo_and_the_template_declare_files_that_exist_and_parse(self):
         for path in (DEMO_DIR / "instance.yaml", ROOT / "instances" / "_template" / "instance.yaml"):
             with self.subTest(instance=path.parent.name):
