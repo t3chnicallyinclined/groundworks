@@ -50,6 +50,21 @@ class GenerationTests(unittest.TestCase):
             self.assertTrue(probe["fix"], probe["rule"])
             self.assertTrue(probe["cleanup"])
 
+    def test_every_forbids_clause_gets_a_forbidden_evidence_probe(self):
+        """`fix` only satisfies `requires` and `wrong` only fires for `cites`: before this, a
+        forbids clause was the one half of a gate expression nothing ever wrote a row for."""
+        forbidding = 0
+        for rule, probe in zip(self.inst.gate_rules(), gates.probes(self.inst)):
+            clauses = rule.get("forbids") or []
+            forbidding += len(clauses)
+            self.assertEqual(len(probe["forbidden"]), len(clauses), probe["rule"])
+            self.assertEqual(len(probe["forbids"]), len(clauses), probe["rule"])
+            for plan in probe["forbidden"]:
+                self.assertTrue(plan["built"], "%s: %s" % (probe["rule"], plan["reason"]))
+                self.assertTrue(plan["create"] and plan["relate"] and plan["remove"], plan)
+                self.assertTrue(plan["present"].startswith("RETURN count("), plan["present"])
+        self.assertTrue(forbidding, "the demo's readiness rule forbids two things")
+
     def test_unknown_edge_and_wrong_direction_are_refused(self):
         rule = {"id": "x", "table": "fact", "field": "status", "value": "confirmed",
                 "requires": [{"edge": "nope", "min": 1}]}
@@ -103,8 +118,15 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(report["misbehaved"], 0, report)
         self.assertEqual(report["rejected_ok"], len(self.inst.gate_rules()))
         self.assertEqual(report["accepted_ok"], len(self.inst.gate_rules()))
-        for table in ("unit", "fact", "conclusion", "critique"):
+        self.assertEqual(report["forbids_untested"], 0, report)
+        self.assertEqual(report["forbidden_refused_ok"],
+                         len([r for r in self.inst.gate_rules() if r.get("forbids")]), report)
+        # every node table a probe can write, and every edge table it can relate over: the
+        # forbidden-evidence probe writes rows the old cleanup list did not name
+        for table in ("unit", "label", "fact", "conclusion", "critique", "answer", "authority"):
             self.assertEqual(conn.count(table), 0, "probe rows left behind in %s" % table)
+        for edge in gates.EDGES:
+            self.assertEqual(conn.count(edge), 0, "probe edges left behind in %s" % edge)
 
     def test_probes_catch_a_weakened_gate(self):
         conn = self.fresh("weak")
@@ -144,6 +166,69 @@ class ServerTests(unittest.TestCase):
         baseline = {"instance": self.inst.id, "spec": gates.spec(self.inst), "report": own}
         failures = gates.compare_baseline(baseline, own, gates.spec(weak))
         self.assertTrue(any("lost a requires clause" in f for f in failures), failures)
+
+    def test_deleting_a_forbids_clause_is_caught_by_the_probe_run(self):
+        """The twin of the deleted-`where` case, and it has the same shape, including the blind spot.
+
+        Deleting the forbids clauses from the config and running THAT config's probes stays green --
+        asserted below -- because a suite generated from a config cannot notice the config changed.
+        An ordinary run of the weakened config exits 0. The baseline is what catches that.
+
+        What this proves is the other half: the strict instance's probes, run against a datastore
+        built from the weakened config, find it promoting a conclusion it should refuse, and say so
+        per clause. Before the forbidden-evidence probe existed, they could not.
+        """
+        data = json.loads(json.dumps(self.inst.data))
+        for rule in data["gates"]:
+            rule.pop("forbids", None)
+        weak = config.load(data)
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="no_forbids")
+        conn.script(gates.schema_surql(weak))
+        conn.script(gates.gate_surql(weak))
+
+        own = gates.run_probes(weak, conn)     # honest about the blind spot: it asks for no such probe
+        self.assertEqual(own["misbehaved"], 0, own)
+        self.assertEqual(own["forbidden_refused_ok"], 0, own)
+
+        strict = gates.run_probes(self.inst, conn)
+        self.assertGreaterEqual(strict["misbehaved"], 1)
+        entry = [r for r in strict["rules"] if r["rule"] == "root_cause_needs_support_and_attack"][0]
+        self.assertFalse(entry["forbidden_evidence_reject"])
+        self.assertTrue(entry["forbidden_evidence"], "no forbidden-evidence result was produced at all")
+        for result in entry["forbidden_evidence"]:
+            self.assertTrue(result["evidence_present"],
+                            "%s: the probe did not even write the row it forbids" % result["clause"])
+            self.assertIs(result["reject"], False,
+                          "%s: the loosened datastore took the write anyway" % result["clause"])
+
+    def test_the_forbidden_row_really_is_the_row_the_clause_forbids(self):
+        """The twin of test_the_wrong_evidence_probe_writes_evidence_that_really_is_wrong. A probe
+        that wrote a harmless row and met a refusal for some other reason would prove nothing. So the
+        datastore is asked, with the clause's own predicate, whether the row the probe wrote matches
+        -- and a row of the same table built from the bare template, carrying none of the clause's
+        values, must NOT match, or the predicate is not discriminating anything."""
+        conn = self.fresh("forbidden_shape")
+        checked = 0
+        for rule, probe in zip(self.inst.gate_rules(), gates.probes(self.inst)):
+            ids = gates._probe_ids(rule)
+            for plan in probe["forbidden"]:
+                checked += 1
+                try:
+                    for stmt in probe["setup"] + plan["create"] + plan["relate"]:
+                        conn.sql(stmt)
+                    self.assertGreaterEqual(conn.sql(plan["present"], expect=1)[0], plan["count"],
+                                            "the row the probe wrote does not match %s" % plan["clause"])
+                    bland = "%s:zz_probe_%s_bland" % (plan["table"], rule["id"])
+                    conn.sql(gates._create(bland, plan["table"], self.inst, unit_id=ids["ok"]))
+                    near, far = ((ids["row"], bland) if rule["table"] == gates.EDGES[plan["edge"]][0]
+                                 else (bland, ids["row"]))
+                    conn.sql("RELATE %s->%s->%s;" % (near, plan["edge"], far))
+                    self.assertEqual(conn.sql(plan["present"], expect=1)[0], plan["count"],
+                                     "%s matches a row carrying none of its values" % plan["clause"])
+                finally:
+                    for stmt in probe["cleanup"]:
+                        conn.try_sql(stmt)
+        self.assertTrue(checked, "the demo's readiness rule forbids something")
 
     # ---- the command line, which is what CI actually runs -------------------------------------
 
@@ -373,6 +458,17 @@ class BaselineBlindSpotTests(unittest.TestCase):
         self.assertTrue(any("reject was true in the baseline, now False" in f for f in failures), failures)
         self.assertTrue(any("wrong_evidence_reject was true in the baseline, now False" in f for f in failures), failures)
 
+    def test_a_forbidden_evidence_flag_that_went_from_true_to_false_is_caught(self):
+        rules = [r["id"] for r in self.inst.gate_rules()]
+        was = {"rules": [{"rule": r, "reject": True, "accept": True, "wrong_evidence_reject": True,
+                          "forbidden_evidence_reject": True} for r in rules]}
+        baseline = {"instance": self.inst.id, "spec": gates.spec(self.inst), "report": was}
+        now = {"rules": [{"rule": r, "reject": True, "accept": True, "wrong_evidence_reject": True,
+                          "forbidden_evidence_reject": None} for r in rules]}
+        failures = gates.compare_baseline(baseline, now, gates.spec(self.inst))
+        self.assertTrue(any("forbidden_evidence_reject was true in the baseline, now None" in f
+                            for f in failures), failures)
+
     def test_a_rule_that_stopped_producing_a_probe_result_is_caught(self):
         """Reading only the entries that arrived cannot notice the one that did not."""
         rules = [r["id"] for r in self.inst.gate_rules()]
@@ -457,6 +553,45 @@ class ProbeShapeTests(unittest.TestCase):
         self.assertIn("status = 'confirmed'", entry["missing_probe"])
 
 
+    def test_a_forbids_clause_that_cannot_be_built_is_reported_untested(self):
+        """Only a conjunction of equalities can be turned into a row. Anything else must be REPORTED:
+        a clause that quietly generated no probe is exactly how the wrong-evidence probe went away."""
+        data = json.loads(json.dumps(self.inst.data))
+        data["gates"][1]["forbids"] = [{"edge": "attacks",
+                                        "where": "verdict = 'fatal' OR verdict = 'damaging'"}]
+        probe = [p for p in gates.probes(config.load(data))
+                 if p["rule"] == "root_cause_needs_support_and_attack"][0]
+        self.assertEqual(len(probe["forbidden"]), 1, "the clause must still produce a plan")
+        plan = probe["forbidden"][0]
+        self.assertFalse(plan["built"])
+        self.assertIn("field = literal", plan["reason"])
+        self.assertEqual(plan["create"], [], "nothing may be written for a clause it cannot satisfy")
+
+        entry = {"rule": probe["rule"], "reject": True, "accept": True, "wrong_evidence_reject": None,
+                 "forbidden_evidence": [{"clause": plan["clause"], "built": False,
+                                         "reason": plan["reason"]}]}
+        self.assertFalse(gates.judge(entry, probe), "an unbuilt forbids probe must not report green")
+        self.assertIn("field = literal", entry["missing_forbidden_probe"])
+        self.assertIsNone(entry["forbidden_evidence_reject"])
+
+    def test_the_where_parser_refuses_what_it_cannot_turn_into_a_row(self):
+        """It must never guess. A predicate it half-understands would write the wrong row and then
+        read a refusal for the wrong reason."""
+        for where, fields in (("verdict = 'fatal'", {"verdict": "'fatal'"}),
+                              ("verdict = 'damaging' AND answered = false",
+                               {"verdict": "'damaging'", "answered": "false"}),
+                              ("grade IN ['a', 'b'] AND status IN ['c']",
+                               {"grade": "'a'", "status": "'c'"}),
+                              ("", {})):
+            self.assertEqual(gates._where_assignments(where), (fields, None), where)
+        for where in ("verdict = 'a' OR verdict = 'b'", "tier >= 2", "verdict != 'fatal'",
+                      "issues CONTAINS 'config'", "grade IN []", "verdict = other_field",
+                      "verdict = 'a' AND verdict = 'b'", "string::len(head) > 3"):
+            values, why = gates._where_assignments(where)
+            self.assertIsNone(values, "%r was turned into a row it may not describe" % where)
+            self.assertTrue(why, where)
+
+
 class JudgeTests(unittest.TestCase):
     """judge() is the shipped decision: every branch of it says whether a run may report green."""
 
@@ -476,6 +611,30 @@ class JudgeTests(unittest.TestCase):
         self.assertFalse(gates.judge(self.entry(reject=False), probe), "a gate that refuses nothing")
         self.assertFalse(gates.judge(self.entry(accept=False), probe), "a gate that permits nothing")
         self.assertFalse(gates.judge(self.entry(reject=None, accept=None), probe), "a probe that did not run")
+
+    def test_a_rule_that_forbids_something_with_no_forbidden_result_is_untested(self):
+        """The mirror of the constrained/missing_probe rule, on the other half of the expression."""
+        entry = self.entry(forbidden_evidence=[])
+        probe = {"constrained": False, "constraints": [], "forbids": ["attacks where verdict = 'fatal'"]}
+        self.assertFalse(gates.judge(entry, probe), "a rule that forbids something and was never "
+                                                    "probed for it must not report green")
+        self.assertIn("verdict = 'fatal'", entry["missing_forbidden_probe"])
+        self.assertIsNone(entry["forbidden_evidence_reject"])
+
+    def test_both_directions_of_the_forbidden_probe_are_required(self):
+        """Refusing the write while the forbidden row is there proves nothing on its own: a gate that
+        refused the promotion under every condition would pass. Taking the row away must let the same
+        write through, and the row must have been the row the clause names."""
+        probe = {"constrained": False, "constraints": [], "forbids": ["attacks where verdict = 'fatal'"]}
+        good = {"clause": "attacks where verdict = 'fatal'", "built": True, "evidence_present": True,
+                "reject": True, "cleared": True, "restored_accept": True}
+        entry = self.entry(forbidden_evidence=[dict(good)])
+        self.assertTrue(gates.judge(entry, probe), entry)
+        self.assertTrue(entry["forbidden_evidence_reject"])
+        for flag in ("evidence_present", "reject", "cleared", "restored_accept"):
+            entry = self.entry(forbidden_evidence=[dict(good, **{flag: False})])
+            self.assertFalse(gates.judge(entry, probe), "%s False must not count as behaviour" % flag)
+            self.assertFalse(entry["forbidden_evidence_reject"])
 
     def test_judge_records_what_it_judged_against(self):
         """The constraints are what the baseline pins; an entry that does not carry them lets the

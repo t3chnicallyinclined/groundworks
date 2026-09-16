@@ -4,7 +4,8 @@
 From the instance config alone:
   schema_surql(inst)   tables and fields, with enumerated values enforced
   gate_surql(inst)     one ASSERT per gate rule, expanded from the config, holding on raw writes
-  probes(inst)         for EVERY rule: a write that must be refused, then the same write accepted
+  probes(inst)         for EVERY rule: a write that must be refused, then the same write accepted,
+                       and for EVERY forbids clause the row it forbids, built from the clause itself
   run_probes(inst, db) run them, clean up even on failure, report both counts
 
     python engine/gates.py INSTANCE.yaml --emit schema|gates|probes
@@ -16,6 +17,7 @@ Standard library only.
 import argparse
 import json
 import pathlib
+import re
 import sys
 
 import pathlib as _pathlib, sys as _sys
@@ -123,8 +125,8 @@ def _expand(where, inst):
                         .replace("$usable", _lit(inst.usable_statuses()))
 
 
-def _traversal(rule_table, clause, inst):
-    """The subquery counting matching neighbours of $this for one requires/forbids clause."""
+def _edge_path(rule_table, clause):
+    """(traversal path, table at the other end) for one requires/forbids clause."""
     edge = clause.get("edge")
     if edge not in EDGES:
         raise GateError("gate %s: unknown edge %r; known: %s" % (rule_table, edge, ", ".join(EDGES)))
@@ -138,8 +140,17 @@ def _traversal(rule_table, clause, inst):
     declared = clause.get("to") or clause.get("from")
     if declared and other not in declared:
         raise GateError("edge %s from %s reaches %s, not %s" % (edge, rule_table, other, declared))
+    return path, other
+
+
+def _traversal(rule_table, clause, inst, subject="$this"):
+    """The subquery counting matching neighbours of `subject` for one requires/forbids clause.
+
+    `subject` is `$this` inside a gate ASSERT and a concrete record id when a probe has to ask the
+    datastore whether the evidence it just wrote really does match the clause."""
+    path, _ = _edge_path(rule_table, clause)
     where = _expand(clause.get("where"), inst)
-    return "count(SELECT VALUE id FROM $this%s%s)" % (path, " WHERE " + where if where else "")
+    return "count(SELECT VALUE id FROM %s%s%s)" % (subject, path, " WHERE " + where if where else "")
 
 
 def gate_expression(rule, inst):
@@ -183,6 +194,126 @@ def gate_surql(inst):
                      % (field, table, typ, default, " AND ".join(conditions), enum,
                         ", ".join(r["id"] for r in rules)))
     return "\n".join(lines) + "\n"
+
+
+# ---- building the row a clause describes ----------------------------------------------------------
+#
+# A `forbids` clause says a row must NOT exist. To probe it the generator has to build exactly that
+# row from the clause alone -- no domain words, no per-instance special cases -- and then prove to
+# the datastore that what it built really does match the clause. Only a conjunction of equalities is
+# buildable; anything else is REPORTED, never skipped, because a silently skipped probe is the whole
+# defect class this file exists to catch.
+
+_FIELD_IN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s+IN\s+(.+)$", re.I | re.S)
+_FIELD_EQ = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", re.S)
+_LITERAL = re.compile(r"^(?:'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|true|false|-?\d+(?:\.\d+)?)$", re.I)
+
+
+def _split_top_level(text, separator=None):
+    """Split on a top-level AND (or on commas when `separator` is ','), outside quotes and brackets."""
+    parts, buf, quote, depth, i = [], [], None, 0, 0
+    while i < len(text):
+        char = text[i]
+        if quote:
+            buf.append(char)
+            if char == quote:
+                quote = None
+            i += 1
+            continue
+        if char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif depth == 0 and separator == "," and char == ",":
+            parts.append("".join(buf)); buf = []; i += 1
+            continue
+        elif depth == 0 and separator is None and text[i:i + 3].upper() == "AND" \
+                and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")) \
+                and (i + 3 >= len(text) or not (text[i + 3].isalnum() or text[i + 3] == "_")):
+            parts.append("".join(buf)); buf = []; i += 3
+            continue
+        buf.append(char)
+        i += 1
+    parts.append("".join(buf))
+    return [p.strip() for p in parts]
+
+
+def _list_literals(text):
+    """['a', 'b'] -> ["'a'", "'b'"]; None if it is not a non-empty list of literals."""
+    text = text.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        return None
+    inner = text[1:-1].strip()
+    if not inner:
+        return None
+    items = _split_top_level(inner, separator=",")
+    return items if all(_LITERAL.match(item) for item in items) else None
+
+
+def _where_assignments(where):
+    """The field values a row must carry to satisfy `where`.
+
+    Returns (assignments, None) when the row can be built, or (None, why not). `where` has already
+    been through _expand(), so $confirming/$usable are real lists by the time it arrives here."""
+    where = (where or "").strip()
+    if not where:
+        return {}, None          # no constraint: any neighbour of the right table matches
+    assignments = {}
+    for part in _split_top_level(where):
+        if not part:
+            return None, "cannot build a row for %r: it has an empty term" % where
+        match = _FIELD_IN.match(part)
+        if match:
+            items = _list_literals(match.group(2))
+            if not items:
+                return None, ("cannot build a row for %r: the right side of IN is not a non-empty list "
+                              "of literals" % part)
+            field, value = match.group(1), items[0]
+        else:
+            match = _FIELD_EQ.match(part)
+            if not match or not _LITERAL.match(match.group(2).strip()):
+                return None, ("cannot build a row for %r: only `field = literal` and `field IN [literals]` "
+                              "joined by AND can be turned into evidence" % part)
+            field, value = match.group(1), match.group(2).strip()
+        if field in assignments and assignments[field] != value:
+            return None, ("cannot build a row for %r: %s would have to be both %s and %s"
+                          % (where, field, assignments[field], value))
+        assignments[field] = value
+    return assignments, None
+
+
+def _row_template(table, inst, unit_id=None):
+    """The smallest valid row of `table`, with every value taken from the instance's vocabularies."""
+    if table == "unit":
+        return {"type": _value_literal(inst.unit_names()[0]), "text": "'probe'", "locator": "{p: 3}",
+                "status": _value_literal(inst.usable_statuses()[0]),
+                "grade": _value_literal(inst.confirming_grades()[0]), "hash": "'h'"}
+    if table == "label":
+        if not unit_id:
+            raise GateError("a label row needs a unit to hang on")
+        tiers = list(inst.allowed_vocabulary()["tiers"])
+        return {"unit": unit_id, "tier": str(tiers[0]), "issues": "[]", "targets": "[]",
+                "chunk": "'probe'", "run": "'probe'"}
+    if table == "fact":
+        return {"statement": "'probe evidence'", "status": "'proposed'"}
+    if table == "conclusion":
+        return {"statement": "'probe evidence'", "ready": "false"}
+    if table == "authority":
+        return {"citation": "'probe evidence'", "verified": "false"}
+    if table == "critique":
+        return {"lens": "'probe'", "head": "'probe head'", "verdict": _value_literal(CRITIQUE_VERDICTS[-1]),
+                "answered": "true"}
+    if table == "answer":
+        return {"text": "'probe answer'"}
+    raise GateError("no row template for table %s" % table)
+
+
+def _create(row_id, table, inst, overrides=None, unit_id=None):
+    fields = _row_template(table, inst, unit_id=unit_id)
+    fields.update(overrides or {})
+    return "CREATE %s SET %s;" % (row_id, ", ".join("%s=%s" % (k, v) for k, v in fields.items()))
 
 
 # ---- probes --------------------------------------------------------------------------------------
@@ -244,7 +375,15 @@ def probes(inst):
         for clause in rule.get("requires") or []:
             if clause["edge"] == "cites" and clause.get("where"):
                 wrong.append("RELATE %s->cites->%s;" % (ids["row"], ids["bad"]))
-        for tab in ("critique", "answer"):
+        # a third direction: for every forbids clause, the row it forbids, built from the clause
+        forbids, forbidden = [], []
+        for index, clause in enumerate(rule.get("forbids") or []):
+            forbids.append(_clause_text(clause, inst))
+            forbidden.append(_forbidden_plan(rule, index, clause, inst, ids))
+        for edge in EDGES:                    # edges first: a relation outlives neither endpoint here
+            cleanup.append("DELETE %s WHERE record::id(in) CONTAINS 'zz_probe_%s' "
+                           "OR record::id(out) CONTAINS 'zz_probe_%s';" % (edge, rule["id"], rule["id"]))
+        for tab in ("critique", "answer", "label"):
             cleanup.append("DELETE %s WHERE record::id(id) CONTAINS 'zz_probe_%s';" % (tab, rule["id"]))
         for tab in ("conclusion", "fact", "authority", "unit"):
             cleanup.append("DELETE %s WHERE record::id(id) CONTAINS 'zz_probe_%s';" % (tab, rule["id"]))
@@ -253,8 +392,49 @@ def probes(inst):
         constrained = [c for c in (rule.get("requires") or []) if c.get("where")]
         out.append({"rule": rule["id"], "setup": setup, "attempt": attempt, "wrong": wrong, "fix": fix,
                     "cleanup": cleanup, "constrained": bool(constrained),
-                    "constraints": sorted(_expand(c.get("where"), inst) for c in constrained)})
+                    "constraints": sorted(_expand(c.get("where"), inst) for c in constrained),
+                    "forbids": forbids, "forbidden": forbidden})
     return out
+
+
+def _clause_text(clause, inst):
+    where = _expand(clause.get("where"), inst)
+    return "%s%s" % (clause.get("edge"), " where %s" % where if where else "")
+
+
+def _forbidden_plan(rule, index, clause, inst, ids):
+    """How to make the row one `forbids` clause excludes, and how to take it away again.
+
+    Everything here comes from the clause: the edge decides the table and the direction of the
+    RELATE, the `where` decides the field values, `min` decides how many rows. A clause this cannot
+    build carries `built: False` and the reason, which judge() turns into a failure -- a clause that
+    quietly generated nothing is exactly how the wrong-evidence probe stopped running."""
+    table = rule["table"]
+    where = _expand(clause.get("where"), inst)
+    _, other = _edge_path(table, clause)
+    count = max(1, int(clause.get("min", 1)))
+    plan = {"clause": _clause_text(clause, inst), "where": where or None, "edge": clause["edge"],
+            "table": other, "count": count, "built": False, "reason": "", "rows": [],
+            "create": [], "relate": [], "remove": [],
+            "present": "RETURN " + _traversal(table, clause, inst, subject=ids["row"])}
+    assignments, why = _where_assignments(where)
+    if assignments is None:
+        plan["reason"] = why
+        return plan
+    try:
+        rows = ["%s:zz_probe_%s_forbid%d_%d" % (other, rule["id"], index, k) for k in range(count)]
+        creates = [_create(row, other, inst, assignments, unit_id=ids["ok"]) for row in rows]
+    except GateError as exc:
+        plan["reason"] = "cannot build a %s row for %s: %s" % (other, plan["clause"], exc)
+        return plan
+    drop_edges, drop_rows = [], []
+    for row in rows:
+        near, far = (ids["row"], row) if table == EDGES[clause["edge"]][0] else (row, ids["row"])
+        plan["relate"].append("RELATE %s->%s->%s;" % (near, clause["edge"], far))
+        drop_edges.append("DELETE %s WHERE in = %s AND out = %s;" % (clause["edge"], near, far))
+        drop_rows.append("DELETE %s;" % row)
+    plan.update({"rows": rows, "create": creates, "remove": drop_edges + drop_rows, "built": True})
+    return plan
 
 
 def spec(inst):
@@ -320,7 +500,7 @@ def compare_baseline(baseline, report, current_spec):
             was = old_entries.get(entry["rule"])
             if not was:
                 continue
-            for flag in ("reject", "wrong_evidence_reject", "accept"):
+            for flag in ("reject", "wrong_evidence_reject", "accept", "forbidden_evidence_reject"):
                 if was.get(flag) is True and entry.get(flag) is not True:
                     failures.append("rule %s: %s was true in the baseline, now %r"
                                     % (entry["rule"], flag, entry.get(flag)))
@@ -337,25 +517,48 @@ def judge(entry, probe):
     """Decide whether one probe result counts as behaviour. Mutates `entry` with the reasons.
 
     A constrained rule with no wrong-evidence result is a suite that stopped testing the
-    constraint, which is indistinguishable from "not applicable" unless we say so here.
+    constraint, which is indistinguishable from "not applicable" unless we say so here. A rule that
+    forbids something and produced no forbidden-evidence result is the same failure on the other
+    half of the gate expression: nothing checked that the datastore refuses the write while the
+    forbidden row exists, and nothing checked that taking the row away lets it through again.
     """
     entry["constrained"] = probe["constrained"]
     entry["constraints"] = probe["constraints"]
     if probe["constrained"] and entry["wrong_evidence_reject"] is None:
         entry["missing_probe"] = ("this rule constrains its evidence (%s) but no wrong-evidence probe ran: "
                                   "the suite is not testing the constraint" % "; ".join(probe["constraints"]))
+    entry["forbids"] = list(probe.get("forbids") or [])
+    entry.setdefault("forbidden_evidence_reject", None)
+    results = entry.get("forbidden_evidence") or []
+    if entry["forbids"]:
+        built = [r for r in results if r.get("built")]
+        if len(built) < len(entry["forbids"]):
+            reasons = [r.get("reason") or "no reason recorded" for r in results if not r.get("built")]
+            entry["missing_forbidden_probe"] = (
+                "this rule forbids %s but %d of %d forbidden-evidence probes did not run (%s): nothing "
+                "checked that the datastore refuses the write while the forbidden row exists"
+                % ("; ".join(entry["forbids"]), len(entry["forbids"]) - len(built), len(entry["forbids"]),
+                   "; ".join(reasons) or "none were generated"))
+        if built:
+            entry["forbidden_evidence_reject"] = all(
+                r.get("evidence_present") and r.get("reject") and r.get("cleared") and r.get("restored_accept")
+                for r in built)
     behaved = bool(entry["reject"] and entry["accept"]
                    and entry["wrong_evidence_reject"] in (None, True)
-                   and not entry.get("missing_probe"))
+                   and entry.get("forbidden_evidence_reject") in (None, True)
+                   and not entry.get("missing_probe")
+                   and not entry.get("missing_forbidden_probe"))
     entry["behaved"] = behaved
     return behaved
 
 
 def run_probes(inst, db):
     """Run every probe pair. Return a report; never leave probe rows behind."""
-    report = {"instance": inst.id, "rules": [], "rejected_ok": 0, "accepted_ok": 0, "misbehaved": 0}
+    report = {"instance": inst.id, "rules": [], "rejected_ok": 0, "accepted_ok": 0,
+              "forbidden_refused_ok": 0, "forbids_untested": 0, "misbehaved": 0}
     for probe in probes(inst):
-        entry = {"rule": probe["rule"], "reject": None, "wrong_evidence_reject": None, "accept": None}
+        entry = {"rule": probe["rule"], "reject": None, "wrong_evidence_reject": None, "accept": None,
+                 "forbidden_evidence_reject": None, "forbidden_evidence": []}
         try:
             for stmt in probe["setup"]:
                 db.sql(stmt)
@@ -371,15 +574,53 @@ def run_probes(inst, db):
             ok, message = db.try_sql(probe["attempt"])
             entry["accept"] = ok
             entry["accept_error"] = "" if ok else message
+            for plan in probe.get("forbidden") or []:
+                entry["forbidden_evidence"].append(_run_forbidden(db, probe, plan))
         finally:
             for stmt in probe["cleanup"]:
                 db.try_sql(stmt)
         behaved = judge(entry, probe)
         report["rejected_ok"] += 1 if entry["reject"] else 0
         report["accepted_ok"] += 1 if entry["accept"] else 0
+        report["forbidden_refused_ok"] += 1 if entry["forbidden_evidence_reject"] else 0
+        report["forbids_untested"] += 1 if entry.get("missing_forbidden_probe") else 0
         report["misbehaved"] += 0 if behaved else 1
         report["rules"].append(entry)
     return report
+
+
+def _run_forbidden(db, probe, plan):
+    """One forbids clause, both ways: with the forbidden row present the write must be REFUSED, and
+    with it gone the same write must be ACCEPTED again.
+
+    `evidence_present` is not bookkeeping. It asks the datastore, with the clause's own predicate,
+    whether the row that was just written really is the row the clause forbids. Without it a probe
+    that wrote a harmless row and met a refusal for some other reason would report a pass."""
+    result = {"clause": plan["clause"], "edge": plan["edge"], "table": plan["table"],
+              "built": plan["built"], "reason": plan["reason"], "evidence_present": None,
+              "reject": None, "cleared": None, "restored_accept": None, "restore_error": ""}
+    if not plan["built"]:
+        return result
+    from xscholar import db as dbmod
+    try:
+        for stmt in plan["create"] + plan["relate"]:
+            db.sql(stmt)
+    except dbmod.DbError as exc:
+        result["built"] = False
+        result["reason"] = "could not write the forbidden evidence for %s: %s" % (plan["clause"], exc)
+        for stmt in plan["remove"]:
+            db.try_sql(stmt)
+        return result
+    result["evidence_present"] = db.sql(plan["present"], expect=1)[0] >= plan["count"]
+    ok, _ = db.try_sql(probe["attempt"])
+    result["reject"] = not ok
+    for stmt in plan["remove"]:
+        db.sql(stmt)
+    result["cleared"] = db.sql(plan["present"], expect=1)[0] == 0
+    ok, message = db.try_sql(probe["attempt"])
+    result["restored_accept"] = ok
+    result["restore_error"] = "" if ok else message
+    return result
 
 
 # ---- command line --------------------------------------------------------------------------------
@@ -419,9 +660,13 @@ def main(argv=None):
         print(json.dumps(report, indent=2))
         print("PROBES: %d rejected as required, %d accepted as required, %d misbehaved"
               % (report["rejected_ok"], report["accepted_ok"], report["misbehaved"]))
+        print("FORBIDS: %d rule(s) refused their forbidden evidence and took the write once it was "
+              "removed, %d left untested" % (report["forbidden_refused_ok"], report["forbids_untested"]))
         for entry in report["rules"]:
             if entry.get("missing_probe"):
                 print("MISSING PROBE %s: %s" % (entry["rule"], entry["missing_probe"]))
+            if entry.get("missing_forbidden_probe"):
+                print("MISSING PROBE %s: %s" % (entry["rule"], entry["missing_forbidden_probe"]))
         failures = []
         if args.write_baseline:
             pathlib.Path(args.write_baseline).write_text(

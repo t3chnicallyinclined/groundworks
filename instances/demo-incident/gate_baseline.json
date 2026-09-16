@@ -57,11 +57,14 @@
         "reject": true,
         "wrong_evidence_reject": true,
         "accept": true,
+        "forbidden_evidence_reject": null,
+        "forbidden_evidence": [],
         "accept_error": "",
         "constrained": true,
         "constraints": [
           "grade IN ['original_log', 'exported_metric'] AND status IN ['in_window']"
         ],
+        "forbids": [],
         "behaved": true
       },
       {
@@ -69,14 +72,47 @@
         "reject": true,
         "wrong_evidence_reject": null,
         "accept": true,
+        "forbidden_evidence_reject": true,
+        "forbidden_evidence": [
+          {
+            "clause": "attacks where verdict = 'fatal'",
+            "edge": "attacks",
+            "table": "critique",
+            "built": true,
+            "reason": "",
+            "evidence_present": true,
+            "reject": true,
+            "cleared": true,
+            "restored_accept": true,
+            "restore_error": ""
+          },
+          {
+            "clause": "attacks where verdict = 'damaging' AND answered = false",
+            "edge": "attacks",
+            "table": "critique",
+            "built": true,
+            "reason": "",
+            "evidence_present": true,
+            "reject": true,
+            "cleared": true,
+            "restored_accept": true,
+            "restore_error": ""
+          }
+        ],
         "accept_error": "",
         "constrained": false,
         "constraints": [],
+        "forbids": [
+          "attacks where verdict = 'fatal'",
+          "attacks where verdict = 'damaging' AND answered = false"
+        ],
         "behaved": true
       }
     ],
     "rejected_ok": 2,
     "accepted_ok": 2,
+    "forbidden_refused_ok": 1,
+    "forbids_untested": 0,
     "misbehaved": 0
   }
 }
