@@ -49,11 +49,14 @@ MAX_DOCUMENT_CHARS = 200000
 
 
 class GenericAdapter(contract.InstanceAdapter):
-    def __init__(self, inst, db, store=None):
+    def __init__(self, inst, db, store=None, role=None):
+        """`role`: the `access:` role of the credential `db` signs in with, when it is a record credential. Only
+        health uses it, to tell a table this credential cannot read from an empty one (see _count)."""
         self.inst = inst
         self.db = db
         self.name = inst.id
         self._store = store
+        self.role = role
 
     def _originals_store(self):
         """The instance's store, or None when the instance was not loaded from a file and none was given."""
@@ -165,17 +168,62 @@ class GenericAdapter(contract.InstanceAdapter):
              "statement": r["statement"], "tried": r.get("tried"), "what_the_source_shows": r.get("evidence")}
             for r in rows]}
 
+    # ---- health counts that can never read 0 for "could not look" ----------------------------------------------
+    #
+    # Measured on SurrealDB 3.1.6 (2026-09-16), under a record-access credential that CAN read the table:
+    #     SELECT count() AS n FROM unit GROUP ALL             -> n: 0      (one row in the table)
+    #     SELECT count() AS n FROM unit WHERE true GROUP ALL  -> n: 1
+    # and under a credential that cannot read the table, every form answers 0 without an error. Root sees the true
+    # count either way, which is why no health test caught it: every one ran as root. So every count here carries
+    # a WHERE, and a count over a table this credential cannot read is NOT_EXECUTED, not 0.
+
+    def _readable(self, *tables):
+        """True, False, or None when it cannot be known (a record credential whose access role this adapter was
+        not told). Root and system users are not subject to table permissions."""
+        if not getattr(self.db, "access", None):
+            return True
+        role = (self.inst.access_roles() or {}).get(self.role) if self.role else None
+        if role is None:
+            return None
+        from xscholar import access
+        edges = self.inst.edge_map()
+        return all(access._can_read(role, table, edges) for table in tables)
+
+    def _blind(self, tables):
+        return ("NOT_EXECUTED: this server's credential (access role %s) cannot read %s, so the count is not known; "
+                "a 0 here would read as clean" % (self.role, " and ".join(tables)))
+
+    def _count(self, table, where="true", reads=()):
+        tables = (table,) + tuple(reads)
+        readable = self._readable(*tables)
+        if readable is False:
+            return self._blind(tables)
+        rows = self._sql("SELECT count() AS n FROM %s WHERE %s GROUP ALL" % (table, where), expect=1)[0]
+        value = rows[0]["n"] if rows else 0
+        if value == 0 and readable is None:
+            return ("NOT_EXECUTED: 0 rows of %s are visible to this record credential, and its access role is not "
+                    "known to this server (launch with XSCHOLAR_ROLE set to it), so an unreadable table cannot be "
+                    "told from an empty one" % " and ".join(tables))
+        return value
+
     def health(self):
-        def n(table, where=""):
-            rows = self._sql("SELECT count() AS n FROM %s %s GROUP ALL" % (table, where), expect=1)[0]
-            return rows[0]["n"] if rows else 0
-        facts = self._sql("SELECT status, count() AS n FROM fact GROUP BY status", expect=1)[0]
-        drift = n("fact", "WHERE status = 'confirmed' AND count(SELECT VALUE id FROM $parent->cites->unit WHERE grade IN %s AND status IN %s) = 0"
-                  % (gates._lit(self.inst.confirming_grades()), gates._lit(self.inst.usable_statuses())))
+        n = self._count
+        facts_readable = self._readable("fact")
+        if facts_readable is False:
+            facts_by_status = self._blind(("fact",))
+        else:
+            facts = self._sql("SELECT status, count() AS n FROM fact WHERE true GROUP BY status", expect=1)[0]
+            facts_by_status = {r["status"]: r["n"] for r in facts}
+            if not facts_by_status and facts_readable is None:
+                facts_by_status = n("fact")          # the same NOT_EXECUTED wording when nothing is visible
+        drift = n("fact", "status = 'confirmed' AND count(SELECT VALUE id FROM $parent->cites->unit WHERE grade IN %s "
+                          "AND status IN %s) = 0" % (gates._lit(self.inst.confirming_grades()),
+                                                     gates._lit(self.inst.usable_statuses())),
+                  reads=("cites", "unit"))
         return {"instance": self.inst.id, "units": n("unit"), "labels": n("label"),
-                "facts_by_status": {r["status"]: r["n"] for r in facts},
-                "conclusions_ready": n("conclusion", "WHERE ready = true"), "conclusions": n("conclusion"),
-                "critiques_unanswered": n("critique", "WHERE answered = false"),
+                "facts_by_status": facts_by_status,
+                "conclusions_ready": n("conclusion", "ready = true"), "conclusions": n("conclusion"),
+                "critiques_unanswered": n("critique", "answered = false"),
                 "DRIFT_confirmed_without_valid_cite": drift,
                 "lenses": lensmod.lens_list(self.inst),
                 "originals": originals.health(self.db, self.inst),
@@ -378,8 +426,8 @@ class GenericAdapter(contract.InstanceAdapter):
         return {"conclusion": cid, "ready": True, "by": provenance.by()}
 
 
-def create_adapter_for(inst, db, store=None):
-    return GenericAdapter(inst, db, store)
+def create_adapter_for(inst, db, store=None, role=None):
+    return GenericAdapter(inst, db, store, role)
 
 
 def create_adapter():
@@ -391,4 +439,6 @@ def create_adapter():
                   ns=os.environ.get("XSCHOLAR_NS") or inst.id, db=os.environ.get("XSCHOLAR_DB") or inst.id,
                   user=os.environ.get("XSCHOLAR_DB_USER", "root"), password=os.environ.get("XSCHOLAR_DB_PASS", "root"),
                   access=os.environ.get("XSCHOLAR_DB_ACCESS"))  # set: a provisioned agent credential, not root
-    return GenericAdapter(inst, db)
+    # the credential's access role, for health's readability check; provision() prints it as XSCHOLAR_ROLE
+    role = os.environ.get("XSCHOLAR_ROLE") if os.environ.get("XSCHOLAR_DB_ACCESS") else None
+    return GenericAdapter(inst, db, role=role)

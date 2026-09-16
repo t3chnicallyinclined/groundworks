@@ -2336,6 +2336,320 @@
    "commit": "uncommitted",
    "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server",
    "needs_db": false
+  },
+  {
+   "id": "M225",
+   "guard": "health counts carry a WHERE, so a record credential that can read a table does not read 0",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "rows = self._sql(\"SELECT count() AS n FROM %s WHERE %s GROUP ALL\" % (table, where), expect=1)[0]",
+   "replacement": "rows = self._sql(\"SELECT count() AS n FROM %s GROUP ALL\" % table if where == \"true\" else \"SELECT count() AS n FROM %s WHERE %s GROUP ALL\" % (table, where), expect=1)[0]",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_a_credential_that_cannot_read_a_table_gets_not_executed_never_zero"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M226",
+   "guard": "a health count over a table the credential cannot read is NOT_EXECUTED, not 0",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "        if readable is False:\n            return self._blind(tables)\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_a_credential_that_cannot_read_a_table_gets_not_executed_never_zero"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M227",
+   "guard": "a zero count under a record credential of unknown role is NOT_EXECUTED",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "if value == 0 and readable is None:",
+   "replacement": "if False:",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_a_record_credential_whose_role_is_unknown_never_reads_zero_as_clean"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M228",
+   "guard": "root is not subject to table permissions: its zero counts are real zeros",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "        if not getattr(self.db, \"access\", None):\n            return True\n",
+   "replacement": "        if not getattr(self.db, \"access\", None):\n            return None\n",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_root_reads_true_numbers_and_nothing_not_executed_in_the_counts"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M229",
+   "guard": "facts_by_status under a credential that cannot read fact is NOT_EXECUTED, not {}",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "            facts_by_status = self._blind((\"fact\",))\n",
+   "replacement": "            facts_by_status = {}\n",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_a_credential_that_cannot_read_a_table_gets_not_executed_never_zero"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M230",
+   "guard": "the generic adapter takes the credential's role from the launch environment",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "role = os.environ.get(\"XSCHOLAR_ROLE\") if os.environ.get(\"XSCHOLAR_DB_ACCESS\") else None",
+   "replacement": "role = None",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_the_launch_environment_gives_the_generic_adapter_its_credential_role"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M231",
+   "guard": "live-schema health says NOT_EXECUTED when the credential cannot read definitions",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "return {\"NOT_EXECUTED\": str(exc), \"components\": components}",
+   "replacement": "return {\"missing\": 0, \"altered\": 0, \"unexpected\": 0, \"components\": components}",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_a_credential_that_cannot_read_a_table_gets_not_executed_never_zero"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M232",
+   "guard": "originals health counts units with a WHERE (an agent's gap does not read 0)",
+   "file": "xscholar/originals.py",
+   "anchor": "units = _count(db, \"SELECT count() AS n FROM unit WHERE true GROUP ALL\")",
+   "replacement": "units = _count(db, \"SELECT count() AS n FROM unit GROUP ALL\")",
+   "must_fail": [
+    "tests.test_mcp_db.HealthNotExecutedTests.test_a_credential_that_cannot_read_a_table_gets_not_executed_never_zero"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M233",
+   "guard": "a gate refusal from the generic adapter carries what is missing",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "return contract.GateRejected(\"%s: %s\" % (exc.rule, exc.missing), missing=[exc.missing])",
+   "replacement": "return contract.GateRejected(\"%s: %s\" % (exc.rule, exc.missing), missing=[])",
+   "must_fail": [
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_the_evidence_gate_names_the_grade_and_status_and_what_is_cited_now",
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_independence_refusal_names_who_may_promote_not_more_evidence",
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_originals_refusal_names_the_original_not_a_grade",
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_assertion_refusal_names_the_contradiction_not_a_grade"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M234",
+   "guard": "the MCP envelope passes a refusal's missing through",
+   "file": "xscholar/mcp/server.py",
+   "anchor": "\"missing\": [str(m) for m in (getattr(exc, \"missing\", None) or [])]}",
+   "replacement": "\"missing\": []}",
+   "must_fail": [
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_the_evidence_gate_names_the_grade_and_status_and_what_is_cited_now",
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_originals_refusal_before_the_datastore_names_the_original_to_restore"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M235",
+   "guard": "claim_confirm explains an independence refusal as who may promote",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "        _raise_if_not_independent(message, rid(\"fact\", slug))\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_independence_refusal_names_who_may_promote_not_more_evidence"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M236",
+   "guard": "claim_confirm explains originals and assertion refusals as what they are",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "        _raise_if_not_about_evidence(self.db, self.inst, message, rid(\"fact\", slug))\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_originals_refusal_names_the_original_not_a_grade",
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_assertion_refusal_names_the_contradiction_not_a_grade"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M237",
+   "guard": "claim_confirm re-hashes cited originals before the datastore is asked",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "        self._check_cited_originals(unit_ids or [])\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_mcp_db.GateRefusalThroughToolsTests.test_an_originals_refusal_before_the_datastore_names_the_original_to_restore"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M238",
+   "guard": "the conformance checker reports a missing field by name",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "            problems.append(\"%s.%s: missing\" % (where, field))\n",
+   "replacement": "            pass\n",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_a_field_the_adapter_silently_stopped_filling_is_reported_by_name"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M239",
+   "guard": "the conformance checker reports a wrong status by call",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "        if env.get(\"status\") != status:\n",
+   "replacement": "        if False:\n",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_a_wrong_status_is_reported_by_call"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M240",
+   "guard": "the conformance checker calls no write method without --write",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "        if self.write:\n            self.run_writes()\n",
+   "replacement": "        if True:\n            self.run_writes()\n",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_read_only_by_default_calls_no_write_method",
+    "tests.test_mcp_conformance.GenericAdapterConformanceTests.test_a_read_only_run_calls_every_read_method_and_changes_no_row"
+   ],
+   "needs_db": true,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M241",
+   "guard": "--write runs only against the database --scratch names exactly",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "if not scratch or target is None or scratch != target:",
+   "replacement": "if not scratch:",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_write_mode_is_refused_unless_scratch_names_the_adapters_own_database"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M242",
+   "guard": "the conformance checker reports an empty required field",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "elif nonempty and (got is None",
+   "replacement": "elif False and (got is None",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_an_emptied_field_and_a_wrong_type_are_reported_by_name"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M243",
+   "guard": "the conformance checker reports a wrong type",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "ok = isinstance(got, types) and not (isinstance(got, bool) and bool not in types)",
+   "replacement": "ok = True",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_an_emptied_field_and_a_wrong_type_are_reported_by_name"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M244",
+   "guard": "the conformance checker judges results through the server's real envelope",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "return server.call(method, lambda: fn(*args))",
+   "replacement": "return {\"status\": contract.STATUS_OK, \"tool\": method, \"data\": fn(*args)}",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_results_go_through_the_real_envelope"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M245",
+   "guard": "the conformance checker reports a count that disagrees with its list",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "search_problems = lambda d: ([] if d.get(\"count\") == len(d.get(\"units\") or []) else",
+   "replacement": "search_problems = lambda d: ([] if True else",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_a_count_that_disagrees_with_its_list_is_reported"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
+  },
+  {
+   "id": "M246",
+   "guard": "a read check the conformance checker could not run makes the run NOT_EXECUTED",
+   "file": "xscholar/mcp/conformance.py",
+   "anchor": "\"verdict\": FAIL if counts[FAIL] else NOT_EXECUTED if reads_unexecuted else",
+   "replacement": "\"verdict\": FAIL if counts[FAIL] else",
+   "must_fail": [
+    "tests.test_mcp_conformance.FakeAdapterTests.test_a_read_it_had_nothing_to_call_with_is_not_executed_never_a_pass"
+   ],
+   "needs_db": false,
+   "defect": "mcp lane",
+   "commit": "uncommitted",
+   "source": "2026-09-16 MCP lane (fix/mcp): real-use findings on the MCP server"
   }
  ]
 }
