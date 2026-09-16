@@ -12,7 +12,7 @@
             "kind": "requires",
             "edge": "cites",
             "min": 1,
-            "where": "grade IN ['original_log', 'exported_metric'] AND status IN ['in_window']"
+            "where": "grade IN ['official_text', 'original_log', 'exported_metric'] AND status IN ['in_window']"
           }
         ]
       },
@@ -41,11 +41,52 @@
           },
           {
             "kind": "requires",
+            "edge": "preserves",
+            "min": 1,
+            "where": null
+          },
+          {
+            "kind": "requires",
             "edge": "supports",
             "min": 1,
             "where": null
           }
         ]
+      },
+      "authority_verified_needs_official_text": {
+        "table": "authority",
+        "field": "verified",
+        "value": true,
+        "clauses": [
+          {
+            "kind": "requires",
+            "edge": "verified_from",
+            "min": 1,
+            "where": "grade = 'official_text' AND status IN ['in_window']"
+          }
+        ]
+      }
+    },
+    "edges": {
+      "attacks": {
+        "from": "critique",
+        "to": "conclusion"
+      },
+      "cites": {
+        "from": "fact",
+        "to": "unit"
+      },
+      "preserves": {
+        "from": "unit",
+        "to": "conclusion"
+      },
+      "supports": {
+        "from": "fact",
+        "to": "conclusion"
+      },
+      "verified_from": {
+        "from": "authority",
+        "to": "unit"
       }
     }
   },
@@ -59,10 +100,27 @@
         "accept": true,
         "forbidden_evidence_reject": null,
         "forbidden_evidence": [],
+        "evidence": [
+          {
+            "clause": "cites where grade IN ['official_text', 'original_log', 'exported_metric'] AND status IN ['in_window']",
+            "built": true,
+            "reason": "",
+            "satisfied": true
+          }
+        ],
+        "wrong_evidence": [
+          {
+            "clause": "cites where grade IN ['official_text', 'original_log', 'exported_metric'] AND status IN ['in_window']",
+            "built": true,
+            "reason": "",
+            "really_fails": true
+          }
+        ],
+        "setup_error": "",
         "accept_error": "",
         "constrained": true,
         "constraints": [
-          "grade IN ['original_log', 'exported_metric'] AND status IN ['in_window']"
+          "grade IN ['official_text', 'original_log', 'exported_metric'] AND status IN ['in_window']"
         ],
         "forbids": [],
         "behaved": true
@@ -99,6 +157,28 @@
             "restore_error": ""
           }
         ],
+        "evidence": [
+          {
+            "clause": "supports",
+            "built": true,
+            "reason": "",
+            "satisfied": true
+          },
+          {
+            "clause": "attacks",
+            "built": true,
+            "reason": "",
+            "satisfied": true
+          },
+          {
+            "clause": "preserves",
+            "built": true,
+            "reason": "",
+            "satisfied": true
+          }
+        ],
+        "wrong_evidence": [],
+        "setup_error": "",
         "accept_error": "",
         "constrained": false,
         "constraints": [],
@@ -107,12 +187,45 @@
           "attacks where verdict = 'damaging' AND answered = false"
         ],
         "behaved": true
+      },
+      {
+        "rule": "authority_verified_needs_official_text",
+        "reject": true,
+        "wrong_evidence_reject": true,
+        "accept": true,
+        "forbidden_evidence_reject": null,
+        "forbidden_evidence": [],
+        "evidence": [
+          {
+            "clause": "verified_from where grade = 'official_text' AND status IN ['in_window']",
+            "built": true,
+            "reason": "",
+            "satisfied": true
+          }
+        ],
+        "wrong_evidence": [
+          {
+            "clause": "verified_from where grade = 'official_text' AND status IN ['in_window']",
+            "built": true,
+            "reason": "",
+            "really_fails": true
+          }
+        ],
+        "setup_error": "",
+        "accept_error": "",
+        "constrained": true,
+        "constraints": [
+          "grade = 'official_text' AND status IN ['in_window']"
+        ],
+        "forbids": [],
+        "behaved": true
       }
     ],
-    "rejected_ok": 2,
-    "accepted_ok": 2,
+    "rejected_ok": 3,
+    "accepted_ok": 3,
     "forbidden_refused_ok": 1,
     "forbids_untested": 0,
+    "requires_untested": 0,
     "misbehaved": 0
   }
 }

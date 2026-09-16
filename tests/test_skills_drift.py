@@ -24,7 +24,7 @@ import unittest
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, drift, skills  # noqa: E402
+from xscholar import config, drift, gates, skills  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -125,7 +125,8 @@ class GenerateTests(Base):
 class ContentTests(Base):
     def setUp(self):
         super().setUp()
-        _path, self.out = self.build()
+        path, self.out = self.build()
+        self.inst = config.load(path)
         self.text = {name: (self.out / name / "SKILL.md").read_text(encoding="utf-8")
                      for name in skills.template_names()}
 
@@ -182,7 +183,11 @@ class ContentTests(Base):
                           "`cites` edge to a `unit` row where", text, name)
             self.assertIn("`conclusion.ready` may become `true`", text, name)   # true, not Python's True
             self.assertIn("has no `attacks` edge from a `critique` row where `verdict = 'fatal'`", text, name)
-            self.assertIn("['original_log', 'exported_metric']", text, name)    # $confirming expanded
+            self.assertIn(gates._lit(self.inst.confirming_grades()), text, name)   # $confirming expanded
+            # a clause on an edge the CONFIG declared reads like any other, with no engine change
+            self.assertIn("has at least 1 `preserves` edge from a `unit` row", text, name)
+            self.assertIn("`authority.verified` may become `true` only when the row has at least 1 "
+                          "`verified_from` edge to a `unit` row where `grade = 'official_text'", text, name)
 
     def test_the_panel_command_sequence_is_exact_and_carries_settings(self):
         text = self.text["red-team"]

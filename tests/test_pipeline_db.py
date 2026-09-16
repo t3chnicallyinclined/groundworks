@@ -180,6 +180,10 @@ class WriteTests(ServerCase):
         self.assertIn("1 fatal attack(s) standing", str(err.exception))
         self.db.sql("UPDATE %s SET verdict='damaging'" % cid)
         w.answer(cid, "Retry volume is bounded; the pool size is the constraint.")
+        with self.assertRaises(write.GateRefusal) as err:     # V2-8: nothing records the observation
+            w.mark_ready("rc_pool_exhaustion")
+        self.assertIn("`preserves`", str(err.exception))
+        w.relate("preserves", "log_001", "rc_pool_exhaustion", how="alert")
         self.assertEqual(w.mark_ready("rc_pool_exhaustion"), "conclusion:rc_pool_exhaustion")
 
 

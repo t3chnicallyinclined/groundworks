@@ -96,6 +96,24 @@ class Writer:
         self.db.sql("RELATE %s->supports:%s->%s SET author=%s"
                     % (rid("fact", slug), eid, rid("conclusion", conclusion), q(self.author)), expect=1)
 
+    def relate(self, edge, source, target, **fields):
+        """One relation of any edge type this instance has, declared or built in.
+
+        The two tables come from the instance's own edge map, so an edge declared in `edges:` is
+        writable without an engine change. Nothing here loosens anything: the datastore still holds
+        the edge's field definitions, every gate and every per-role permission."""
+        edges = self.inst.edge_map()
+        if edge not in edges:
+            raise ValueError("instance %s has no edge %r; known: %s (declare it under `edges:`)"
+                             % (self.inst.id, edge, ", ".join(sorted(edges))))
+        src, dst = edges[edge]
+        eid = self.keyer("write", edge, str(source), str(target))
+        sets = ", ".join(["author=%s" % q(self.author)]
+                         + ["%s=%s" % (name, q(value)) for name, value in sorted(fields.items())])
+        self.db.sql("RELATE %s->%s:%s->%s SET %s"
+                    % (rid(src, source), edge, eid, rid(dst, target), sets), expect=1)
+        return eid
+
     # ---- workbench --------------------------------------------------------------------------
 
     def critique(self, conclusion, head, verdict, text=None, lens=None):
@@ -121,11 +139,17 @@ class Writer:
         ok, message = self.db.try_sql("UPDATE %s SET ready=true" % target)
         if ok:
             return target
-        problems, counts = readiness_problems(self.db, conclusion)
+        problems, counts = readiness_problems(self.db, conclusion, self.inst)
         raise GateRefusal("conclusion_ready", "; ".join(problems) or message, {"counts": counts, "db": message})
 
 
-def readiness_problems(db, conclusion):
+# The two edges whose refusal this module words by hand. Every other requires clause on readiness --
+# including one on an edge the instance declared -- is described from the clause itself, so a new
+# clause is never left explaining itself with the datastore's raw ASSERT text.
+DESCRIBED_EDGES = ("supports", "attacks")
+
+
+def readiness_problems(db, conclusion, inst=None):
     """What still blocks a conclusion, in words an agent can act on, plus the raw counts."""
     target = rid("conclusion", conclusion)
     counts = db.sql(
@@ -143,4 +167,27 @@ def readiness_problems(db, conclusion):
         problems.append("%d fatal attack(s) standing (answer or narrow the conclusion)" % counts["fatal"])
     if counts["damaging_open"]:
         problems.append("%d damaging head(s) unanswered (answer them first)" % counts["damaging_open"])
+    problems += _other_clause_problems(db, target, inst)
     return problems, counts
+
+
+def _other_clause_problems(db, target, inst):
+    """Every readiness clause this module has no hand-written words for, asked of the datastore."""
+    if inst is None:
+        return []
+    from xscholar import gates            # local: gates imports config, not this module
+    out = []
+    for rule in inst.gate_rules():
+        if not (rule.get("table") == "conclusion" and rule.get("field") == "ready" and rule.get("value") is True):
+            continue
+        for clause in rule.get("requires") or []:
+            if clause.get("edge") in DESCRIBED_EDGES:
+                continue
+            need = int(clause.get("min", 1))
+            have = db.sql("RETURN " + gates._traversal("conclusion", clause, inst, subject=target), expect=1)[0]
+            if have < need:
+                out.append("%d of %d `%s` edge(s)%s (rule %s)"
+                           % (have, need, clause["edge"],
+                              " where %s" % gates._expand(clause.get("where"), inst) if clause.get("where") else "",
+                              rule["id"]))
+    return out

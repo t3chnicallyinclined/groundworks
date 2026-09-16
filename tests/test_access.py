@@ -33,9 +33,38 @@ class GenerationTests(unittest.TestCase):
 
     def test_one_record_access_and_a_permissions_clause_on_every_table(self):
         self.assertIn("DEFINE ACCESS OVERWRITE agent ON DATABASE TYPE RECORD SIGNIN", self.text)
-        for table in access.TABLES:
+        for table in access.tables(self.inst):
             self.assertIn("ALTER TABLE %s PERMISSIONS" % table, self.text)
-        self.assertEqual(self.text.count("FOR delete NONE"), len(access.TABLES))   # deletes are root-only
+        self.assertEqual(self.text.count("FOR delete NONE"), len(access.tables(self.inst)))   # deletes are root-only
+
+    def test_a_declared_table_and_edge_get_permissions_like_a_built_in(self):
+        """A declared table the generator skipped would keep SurrealDB's default permissions, which
+        is every signed-in agent reading and writing it -- a hole nothing else in the stack closes."""
+        from tests.test_gates import declared_instance
+        inst = declared_instance(self.inst)
+        text = access.access_surql(inst)
+        line = {l.split()[2]: l for l in text.splitlines() if l.startswith("ALTER TABLE")}
+        self.assertIn("event", line)
+        self.assertIn("mentions", line)
+        self.assertIn("FOR create WHERE $auth.role IN ['coordinator']", line["event"])
+        self.assertIn("FOR create WHERE $auth.role IN ['coordinator']", line["mentions"])
+        # an edge is readable when both its ends are; only the coordinator reads `event`
+        self.assertIn("FOR select WHERE $auth.role IN ['coordinator']", line["mentions"])
+        self.assertEqual(text.count("FOR delete NONE"), len(access.tables(inst)))
+        self.assertEqual(len(access.tables(inst)), len(access.tables(self.inst)) + 2)
+
+    def test_a_declared_table_that_carries_a_lens_binds_a_lens_bound_role(self):
+        """The rule follows the field. A declared table with a `lens` field that a lens_bound role
+        could write under any lens would let a seat write rows under someone else's lens."""
+        import copy
+        data = copy.deepcopy(self.inst.data)
+        data["tables"] = {"reading": {"fields": {"lens": "string", "text": "string"}}}
+        data["access"]["roles"]["seat"]["read"].append("reading")
+        data["access"]["roles"]["seat"]["write"].append("reading")
+        inst = config.load(data)
+        self.assertIn("reading", access.lens_tables(inst))
+        line = [l for l in access.access_surql(inst).splitlines() if l.startswith("ALTER TABLE reading ")][0]
+        self.assertIn("($auth.role = 'seat' AND lens = $auth.lens)", line)
 
     def test_rules_from_the_config_are_in_the_clauses(self):
         line = {l.split()[2]: l for l in self.text.splitlines() if l.startswith("ALTER TABLE")}
@@ -191,6 +220,12 @@ class ServerTests(unittest.TestCase):
         seat.critique("c1", "a head", "survivable")        # the seat's critique, written under its credential
         with self.assertRaises(dbmod.PermissionDenied):   # a seat may not write conclusion even when the gate would pass
             seat.mark_ready("c1")
+        with self.assertRaises(write.GateRefusal) as err:  # V2-8: nothing records the observation yet
+            coord.mark_ready("c1")
+        self.assertIn("`preserves`", str(err.exception))
+        with self.assertRaises(dbmod.PermissionDenied):   # a declared edge binds like a built-in one
+            reader.relate("preserves", "u_ok", "c1", how="alert")
+        coord.relate("preserves", "u_ok", "c1", how="alert")
         coord.mark_ready("c1")                             # counts for the readiness gate
         self.assertEqual(self.root.sql("SELECT VALUE ready FROM conclusion:c1")[0], [True])
 

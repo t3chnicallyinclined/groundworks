@@ -26,10 +26,109 @@ ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
             "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access",
-            "authority", "staleness", "discovery"}
+            "authority", "staleness", "discovery", "tables", "edges"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
+
+# ---- the graph shape ---------------------------------------------------------------------------
+#
+# The node tables and edge types the engine ships with. An instance adds its own under `tables:` and
+# `edges:`; everything downstream (schema, gates, probes, PERMISSIONS, cleanup) reads the combined
+# maps below rather than these constants, so a new domain needs no engine edit.
+BUILT_IN_NODE_TABLES = ("unit", "label", "fact", "conclusion", "authority", "critique", "answer")
+BUILT_IN_EDGES = {
+    "cites": ("fact", "unit"),
+    "supports": ("fact", "conclusion"),
+    "undercuts": ("fact", "conclusion"),
+    "attacks": ("critique", "conclusion"),
+    "answers": ("answer", "critique"),
+    "bears_on": ("label", "conclusion"),   # a label bears on a target; targets are conclusion rows
+    "relies_on": ("conclusion", "authority"),
+}
+# Tables the engine owns for its own purposes; an instance may not take these names either.
+RESERVED_TABLES = ("agent",)              # xscholar/access.py AGENT_TABLE
+
+FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
+TABLE_KEYS = {"fields", "doc"}
+EDGE_KEYS = {"from", "to", "fields", "doc"}
+FIELD_KEYS = {"type", "one_of", "optional", "doc"}
+EDGE_RESERVED_FIELDS = ("id", "in", "out")   # SurrealDB owns these on a RELATION table
+
+
+def _field_spec(value):
+    """A declared field, from `name: string` or `name: {type: string, one_of: [...]}`.
+
+    Returns (spec, problem). The spec is always a dict with type/one_of/optional so that every
+    reader sees the same shape and nothing downstream has to guess what a bare string meant."""
+    if isinstance(value, str):
+        value = {"type": value}
+    if not isinstance(value, dict):
+        return None, "must be a type name or a mapping with a type"
+    unknown = sorted(set(value) - FIELD_KEYS)
+    if unknown:
+        return None, "unknown key(s) %s; allowed: %s" % (", ".join(unknown), ", ".join(sorted(FIELD_KEYS)))
+    kind = value.get("type")
+    if kind not in FIELD_TYPES:
+        return None, "type must be one of %s (got %r)" % (", ".join(FIELD_TYPES), kind)
+    one_of = value.get("one_of")
+    if one_of is not None:
+        if not isinstance(one_of, list) or not one_of:
+            return None, "one_of must be a non-empty list of values"
+        if len(set(map(str, one_of))) != len(one_of):
+            return None, "one_of has duplicates"
+    optional = value.get("optional", False)
+    if optional not in (True, False):
+        return None, "optional must be true or false"
+    return {"type": kind, "one_of": list(one_of) if one_of else None, "optional": bool(optional)}, None
+
+
+def _declared(data, section):
+    """The raw `tables:`/`edges:` mapping, or {} when the instance declares none."""
+    value = (data or {}).get(section)
+    return value if isinstance(value, dict) else {}
+
+
+def declared_tables_of(data):
+    """name -> {field: spec} for every node table the instance declares. Unvalidated input is skipped;
+    validate() is what reports it, so this never raises for a caller holding a validated config."""
+    out = {}
+    for name, body in _declared(data, "tables").items():
+        fields = {}
+        for field, value in ((body or {}).get("fields") or {}).items():
+            spec, _ = _field_spec(value)
+            if spec:
+                fields[str(field)] = spec
+        out[str(name)] = fields
+    return out
+
+
+def declared_edges_of(data):
+    """name -> {"from": table, "to": table, "fields": {field: spec}} for every declared edge type."""
+    out = {}
+    for name, body in _declared(data, "edges").items():
+        body = body or {}
+        fields = {}
+        for field, value in (body.get("fields") or {}).items():
+            spec, _ = _field_spec(value)
+            if spec:
+                fields[str(field)] = spec
+        out[str(name)] = {"from": body.get("from"), "to": body.get("to"), "fields": fields}
+    return out
+
+
+def node_tables_of(data):
+    """Every node table this instance has: the built-ins first, then the ones it declared."""
+    return list(BUILT_IN_NODE_TABLES) + [n for n in declared_tables_of(data) if n not in BUILT_IN_NODE_TABLES]
+
+
+def edge_map_of(data):
+    """edge name -> (source table, target table), built-ins plus the instance's own."""
+    out = dict(BUILT_IN_EDGES)
+    for name, body in declared_edges_of(data).items():
+        if name not in BUILT_IN_EDGES and body["from"] and body["to"]:
+            out[name] = (str(body["from"]), str(body["to"]))
+    return out
 
 # lenses (docs/METHOD.md section 7): kinds, backing grades, and what a lens filter may say
 LENS_KINDS = ("perspective", "discipline", "framework")
@@ -264,6 +363,31 @@ class Instance:
     def gate_rules(self):
         return list(self.data["gates"])
 
+    # the graph shape: built-ins plus whatever this instance declared
+    def declared_tables(self):
+        return declared_tables_of(self.data)
+
+    def declared_edges(self):
+        return declared_edges_of(self.data)
+
+    def node_tables(self):
+        return node_tables_of(self.data)
+
+    def edge_map(self):
+        return edge_map_of(self.data)
+
+    def tables(self):
+        """Every table the schema generator emits: node tables first, then edge tables."""
+        return self.node_tables() + list(self.edge_map())
+
+    def table_fields(self, table):
+        """The declared fields of a declared node table; {} for a built-in (its fields are the engine's)."""
+        return dict(self.declared_tables().get(table) or {})
+
+    def edge_fields(self, edge):
+        """The declared fields of a declared edge type; {} for a built-in (they carry none)."""
+        return dict((self.declared_edges().get(edge) or {}).get("fields") or {})
+
     def access_roles(self):
         """role name -> {read: [tables], write: [tables], lens_bound: bool}; {} when no access: section."""
         section = self.data.get("access") or {}
@@ -371,6 +495,8 @@ def validate(data):
         if tiers and tiers[0] != 0:
             problems.append("vocabulary.tiers must start at 0 (noise)")
 
+    _validate_graph_shape(data, problems)
+
     gates = data["gates"]
     if not isinstance(gates, list) or not gates:
         problems.append("gates must be a non-empty list: a graph with no gate is not gated")
@@ -400,7 +526,7 @@ def validate(data):
         if not isinstance(roles, dict) or not roles:
             problems.append("access needs roles: a mapping of role name -> {read: [...], write: [...], lens_bound}")
         else:
-            from xscholar import access as _access   # lazy: access imports config
+            known_tables = node_tables_of(data) + list(edge_map_of(data))
             for name, spec in roles.items():
                 if not ID_RE.match(str(name)):
                     problems.append("access role %r must match [a-z0-9_]+" % name)
@@ -410,10 +536,10 @@ def validate(data):
                 if "write" in spec and not isinstance(spec["write"], list):
                     problems.append("access role %s: write must be a list of tables" % name)
                     continue
-                unknown = sorted(set(map(str, spec["read"] + (spec.get("write") or []))) - set(_access.TABLES))
+                unknown = sorted(set(map(str, spec["read"] + (spec.get("write") or []))) - set(known_tables))
                 if unknown:
                     problems.append("access role %s names unknown table(s) %s; known: %s"
-                                    % (name, ", ".join(unknown), ", ".join(_access.TABLES)))
+                                    % (name, ", ".join(unknown), ", ".join(known_tables)))
                 if "label" in (spec.get("write") or []) and name != "loader":
                     problems.append("access role %s may not write label: only the loader writes labels" % name)
                 if spec.get("lens_bound") not in (None, True, False):
@@ -428,6 +554,92 @@ def validate(data):
     if problems:
         raise ConfigError("config invalid:\n  - " + "\n  - ".join(problems))
     return data
+
+
+def _validate_graph_shape(data, problems):
+    """`tables:` and `edges:` -- the node tables and edge types this instance adds to the built-ins.
+
+    Both are optional; an instance that declares neither is exactly what it was before. A declared
+    name that collides with a built-in is refused by name, because the schema generator would
+    OVERWRITE the engine's own table and every gate written against it would then mean something
+    else. An edge whose ends are not tables is refused naming the edge and the missing table, because
+    the traversal it generates would silently reach nothing."""
+    tables, edges = data.get("tables"), data.get("edges")
+    for section, value in (("tables", tables), ("edges", edges)):
+        if value is not None and not isinstance(value, dict):
+            problems.append("%s must be a mapping of name -> definition" % section)
+    tables = tables if isinstance(tables, dict) else {}
+    edges = edges if isinstance(edges, dict) else {}
+
+    taken = {}                                      # declared name -> the section that used it
+    for section, value, built_in, other in (("tables", tables, BUILT_IN_NODE_TABLES, "node table"),
+                                            ("edges", edges, tuple(BUILT_IN_EDGES), "edge type")):
+        for name in value:
+            name = str(name)
+            where = "%s.%s" % (section, name)
+            if not ID_RE.match(name):
+                problems.append("%s: name must match [a-z0-9_]+" % where)
+            if name in built_in:
+                problems.append("%s: %r is a built-in %s and may not be redeclared; choose another name"
+                                % (where, name, other))
+            elif name in BUILT_IN_NODE_TABLES or name in BUILT_IN_EDGES:
+                problems.append("%s: %r is already a built-in table name; choose another name" % (where, name))
+            elif name in RESERVED_TABLES:
+                problems.append("%s: %r is reserved by the engine; choose another name" % (where, name))
+            elif name in taken:
+                problems.append("%s: %r is already declared under %s; a name is one thing or the other"
+                                % (where, name, taken[name]))
+            else:
+                taken[name] = section
+
+    def check_fields(where, body, reserved=()):
+        fields = (body or {}).get("fields")
+        if not isinstance(fields, dict) or not fields:
+            problems.append("%s: fields must be a non-empty mapping of name -> type" % where)
+            return
+        for field, value in fields.items():
+            field = str(field)
+            if not ID_RE.match(field):
+                problems.append("%s: field name %r must match [a-z0-9_]+" % (where, field))
+            if field in reserved:
+                problems.append("%s: field %r is owned by the datastore on a relation table" % (where, field))
+            spec, problem = _field_spec(value)
+            if problem:
+                problems.append("%s.%s: %s" % (where, field, problem))
+
+    for name, body in tables.items():
+        where = "tables.%s" % name
+        if not isinstance(body, dict):
+            problems.append("%s: must be a mapping with fields" % where)
+            continue
+        unknown = sorted(set(body) - TABLE_KEYS)
+        if unknown:
+            problems.append("%s: unknown key(s) %s; allowed: %s"
+                            % (where, ", ".join(unknown), ", ".join(sorted(TABLE_KEYS))))
+        check_fields(where, body)
+
+    known_tables = set(node_tables_of(data))
+    for name, body in edges.items():
+        where = "edges.%s" % name
+        if not isinstance(body, dict):
+            problems.append("%s: must be a mapping with from, to and fields" % where)
+            continue
+        unknown = sorted(set(body) - EDGE_KEYS)
+        if unknown:
+            problems.append("%s: unknown key(s) %s; allowed: %s"
+                            % (where, ", ".join(unknown), ", ".join(sorted(EDGE_KEYS))))
+        for end in ("from", "to"):
+            table = body.get(end)
+            if not table:
+                problems.append("%s: %s must name the table this edge %s" % (where, end, end == "from" and "starts at" or "ends at"))
+            elif str(table) in BUILT_IN_EDGES or str(table) in edges:
+                problems.append("%s: %s names %r, which is an edge type, not a node table; known tables: %s"
+                                % (where, end, str(table), ", ".join(sorted(known_tables))))
+            elif str(table) not in known_tables:
+                problems.append("%s: %s names unknown table %r; declare it under tables: or name one of %s"
+                                % (where, end, str(table), ", ".join(sorted(known_tables))))
+        if body.get("fields") is not None:
+            check_fields(where, body, reserved=EDGE_RESERVED_FIELDS)
 
 
 def check_lens_filter(text):

@@ -19,8 +19,10 @@ units:
     chunk_size: 200
 
 fidelity:
-  order: [original_log, exported_metric, agent_summary, recollection]
-  confirming: [original_log, exported_metric]
+  # official_text: read in the vendor's or platform's own published text, not in someone's summary
+  # of it. The authority rule below is what makes that grade mean something.
+  order: [official_text, original_log, exported_metric, agent_summary, recollection]
+  confirming: [official_text, original_log, exported_metric]
   agent_grades: [agent_summary]
 
 status:
@@ -33,6 +35,32 @@ vocabulary:
   issues: [saturation, dependency, deploy, config, monitoring, capacity]
   targets: [rc_pool_exhaustion, rc_bad_deploy, rc_upstream_timeout]
   roles: [error, warning, metric, change, note]
+
+# Node tables and edge types this instance adds to the ones the engine ships with. Both sections are
+# optional. A declared name that collides with a built-in, or an edge whose end is not a table, is
+# refused by name at load time. Everything downstream treats what is declared here exactly as it
+# treats a built-in: schema and enumerated fields, gate clauses, PERMISSIONS per access role, and
+# probes in both directions (refused without the evidence, accepted with it).
+#
+#   tables:
+#     event:
+#       fields: {when: string, summary: string}
+edges:
+  # V2-8. Something recorded the observation a conclusion rests on, at the time, and says how.
+  # `not_captured` is the recorded exception: nothing captured it and a human said so in the graph,
+  # which the readiness rule accepts and which stays visible on the edge.
+  preserves:
+    from: unit
+    to: conclusion
+    fields:
+      how: {type: string, one_of: [alert, dashboard, manual_note, not_captured]}
+  # V2-9. Where an authority's text was actually read. `cites` joins fact and unit, so an authority
+  # needs its own edge; the gate below is what makes it mean "read in the official text".
+  verified_from:
+    from: authority
+    to: unit
+    fields:
+      read_by: string
 
 gates:
   - id: confirmed_needs_source_grade
@@ -54,11 +82,23 @@ gates:
         min: 1
       - edge: attacks
         min: 1
+      - edge: preserves        # V2-8: nothing is ready on an observation nobody recorded at the time
+        from: [unit]
+        min: 1
     forbids:
       - edge: attacks
         where: "verdict = 'fatal'"
       - edge: attacks
         where: "verdict = 'damaging' AND answered = false"
+  - id: authority_verified_needs_official_text
+    table: authority
+    field: verified
+    value: true
+    requires:
+      - edge: verified_from    # V2-9: the existence of a citation verifies nothing
+        to: [unit]
+        where: "grade = 'official_text' AND status IN $usable"
+        min: 1
 
 # Lenses (docs/METHOD.md section 7). A perspective or discipline lens becomes a datastore view
 # lens_<name> over label joined to its unit; its standard may be stricter than the base gates, never
@@ -122,4 +162,4 @@ access:
     reader:      {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
     seat:        {read: [unit, label, fact, conclusion, critique, answer], write: [critique, attacks, answer, answers], lens_bound: true}
     loader:      {read: [unit, label, conclusion], write: [unit, label, bears_on, conclusion]}
-    coordinator: {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}
+    coordinator: {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion, preserves]}

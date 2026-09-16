@@ -253,11 +253,12 @@ def _value_words(value):
 
 
 def _clause_words(rule, clause, inst, count=1):
+    edges = inst.edge_map()
     edge = clause.get("edge")
-    if edge not in gates.EDGES:
-        raise SkillError("gate %s names edge %r, which the engine does not know; known: %s"
-                         % (rule["id"], edge, ", ".join(sorted(gates.EDGES))))
-    src, dst = gates.EDGES[edge]
+    if edge not in edges:
+        raise SkillError("gate %s names edge %r, which this instance does not have; known: %s"
+                         % (rule["id"], edge, ", ".join(sorted(edges))))
+    src, dst = edges[edge]
     table = rule["table"]
     if table == src:
         direction, other = "to", dst

@@ -44,6 +44,30 @@ vocabulary:
   targets: [conclusion_1, conclusion_2]     # what a label may bear on
   roles: [role_a, role_b]
 
+# TABLES and EDGES (both optional): the node tables and edge types THIS instance needs, beyond the
+# ones the engine ships with (unit, label, fact, conclusion, authority, critique, answer; cites,
+# supports, undercuts, attacks, answers, bears_on, relies_on). A declared table gets a schema, a
+# PERMISSIONS clause per `access:` role and probe cleanup; a declared edge is usable in a gate clause
+# exactly like a built-in one, with the same requires/forbids, where, min and both-ways probes.
+# A name that collides with a built-in is refused, and so is an edge whose end is not a table.
+# Field shape: `name: string`, or `name: {type: string, one_of: [...], optional: true}`.
+# Types: string, int, float, bool, datetime. A field is required unless `optional: true`.
+#
+# tables:
+#   event:
+#     fields: {when: string, summary: string}
+# edges:
+#   mentions:
+#     from: unit
+#     to: event
+#     fields: {stance: {type: string, one_of: [supports, disputes, neutral]}, speaker: {type: string, optional: true}}
+#
+# Two limits worth knowing before you design around them:
+#   * a clause's `where` constrains the row at the FAR END of the edge, never the edge's own fields,
+#     so `mentions where stance = 'disputes'` is not expressible today;
+#   * a rule's clauses are ANDed, so a rule cannot say "this OR a recorded exception". Record an
+#     exception as an edge that carries its reason (see the demo's `preserves{how}`).
+
 # 6. GATES: what the datastore refuses. HUMAN-OWNED.
 #    $confirming and $usable expand from the two sections above. Every rule gets both probes.
 gates:

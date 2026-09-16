@@ -125,7 +125,13 @@ def scenario(writers, report):
     attempt(coord, "mark ready with a damaging head unanswered", lambda: coord.mark_ready("rc_pool_exhaustion"))
     coord.answer(cid, "Query p99 stayed at 41ms against a 38ms baseline (met_0002); the pool filled from "
                       "retry volume, not slow queries.")
+    attempt(coord, "mark ready with nothing recording how the observation was captured",
+            lambda: coord.mark_ready("rc_pool_exhaustion"))
+    coord.relate("preserves", "log_0043", "rc_pool_exhaustion", how="alert")
+    report(coord.author, "record that log_0043 captured the pool exhaustion at the time (how=alert)",
+           "ACCEPTED")
     coord.mark_ready("rc_pool_exhaustion")
-    report(coord.author, "answer the head, then mark ready", "ACCEPTED: rc_pool_exhaustion is ready")
+    report(coord.author, "answer the head and record preservation, then mark ready",
+           "ACCEPTED: rc_pool_exhaustion is ready")
     attempt(coord, "delete the critique as coordinator", lambda: coord.db.sql("DELETE %s" % cid, expect=1),
             bug="ACCEPTED (this would be a bug: deletes are root-only, through the archive)")

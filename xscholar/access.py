@@ -45,14 +45,27 @@ from xscholar import config, gates  # noqa: E402
 from xscholar import db as dbmod  # noqa: E402
 from xscholar.pipeline.loader import rid, q  # noqa: E402
 
-NODE_TABLES = ("unit", "label", "fact", "conclusion", "authority", "critique", "answer")
-TABLES = NODE_TABLES + tuple(gates.EDGES)
-LENS_TABLES = ("critique", "fact")          # tables whose rows carry a lens field
+NODE_TABLES = config.BUILT_IN_NODE_TABLES
+TABLES = NODE_TABLES + tuple(gates.EDGES)   # the ENGINE's tables; an instance may declare more
+LENS_TABLES = ("critique", "fact")          # built-in tables whose rows carry a lens field
 ACCESS_NAME = "agent"                       # the DEFINE ACCESS name; XSCHOLAR_DB_ACCESS at launch
 AGENT_TABLE = "agent"
 TOKEN_DURATION = "8h"
 AGENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")   # same shape server.py accepts
 LENS_ID = re.compile(r"^[A-Za-z0-9_]{1,80}$")
+
+
+def tables(inst):
+    """Every table this instance has, in the order the schema generator emits them. A declared table
+    left out here would keep SurrealDB's default permissions, which is every role reading it."""
+    return tuple(inst.tables())
+
+
+def lens_tables(inst):
+    """Tables whose rows carry a lens, so a lens_bound role may only write its own. A declared table
+    that declares a `lens` field is one of them: the rule follows the field, not a hard-coded list."""
+    return tuple(LENS_TABLES) + tuple(name for name, fields in inst.declared_tables().items()
+                                      if "lens" in fields)
 
 
 class AccessError(Exception):
@@ -66,23 +79,23 @@ def _roles(inst):
     return roles
 
 
-def _can_read(role, table):
+def _can_read(role, table, edges):
     if table in role["read"]:
         return True
-    if table in gates.EDGES:
-        src, dst = gates.EDGES[table]
+    if table in edges:
+        src, dst = edges[table]
         return src in role["read"] and dst in role["read"]
     return False
 
 
-def _clause(names, lens_bound_names, table):
+def _clause(names, lens_bound_names, table, lens_carrying=LENS_TABLES):
     """One boolean over $auth for a set of roles, or NONE when no role qualifies."""
     parts = []
-    plain = [n for n in names if n not in lens_bound_names or table not in LENS_TABLES]
+    plain = [n for n in names if n not in lens_bound_names or table not in lens_carrying]
     if plain:
         parts.append("$auth.role IN %s" % gates._lit(plain))
     for name in names:
-        if name in lens_bound_names and table in LENS_TABLES:
+        if name in lens_bound_names and table in lens_carrying:
             parts.append("($auth.role = %s AND lens = $auth.lens)" % gates._lit([name])[1:-1])
     if not parts:
         return "NONE"
@@ -105,11 +118,12 @@ def access_surql(inst):
         " ) DURATION FOR TOKEN %s, FOR SESSION %s;" % (ACCESS_NAME, AGENT_TABLE, AGENT_TABLE, TOKEN_DURATION, TOKEN_DURATION),
         "",
     ]
-    for table in TABLES:
-        readers = [n for n, r in roles.items() if _can_read(r, table)]
+    edges, lens_carrying = inst.edge_map(), lens_tables(inst)
+    for table in tables(inst):
+        readers = [n for n, r in roles.items() if _can_read(r, table, edges)]
         writers = [n for n, r in roles.items() if table in r["write"]]
         select = "WHERE $auth.role IN %s" % gates._lit(readers) if readers else "NONE"
-        write = _clause(writers, lens_bound, table)
+        write = _clause(writers, lens_bound, table, lens_carrying)
         lines.append("ALTER TABLE %s PERMISSIONS FOR select %s FOR create %s FOR update %s FOR delete NONE;"
                      % (table, select, write, write))
     return "\n".join(lines) + "\n"
@@ -186,7 +200,7 @@ def main(argv=None):
     root.ping()
     if args.apply:
         report = root.script(access_surql(inst))
-        print("ACCESS applied: %d statement(s), %d role(s), %d table(s)" % (len(report), len(inst.access_roles()), len(TABLES)))
+        print("ACCESS applied: %d statement(s), %d role(s), %d table(s)" % (len(report), len(inst.access_roles()), len(tables(inst))))
     if args.provision:
         creds = provision(root, inst, args.provision[0], args.provision[1], lens=args.lens, password=args.password)
         for key, value in creds.items():

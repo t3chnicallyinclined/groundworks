@@ -3,7 +3,7 @@ name: red-team
 description: Attack a conclusion, claim or draft section in the demo_incident instance the way each seated lens would, keeping only the heads of attack that survive a one-sentence reply, and record each survivor as a lens-keyed critique. Use before a conclusion is relied on, before it is written up, and after any new evidence lands. Triggers on "red team this", "attack this", "what survives reply", "stress-test this point", "what will the other side say".
 ---
 <!-- GENERATED from demo_incident by xscholar.skills; edit the config, not this file -->
-<!-- content-sha256: bd950a5062b013f0ac880d00a05ba296f83eee1784c8af5d6b06899068c84cbd -->
+<!-- content-sha256: a1f73193029ac50142faa74b084926927701a9744c561191b54052642953d90e -->
 
 # Red team a conclusion in demo_incident
 
@@ -80,19 +80,20 @@ The only words a label may use in this instance. Anything else is refused by the
 | `issues` | `saturation`, `dependency`, `deploy`, `config`, `monitoring`, `capacity` |
 | `targets` | `rc_pool_exhaustion`, `rc_bad_deploy`, `rc_upstream_timeout` |
 | `roles` | `error`, `warning`, `metric`, `change`, `note` |
-| `grades` (fidelity ladder, best first) | `original_log`, `exported_metric`, `agent_summary`, `recollection` |
+| `grades` (fidelity ladder, best first) | `official_text`, `original_log`, `exported_metric`, `agent_summary`, `recollection` |
 | `statuses` | `in_window`, `out_of_window`, `redacted` |
 
-Only `original_log`, `exported_metric` can establish anything (`fidelity.confirming`); only `in_window` may be used at all (`status.usable`). A true unit outside those statuses is still unusable, and saying so is a result, not a failure.
+Only `official_text`, `original_log`, `exported_metric` can establish anything (`fidelity.confirming`); only `in_window` may be used at all (`status.usable`). A true unit outside those statuses is still unusable, and saying so is a result, not a failure.
 
 ## The readiness gates
 
 What the datastore refuses, whatever any skill, lens or panel says. A refusal is an answer: read it, supply what it names, and never work around it.
 
-- **`confirmed_needs_source_grade`** -- `fact.status` may become `confirmed` only when the row has at least 1 `cites` edge to a `unit` row where `grade IN ['original_log', 'exported_metric'] AND status IN ['in_window']`.
-- **`root_cause_needs_support_and_attack`** -- `conclusion.ready` may become `true` only when the row has at least 1 `supports` edge from a `fact` row, and has at least 1 `attacks` edge from a `critique` row, and has no `attacks` edge from a `critique` row where `verdict = 'fatal'`, and has no `attacks` edge from a `critique` row where `verdict = 'damaging' AND answered = false`.
+- **`confirmed_needs_source_grade`** -- `fact.status` may become `confirmed` only when the row has at least 1 `cites` edge to a `unit` row where `grade IN ['official_text', 'original_log', 'exported_metric'] AND status IN ['in_window']`.
+- **`root_cause_needs_support_and_attack`** -- `conclusion.ready` may become `true` only when the row has at least 1 `supports` edge from a `fact` row, and has at least 1 `attacks` edge from a `critique` row, and has at least 1 `preserves` edge from a `unit` row, and has no `attacks` edge from a `critique` row where `verdict = 'fatal'`, and has no `attacks` edge from a `critique` row where `verdict = 'damaging' AND answered = false`.
+- **`authority_verified_needs_official_text`** -- `authority.verified` may become `true` only when the row has at least 1 `verified_from` edge to a `unit` row where `grade = 'official_text' AND status IN ['in_window']`.
 
-Gate ids in this instance: `confirmed_needs_source_grade`, `root_cause_needs_support_and_attack`. These are human-owned (`human_owned:` in `instance.yaml`); no agent may edit them.
+Gate ids in this instance: `confirmed_needs_source_grade`, `root_cause_needs_support_and_attack`, `authority_verified_needs_official_text`. These are human-owned (`human_owned:` in `instance.yaml`); no agent may edit them.
 
 ## Tools
 

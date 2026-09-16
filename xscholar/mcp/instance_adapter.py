@@ -130,7 +130,7 @@ class GenericAdapter(contract.InstanceAdapter):
         supporters = self._sql("SELECT status, string::concat(<string> id) AS fact FROM %s<-supports<-fact" % cid, expect=1)[0]
         attacks = self._sql("SELECT verdict, answered, lens, head, string::concat(<string> id) AS critique FROM %s<-attacks<-critique" % cid,
                             expect=1)[0]
-        problems, counts = write.readiness_problems(self.db, ident)
+        problems, counts = write.readiness_problems(self.db, ident, self.inst)
         return {"id": str(cid), "kind": "conclusion", "statement": row.get("statement"), "ready": bool(row.get("ready")),
                 "supporting_facts": supporters, "attacks": attacks, "counts": counts, "blocking_now": problems}
 
@@ -181,7 +181,7 @@ class GenericAdapter(contract.InstanceAdapter):
         if verdict not in gates.CRITIQUE_VERDICTS:
             raise contract.InvalidArgument("verdict must be one of %s" % ", ".join(gates.CRITIQUE_VERDICTS))
         cid = self._writer(provenance).critique(target, head, verdict, text=text, lens=lens)
-        problems, _ = write.readiness_problems(self.db, target)
+        problems, _ = write.readiness_problems(self.db, target, self.inst)
         return {"critique": cid, "target": rid("conclusion", target), "verdict": verdict, "by": provenance.by(),
                 "blocking_now": problems}
 
@@ -192,7 +192,7 @@ class GenericAdapter(contract.InstanceAdapter):
             raise contract.NotFound("no critique %r (or it attacks nothing)" % critique)
         aid = self._writer(provenance).answer(cid, answer)
         target = rows[0].split(":", 1)[1]
-        problems, _ = write.readiness_problems(self.db, target)
+        problems, _ = write.readiness_problems(self.db, target, self.inst)
         return {"answer": aid, "critique": cid, "target": rows[0], "by": provenance.by(), "blocking_now": problems}
 
     def claim_propose(self, provenance, slug, statement, reasoning_type="inference", note=None):
@@ -221,7 +221,7 @@ class GenericAdapter(contract.InstanceAdapter):
         self._exists("fact", slug)
         self._exists("conclusion", conclusion)
         self._writer(provenance).support(slug, conclusion)
-        problems, _ = write.readiness_problems(self.db, conclusion)
+        problems, _ = write.readiness_problems(self.db, conclusion, self.inst)
         return {"fact": rid("fact", slug), "conclusion": rid("conclusion", conclusion), "by": provenance.by(),
                 "blocking_now": problems}
 

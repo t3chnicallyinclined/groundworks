@@ -180,7 +180,7 @@ def main(argv=None):
         if inst.access_roles():
             applied = conn.script(access.access_surql(inst))
             say("access", "%d role(s) -> PERMISSIONS on %d table(s), applied as root (%d statements)"
-                % (len(inst.access_roles()), len(access.TABLES), len(applied)))
+                % (len(inst.access_roles()), len(access.tables(inst)), len(applied)))
         else:
             say("access", "no access: section; every scenario step will run as root (nothing separates identities)")
 

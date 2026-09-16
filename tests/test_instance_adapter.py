@@ -133,7 +133,13 @@ class GenericAdapterTests(unittest.TestCase):
         with self.assertRaises(contract.NotFound):
             self.ad.critique_add(SEAT, "rc_nope", "lens_skeptic", "x", "damaging")
         ans = self.ad.critique_answer(PROV, crit["critique"], "p99 stayed flat; the pool filled from retries")
-        self.assertEqual(ans["blocking_now"], [])
+        # V2-8: the last thing standing is a clause on an edge the CONFIG declared, and the adapter
+        # describes it from the clause rather than handing back the datastore's raw ASSERT text
+        self.assertEqual(ans["blocking_now"],
+                         ["0 of 1 `preserves` edge(s) (rule root_cause_needs_support_and_attack)"])
+        with self.assertRaises(contract.GateRejected):
+            self.ad.conclusion_mark_ready(PROV, "rc_pool_exhaustion")
+        self.db.sql("RELATE unit:log_001->preserves->conclusion:rc_pool_exhaustion SET how='alert'")
         self.assertTrue(self.ad.conclusion_mark_ready(PROV, "rc_pool_exhaustion")["ready"])
         con = self.ad.claim_explain("conclusion:rc_pool_exhaustion")
         self.assertTrue(con["ready"])

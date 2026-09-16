@@ -39,3 +39,22 @@ Each folder maps the general method onto one domain: the eight answers, the evid
   7. one role run
 
   Scale only after the label-agreement sample.
+
+- **To add a node table or an edge type your domain needs:** put it in your own `instance.yaml` under
+  `tables:` / `edges:` (shape and limits: `_template/instance.yaml`, worked example:
+  `demo-incident/instance.yaml`). Do not edit engine code for it. Declared and built-in run the same
+  code path: schema, gate clauses, probes in both directions, `access:` PERMISSIONS, probe cleanup and
+  the generated role skills. Grant the new table or edge to a role in `access:` or nothing but root
+  can write it.
+
+- **Every instance owns a gate baseline, and it is per instance.** `instances/<name>/gate_baseline.json`
+  pins that instance's own rules and the probe flags they earned; `tests/test_gate_baseline.py` reads
+  every `instances/*/gate_baseline.json` there is, so an instance that ships one is checked on every
+  run. An instance with no baseline is not checked at all. After any deliberate change to your gates,
+  `tables:` or `edges:`, regenerate yours at a terminal:
+
+      python -m xscholar.gates instances/<name>/instance.yaml --apply --url <throwaway db> --write-baseline instances/<name>/gate_baseline.json
+
+  then read the diff (that review is the point of the file) and prove it can still fail: delete one
+  clause from a copy of the config and check that `--baseline` exits 1 and names it. Only a human at a
+  terminal may write a baseline; no script or CI job may.

@@ -31,6 +31,28 @@ SURREAL = surreal_bin.find()
 PORT = 8023
 
 
+def declared_instance(base):
+    """The demo config plus a node table and an edge type of its own, and a rule that uses both.
+
+    Nothing here is known to the engine: `event`, `mentions`, `stance` and `kind` appear in no engine
+    module. If any of it works, it works because the config declared it."""
+    data = json.loads(json.dumps(base.data))
+    data["tables"] = {"event": {"fields": {"when": "string",
+                                           "kind": {"type": "string", "one_of": ["deploy", "alert", "page"]}}}}
+    data["edges"]["mentions"] = {
+        "from": "unit", "to": "event",
+        "fields": {"stance": {"type": "string", "one_of": ["supports", "disputes", "neutral"]},
+                   "speaker": {"type": "string", "optional": True}}}
+    data["gates"].append({"id": "event_kind_needs_a_source_grade_mention", "table": "event",
+                          "field": "kind", "value": "deploy",
+                          "requires": [{"edge": "mentions", "from": ["unit"],
+                                        "where": "grade IN $confirming AND status IN $usable", "min": 1}],
+                          "forbids": [{"edge": "mentions", "where": "status = 'redacted'"}]})
+    data["access"]["roles"]["coordinator"]["read"].append("event")
+    data["access"]["roles"]["coordinator"]["write"] += ["event", "mentions"]
+    return config.load(data)
+
+
 class GenerationTests(unittest.TestCase):
     def setUp(self):
         self.inst = config.load(DEMO)
@@ -64,6 +86,55 @@ class GenerationTests(unittest.TestCase):
                 self.assertTrue(plan["create"] and plan["relate"] and plan["remove"], plan)
                 self.assertTrue(plan["present"].startswith("RETURN count("), plan["present"])
         self.assertTrue(forbidding, "the demo's readiness rule forbids two things")
+
+    def test_a_declared_table_and_edge_reach_the_schema(self):
+        """Declared once in the config; defined in the datastore with their enumerations enforced."""
+        text = gates.schema_surql(declared_instance(self.inst))
+        self.assertIn("DEFINE TABLE OVERWRITE event SCHEMAFULL;", text)
+        self.assertIn("DEFINE FIELD OVERWRITE kind ON event TYPE string ASSERT $value IN "
+                      "['deploy', 'alert', 'page'];", text)
+        self.assertIn("DEFINE TABLE OVERWRITE mentions TYPE RELATION IN unit OUT event SCHEMALESS;", text)
+        self.assertIn("DEFINE FIELD OVERWRITE stance ON mentions TYPE string ASSERT $value IN "
+                      "['supports', 'disputes', 'neutral'];", text)
+        self.assertIn("DEFINE FIELD OVERWRITE speaker ON mentions TYPE option<string>;", text)
+        # the built-ins are untouched by an instance declaring its own
+        self.assertIn("DEFINE TABLE OVERWRITE unit SCHEMAFULL;", text)
+        self.assertNotIn("event", gates.schema_surql(self.inst))
+
+    def test_a_declared_edge_is_probed_exactly_like_a_built_in_one(self):
+        """Same reject/accept pair, same wrong-evidence probe for a `where`, same forbidden-evidence
+        probe. A declared edge that generated no probe would be a gate nothing ever tested."""
+        inst = declared_instance(self.inst)
+        probe = [p for p in gates.probes(inst) if p["rule"] == "event_kind_needs_a_source_grade_mention"][0]
+        self.assertIn("CREATE event:zz_probe_event_kind_needs_a_source_grade_mention SET", probe["setup"][1])
+        self.assertIn("kind='alert'", probe["setup"][1])      # not 'deploy': the value under test
+        self.assertEqual(probe["attempt"],
+                         "UPDATE event:zz_probe_event_kind_needs_a_source_grade_mention SET kind = 'deploy';")
+        self.assertTrue(probe["constrained"])
+        self.assertTrue(all(p["built"] for p in probe["evidence"]), probe["evidence"])
+        self.assertTrue(all(p["built"] for p in probe["wrong_plans"]), probe["wrong_plans"])
+        self.assertTrue(all(p["built"] for p in probe["forbidden"]), probe["forbidden"])
+        self.assertTrue(probe["fix"] and probe["wrong"])
+        # the relation carries the field the instance declared required, and not the optional one
+        relate = [s for s in probe["fix"] if s.startswith("RELATE")]
+        self.assertEqual(len(relate), 1, probe["fix"])
+        self.assertIn("->mentions->", relate[0])
+        self.assertIn("SET stance='supports'", relate[0])
+        self.assertNotIn("speaker", relate[0])
+
+    def test_probe_cleanup_names_every_table_the_instance_has(self):
+        """Cleanup built from a fixed list would leave a declared table's rows in the database, and
+        the next run would probe against them."""
+        inst = declared_instance(self.inst)
+        for probe in gates.probes(inst):
+            for table in inst.tables():
+                self.assertTrue(any(stmt.startswith("DELETE %s " % table) for stmt in probe["cleanup"]),
+                                "%s: nothing cleans up %s" % (probe["rule"], table))
+            self.assertLess(probe["cleanup"].index("DELETE mentions WHERE record::id(in) CONTAINS "
+                                                   "'zz_probe_%s' OR record::id(out) CONTAINS 'zz_probe_%s';"
+                                                   % (probe["rule"], probe["rule"])),
+                            [i for i, s in enumerate(probe["cleanup"]) if s.startswith("DELETE event ")][0],
+                            "edges must go before the rows they join")
 
     def test_unknown_edge_and_wrong_direction_are_refused(self):
         rule = {"id": "x", "table": "fact", "field": "status", "value": "confirmed",
@@ -123,10 +194,99 @@ class ServerTests(unittest.TestCase):
                          len([r for r in self.inst.gate_rules() if r.get("forbids")]), report)
         # every node table a probe can write, and every edge table it can relate over: the
         # forbidden-evidence probe writes rows the old cleanup list did not name
-        for table in ("unit", "label", "fact", "conclusion", "critique", "answer", "authority"):
+        for table in self.inst.node_tables():
             self.assertEqual(conn.count(table), 0, "probe rows left behind in %s" % table)
-        for edge in gates.EDGES:
+        for edge in self.inst.edge_map():
             self.assertEqual(conn.count(edge), 0, "probe edges left behind in %s" % edge)
+
+    def test_a_declared_table_and_edge_are_enforced_and_leave_nothing_behind(self):
+        """The whole contract on a real datastore: an instance's own table and edge get a schema,
+        a gate, probes in every direction, and cleanup -- with no engine edit behind them."""
+        inst = declared_instance(self.inst)
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="declared")
+        conn.script(gates.schema_surql(inst))
+        conn.script(gates.gate_surql(inst))
+        report = gates.run_probes(inst, conn)
+        self.assertEqual(report["misbehaved"], 0, json.dumps(report, indent=2))
+        self.assertEqual(report["rejected_ok"], len(inst.gate_rules()))
+        self.assertEqual(report["accepted_ok"], len(inst.gate_rules()))
+        self.assertEqual(report["forbids_untested"], 0, report)
+        self.assertEqual(report["requires_untested"], 0, report)
+        entry = [r for r in report["rules"] if r["rule"] == "event_kind_needs_a_source_grade_mention"][0]
+        self.assertTrue(entry["wrong_evidence_reject"], entry)
+        self.assertTrue(entry["forbidden_evidence_reject"], entry)
+        for table in inst.tables():
+            self.assertEqual(conn.count(table), 0, "probe rows left behind in %s" % table)
+        # the declared enumeration is the datastore's, not a guide's
+        conn.sql("CREATE event:e1 SET when='now', kind='alert';")
+        ok, _ = conn.try_sql("UPDATE event:e1 SET kind = 'something_else'")
+        self.assertFalse(ok, "a value outside the declared one_of was accepted")
+        conn.sql("DELETE event:e1")
+
+    def test_v2_8_readiness_needs_preservation_and_a_recorded_exception_is_visible(self):
+        """ROADMAP V2-8, expressed in the demo config: unpreserved refused, preserved accepted,
+        a recorded exception accepted and still readable afterwards."""
+        conn = self.fresh("preservation")
+        def conclusion(name):
+            conn.sql("CREATE conclusion:%s SET statement='s', ready=false;" % name)
+            conn.sql("CREATE fact:%s_f SET statement='s', status='proposed';" % name)
+            conn.sql("RELATE fact:%s_f->supports->conclusion:%s;" % (name, name))
+            conn.sql("CREATE critique:%s_c SET lens='l', head='h', verdict='survivable', answered=true;" % name)
+            conn.sql("RELATE critique:%s_c->attacks->conclusion:%s;" % (name, name))
+        conn.sql("CREATE unit:v8u SET type='log_line', text='t', locator={p: 1}, status='in_window', "
+                 "grade='original_log', hash='h';")
+        conclusion("v8a")
+        ok, message = conn.try_sql("UPDATE conclusion:v8a SET ready=true")
+        self.assertFalse(ok, "a conclusion nothing preserves was marked ready")
+        self.assertIn("preserves", message)
+        conn.sql("RELATE unit:v8u->preserves->conclusion:v8a SET how='alert';")
+        ok, message = conn.try_sql("UPDATE conclusion:v8a SET ready=true")
+        self.assertTrue(ok, message)
+
+        conclusion("v8b")                     # the recorded exception: nothing captured it, and we say so
+        conn.sql("RELATE unit:v8u->preserves->conclusion:v8b SET how='not_captured';")
+        ok, message = conn.try_sql("UPDATE conclusion:v8b SET ready=true")
+        self.assertTrue(ok, "a recorded exception must be accepted: %s" % message)
+        self.assertEqual(conn.sql("SELECT VALUE how FROM preserves WHERE out = conclusion:v8b", expect=1)[0],
+                         ["not_captured"], "the exception must stay visible, not vanish into a bare edge")
+        ok, _ = conn.try_sql("RELATE unit:v8u->preserves->conclusion:v8b SET how='made_up'")
+        self.assertFalse(ok, "a `how` outside the declared list was accepted")
+
+    def test_v2_9_the_existence_of_a_citation_never_verifies_an_authority(self):
+        """ROADMAP V2-9. The refused citation here is usable AND carries a confirming grade: the only
+        thing wrong with it is that it is not the official text."""
+        conn = self.fresh("authority_official_text")
+        conn.sql("CREATE authority:v9 SET citation='c', verified=false;")
+        conn.sql("CREATE unit:v9_log SET type='log_line', text='t', locator={p: 1}, status='in_window', "
+                 "grade='original_log', hash='h';")
+        conn.sql("RELATE authority:v9->verified_from->unit:v9_log SET read_by='probe';")
+        ok, message = conn.try_sql("UPDATE authority:v9 SET verified=true")
+        self.assertFalse(ok, "a citation to a non-official-text unit verified an authority")
+        self.assertIn("official_text", message)
+        conn.sql("CREATE unit:v9_stale SET type='log_line', text='t', locator={p: 2}, "
+                 "status='out_of_window', grade='official_text', hash='h';")
+        conn.sql("RELATE authority:v9->verified_from->unit:v9_stale SET read_by='probe';")
+        ok, _ = conn.try_sql("UPDATE authority:v9 SET verified=true")
+        self.assertFalse(ok, "official text that is not usable still verified an authority")
+        conn.sql("CREATE unit:v9_src SET type='log_line', text='t', locator={p: 3}, status='in_window', "
+                 "grade='official_text', hash='h';")
+        conn.sql("RELATE authority:v9->verified_from->unit:v9_src SET read_by='probe';")
+        ok, message = conn.try_sql("UPDATE authority:v9 SET verified=true")
+        self.assertTrue(ok, message)
+
+    def test_a_setup_that_cannot_write_its_row_is_reported_not_raised(self):
+        """Before this, a CREATE the datastore refused ended the whole run with a traceback, so the
+        other rules were never probed at all and the run had no report to show for it."""
+        conn = self.fresh("bad_setup")
+        conn.sql("DEFINE FIELD OVERWRITE statement ON fact TYPE string "
+                 "ASSERT string::len($value) > 1000;")     # nothing the probe writes can satisfy this
+        report = gates.run_probes(self.inst, conn)
+        self.assertEqual(len(report["rules"]), len(self.inst.gate_rules()), "the run stopped early")
+        entry = [r for r in report["rules"] if r["rule"] == "confirmed_needs_source_grade"][0]
+        self.assertTrue(entry["setup_error"], entry)
+        self.assertIn("could not write the rows it needs", entry["setup_error"])
+        self.assertFalse(entry["behaved"])
+        self.assertGreaterEqual(report["misbehaved"], 1)
 
     def test_probes_catch_a_weakened_gate(self):
         conn = self.fresh("weak")
@@ -220,7 +380,7 @@ class ServerTests(unittest.TestCase):
                                             "the row the probe wrote does not match %s" % plan["clause"])
                     bland = "%s:zz_probe_%s_bland" % (plan["table"], rule["id"])
                     conn.sql(gates._create(bland, plan["table"], self.inst, unit_id=ids["ok"]))
-                    near, far = ((ids["row"], bland) if rule["table"] == gates.EDGES[plan["edge"]][0]
+                    near, far = ((ids["row"], bland) if rule["table"] == self.inst.edge_map()[plan["edge"]][0]
                                  else (bland, ids["row"]))
                     conn.sql("RELATE %s->%s->%s;" % (near, plan["edge"], far))
                     self.assertEqual(conn.sql(plan["present"], expect=1)[0], plan["count"],
@@ -478,6 +638,17 @@ class BaselineBlindSpotTests(unittest.TestCase):
         self.assertEqual(len(failures), len(rules), failures)
         self.assertTrue(all("no probe result" in f for f in failures), failures)
 
+    def test_repointing_a_declared_edge_at_another_table_is_a_weakening(self):
+        """Every clause reads the same and every minimum is the same; the edge now reaches somewhere
+        else, so every rule written on it gates something the baseline never saw."""
+        inst = declared_instance(self.inst)
+        baseline = {"instance": inst.id, "spec": gates.spec(inst), "report": {"rules": []}}
+        data = json.loads(json.dumps(inst.data))
+        data["edges"]["preserves"]["from"] = "critique"
+        failures = gates.compare_baseline(baseline, None, gates.spec(config.load(data)))
+        self.assertTrue(any("edge preserves now joins critique and conclusion" in f for f in failures),
+                        failures)
+
     def test_the_spec_half_still_works_with_no_report_at_all(self):
         self.assertEqual(gates.compare_baseline(self.baseline, None, gates.spec(self.inst)), [])
 
@@ -516,41 +687,98 @@ class ProbeShapeTests(unittest.TestCase):
         self.inst = config.load(DEMO)
 
     def test_the_wrong_evidence_probe_writes_evidence_that_really_is_wrong(self):
-        """`wrong` must cite the row built to be unusable. Citing the good row would make the sharper
-        probe a second copy of the accept probe: it would run, report a flag, and test nothing."""
-        confirming, usable = self.inst.confirming_grades(), self.inst.usable_statuses()
+        """The wrong-evidence row must carry values the clause EXCLUDES. A row that still matches
+        would make the sharper probe a second copy of the accept probe: it would run, report a flag,
+        and test nothing. Built per clause now, so it holds for a declared edge too."""
         checked = 0
-        for rule, probe in zip(self.inst.gate_rules(), gates.probes(self.inst)):
-            if not probe["constrained"]:
-                continue
-            checked += 1
-            ids = gates._probe_ids(rule)
-            self.assertTrue(probe["wrong"], probe["rule"])
-            for stmt in probe["wrong"]:
-                self.assertIn(ids["bad"], stmt)
-                self.assertNotIn(ids["ok"], stmt)
-            creation = [s for s in probe["setup"] if s.startswith("CREATE %s " % ids["bad"])]
-            self.assertEqual(len(creation), 1, probe["setup"])
-            grade = re.search(r"grade='([^']*)'", creation[0]).group(1)
-            status = re.search(r"status='([^']*)'", creation[0]).group(1)
-            self.assertNotIn(grade, confirming, "the wrong-evidence row carries a confirming grade")
-            self.assertNotIn(status, usable, "the wrong-evidence row carries a usable status")
-        self.assertTrue(checked, "the demo's promotion rule constrains its evidence")
+        for probe in gates.probes(declared_instance(self.inst)):
+            for plan in probe["wrong_plans"]:
+                checked += 1
+                self.assertTrue(plan["built"], "%s: %s" % (probe["rule"], plan["reason"]))
+                self.assertEqual(len(plan["create"]), plan["count"], plan)
+                terms, _ = gates._where_terms(plan["where"])
+                for creation in plan["create"]:
+                    written = dict(re.findall(r"(\w+)=('[^']*'|true|false|-?\d+)", creation))
+                    outside = [f for f, allowed in terms if written.get(f) not in allowed]
+                    self.assertTrue(outside, "%s: %s satisfies every term of %r, so the sharper probe "
+                                             "is a second copy of the accept probe"
+                                             % (probe["rule"], creation, plan["where"]))
+                    # and the fix row for the same clause satisfies it, or the pair means nothing
+                    fix = [p for p in probe["evidence"] if p["clause"] == plan["clause"]][0]
+                    for good in fix["create"]:
+                        kept = dict(re.findall(r"(\w+)=('[^']*'|true|false|-?\d+)", good))
+                        self.assertEqual([f for f, allowed in terms if kept.get(f) not in allowed], [], good)
+                    self.assertTrue(set(plan["rows"]).isdisjoint(fix["rows"]), (plan["rows"], fix["rows"]))
+        self.assertGreaterEqual(checked, 3, "the demo and the declared edge both constrain their evidence")
 
-    def test_a_constraint_on_an_edge_with_no_sharper_probe_is_reported_untested(self):
-        """Only `cites` clauses get a wrong-evidence probe. A constraint anywhere else must be
-        reported as untested, not silently treated as not applicable."""
+    def test_a_constraint_the_generator_cannot_turn_around_is_reported_untested(self):
+        """A wrong-evidence row exists only where the engine knows another value for the field the
+        clause pins. Where it does not -- a predicate it cannot read, or a field with no known set of
+        values -- the probe must be REPORTED untested, never treated as not applicable."""
+        for where, expected in (("string::len(statement) > 3", "field = literal"),
+                                ("author = 'someone'", "knows no other value for author")):
+            with self.subTest(where=where):
+                data = json.loads(json.dumps(self.inst.data))
+                for clause in data["gates"][1]["requires"]:
+                    if clause["edge"] == "supports":
+                        clause["where"] = where
+                moved = config.load(data)
+                probe = [p for p in gates.probes(moved)
+                         if p["rule"] == "root_cause_needs_support_and_attack"][0]
+                self.assertTrue(probe["constrained"], "a requires clause with a where constrains the evidence")
+                self.assertEqual(probe["wrong"], [], "a row was written for a clause it cannot fail")
+                self.assertFalse(probe["wrong_plans"][0]["built"])
+                self.assertIn(expected, probe["wrong_plans"][0]["reason"])
+                entry = {"rule": probe["rule"], "reject": True, "accept": True,
+                         "wrong_evidence_reject": None,
+                         "wrong_evidence": [{"clause": p["clause"], "built": p["built"],
+                                             "reason": p["reason"], "really_fails": None}
+                                            for p in probe["wrong_plans"]]}
+                self.assertFalse(gates.judge(entry, probe))
+                self.assertIn(where, entry["missing_probe"])
+                self.assertIn(expected, entry["missing_probe"])
+
+    def test_evidence_the_accept_probe_cannot_build_is_reported_untested(self):
+        """The accept half of the pair. A requires clause whose evidence cannot be built means the
+        accept probe proved nothing -- and a green run over it is the defect this file exists for."""
         data = json.loads(json.dumps(self.inst.data))
-        for clause in data["gates"][1]["requires"]:
-            if clause["edge"] == "supports":
-                clause["where"] = "status = 'confirmed'"
-        moved = config.load(data)
-        probe = [p for p in gates.probes(moved) if p["rule"] == "root_cause_needs_support_and_attack"][0]
-        self.assertTrue(probe["constrained"], "a requires clause with a where constrains the evidence")
-        self.assertEqual(probe["wrong"], [], "no wrong-evidence probe exists for a non-cites edge")
-        entry = {"rule": probe["rule"], "reject": True, "accept": True, "wrong_evidence_reject": None}
+        data["gates"][0]["requires"][0]["where"] = "grade = 'a' OR grade = 'b'"
+        probe = [p for p in gates.probes(config.load(data))
+                 if p["rule"] == "confirmed_needs_source_grade"][0]
+        self.assertFalse(probe["evidence"][0]["built"])
+        self.assertEqual(probe["fix"], [], "nothing may be written for a clause it cannot satisfy")
+        entry = {"rule": probe["rule"], "reject": True, "accept": False, "wrong_evidence_reject": None,
+                 "evidence": [{"clause": p["clause"], "built": False, "reason": p["reason"],
+                               "satisfied": None} for p in probe["evidence"]]}
         self.assertFalse(gates.judge(entry, probe))
-        self.assertIn("status = 'confirmed'", entry["missing_probe"])
+        self.assertIn("field = literal", entry["missing_accept_probe"])
+
+    def test_evidence_the_datastore_says_does_not_match_is_reported_untested(self):
+        """The rows were written, the write was accepted -- but the clause does not match them, so
+        the gate took the write for some other reason and the accept probe measured nothing."""
+        probe = {"constrained": False, "constraints": [], "forbids": []}
+        entry = {"rule": "r", "reject": True, "accept": True, "wrong_evidence_reject": None,
+                 "evidence": [{"clause": "supports", "built": True, "reason": "", "satisfied": False}]}
+        self.assertFalse(gates.judge(entry, probe))
+        self.assertIn("do not match the clause", entry["missing_accept_probe"])
+
+    def test_wrong_evidence_that_did_not_actually_fail_the_clause_is_reported(self):
+        """The mirror of `evidence_present` on the forbidden probe: a refusal met while the wrong
+        row still satisfies the clause is a refusal for some other reason."""
+        probe = {"constrained": True, "constraints": ["grade IN ['x']"], "forbids": []}
+        entry = {"rule": "r", "reject": True, "accept": True, "wrong_evidence_reject": True,
+                 "wrong_evidence": [{"clause": "cites where grade IN ['x']", "built": True,
+                                     "reason": "", "really_fails": False}]}
+        self.assertFalse(gates.judge(entry, probe))
+        self.assertIn("did not fail the clause", entry["missing_probe"])
+
+    def test_a_probe_whose_setup_failed_may_not_report_behaviour(self):
+        """Flags from a probe that never wrote the row it promotes describe some other row. The two
+        flags are set here on purpose: without the guard this entry reads as a working gate."""
+        entry = {"rule": "r", "reject": True, "accept": True, "wrong_evidence_reject": None,
+                 "setup_error": "the probe could not write the rows it needs: boom"}
+        self.assertFalse(gates.judge(entry, {"constrained": False, "constraints": [], "forbids": []}))
+        self.assertFalse(entry["behaved"])
 
 
     def test_a_forbids_clause_that_cannot_be_built_is_reported_untested(self):
