@@ -122,6 +122,19 @@ def load_panel(run):
         errors.append("thresholds.agreement must be at least 0.5 and below 1 (1 would switch the check off)")
     if not isinstance(th["dissent_quota"], int) or not 1 <= th["dissent_quota"] <= len(seats):
         errors.append("thresholds.dissent_quota must be an integer from 1 to the number of seats")
+    # Objection categories are required. Without them the category check was switched off in silence (any
+    # category passed) and dissent was keyed on normalised text, so "the same point al" and "the same point be"
+    # counted as two seats dissenting (measured 2026-09-16). A panel whose categories are fewer than its
+    # dissent quota could never satisfy the quota, so that is refused here rather than re-prompted forever.
+    raw_categories = cfg.get("objection_categories")
+    categories = ([str(c).strip().lower() for c in raw_categories]
+                  if isinstance(raw_categories, list) and all(isinstance(c, str) for c in raw_categories) else None)
+    if not categories or not all(categories) or len(set(categories)) != len(categories):
+        errors.append("objection_categories must be a list of distinct, non-empty category names: dissent and the "
+                      "agreement check are judged by category, and without the list neither can be checked")
+    elif isinstance(th["dissent_quota"], int) and len(categories) < th["dissent_quota"]:
+        errors.append("objection_categories has %d categories but thresholds.dissent_quota needs %d distinct ones"
+                      % (len(categories), th["dissent_quota"]))
     weights = dict(CONFIDENCE)
     weights.update(cfg.get("confidence_weights") or {})
     if (set(weights) != set(CONFIDENCE)
@@ -132,7 +145,7 @@ def load_panel(run):
         raise PanelError(2, "panel.json invalid: " + "; ".join(errors))
     cfg["options"] = options
     cfg["thresholds"] = th
-    cfg["categories"] = [str(c).strip().lower() for c in cfg.get("objection_categories") or []]
+    cfg["categories"] = categories
     cfg["ids"] = ids
     cfg["confidence"] = weights
     return cfg
@@ -232,7 +245,7 @@ def stance_ok(stance, cfg):
 
 def owed_prompt(condition, seat, detail, cfg):
     options = "|".join(cfg["options"] + ["abstain"])
-    cats = "|".join(cfg["categories"]) if cfg["categories"] else "short label"
+    cats = "|".join(cfg["categories"])
     return {
         "missing_answer": "No round-2 answer is on file for this seat. Run round 2 for it.",
         "missing_stance": ("End your answer with exactly one line, and no other STANCE line: "
@@ -248,9 +261,10 @@ def owed_prompt(condition, seat, detail, cfg):
         "dissent_quota": ("The panel has %s. State your strongest objection to the majority position, on a point no "
                           "other seat has raised: OBJECTION: <%s> | <the objection>." % (detail, cats)),
         "agreement_check": ("Most seats back '%s'. Assume that is wrong. Write round2/%s.counterfactual.md: the "
-                            "strongest alternative as OBJECTION: <%s> | <text> lines, and what evidence would flip "
-                            "the decision. This does not change your stance; to change it, revise your round-2 "
-                            "answer with a FLAW line." % (detail, seat, cats)),
+                            "strongest alternative as OBJECTION: <%s> | <text> lines, at least one of them (%d words "
+                            "or more) an objection your round-2 answer does not already make, and what evidence "
+                            "would flip the decision. This does not change your stance; to change it, revise your "
+                            "round-2 answer with a FLAW line." % (detail, seat, cats, MIN_FLAW_WORDS)),
     }[condition]
 
 
@@ -292,7 +306,8 @@ def anonymize(run):
 # ---- round 2 checks ------------------------------------------------------------------------------
 
 def objection_key(objection, cfg):
-    return objection["category"] if cfg["categories"] else norm(objection["text"])
+    """Dissent is counted by category: load_panel refuses a panel without categories."""
+    return objection["category"]
 
 
 def dissent_owed(cfg, r2):
@@ -333,8 +348,21 @@ def agreement_owed(run, cfg, r2):
         chosen = majority[:2]
         chosen_path.write_text(json.dumps({"option": top, "seats": chosen, "chosen_at": now()}, indent=2),
                                encoding="utf-8")
-    return [("agreement_check", sid, top) for sid in chosen
-            if not parse(read_answer(run, "round2", sid, ".counterfactual.md"))["objections"]]
+    return [("agreement_check", sid, top) for sid in chosen if not counterfactual_ok(run, cfg, sid)]
+
+
+def counterfactual_ok(run, cfg, sid):
+    """A counterfactual does its work only with an objection the seat has not already made.
+
+    Until 2026-09-16 the mere presence of one OBJECTION line satisfied it: `OBJECTION: vibes | x`, or a copy of
+    the seat's own round-2 objection, released the tally (measured). Now every objection must use a panel
+    category, and at least one must be MIN_FLAW_WORDS words or more and not already said in the seat's round-2
+    answer. Whether it differs in substance is still a judgement the program cannot make (PROTOCOL.md)."""
+    objections = parse(read_answer(run, "round2", sid, ".counterfactual.md"))["objections"]
+    if not objections or any(o["category"] not in cfg["categories"] for o in objections):
+        return False
+    own = norm(read_answer(run, "round2", sid) or "")
+    return any(len(words(o["text"])) >= MIN_FLAW_WORDS and norm(o["text"]) not in own for o in objections)
 
 
 def evaluate(run):
@@ -365,10 +393,9 @@ def evaluate(run):
                 owed.append(("flaw_required", sid, ""))
         if not any(len(words(n)) >= MIN_NEW_WORDS and norm(n) not in norm(t1) for n in p2["new"]):
             owed.append(("novelty_gate", sid, ""))
-        if cfg["categories"]:
-            bad = sorted({o["category"] for o in p2["objections"]} - set(cfg["categories"]))
-            if bad:
-                owed.append(("bad_objection", sid, ", ".join(bad)))
+        bad = sorted({o["category"] for o in p2["objections"]} - set(cfg["categories"]))
+        if bad:
+            owed.append(("bad_objection", sid, ", ".join(bad)))
     if len(r2) == len(cfg["ids"]):
         owed += dissent_owed(cfg, r2)
         if all(stance_ok(p["stance"], cfg) for p in r2.values()):

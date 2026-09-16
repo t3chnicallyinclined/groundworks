@@ -16,7 +16,7 @@ A panel never confirms anything. Its output is **lens-keyed overlay rows at agen
 | 2 | **Anti-conformity** | Seats drift toward the majority without a reason | A round-2 stance that differs from round 1 is refused unless a `FLAW:` line quotes the seat's **own round-1 words verbatim** (3+ words) | Sending the directive in the round-2 prompt |
 | 3 | **Locked before answers** | Choosing weights or seats after seeing positions lets the coordinator steer | `lock` hashes `panel.json` and refuses if any answer exists or a lock exists; every later command refuses if the file changed | Choosing seats and the weighted seat on the merits |
 | 4 | **Stance line, never inferred** | A tally built from prose impressions is not a count | Exactly one valid `STANCE:` line with an option from the locked list; otherwise a re-prompt is owed | Re-prompting only the named seat |
-| 5 | **Forced disagreement** | Easy agreement hides the objection that matters | **Dissent quota:** N seats each contribute an objection category no other counted seat used. **Novelty:** each round-2 answer has a `NEW:` line (5+ words) not found in its round-1 answer. **Agreement check:** above 70% on one option, the two least confident majority seats owe a counterfactual file with objections. `tally` refuses until all pass | Judging whether objections differ in substance, not just in category |
+| 5 | **Forced disagreement** | Easy agreement hides the objection that matters | **Dissent quota:** N seats each contribute an objection category no other counted seat used. **Novelty:** each round-2 answer has a `NEW:` line (5+ words) not found in its round-1 answer. **Agreement check:** above 70% on one option, the two least confident majority seats owe a counterfactual file whose objections all use a panel category, at least one of them three words or more and not already made in that seat's round-2 answer. `tally` refuses until all pass | Judging whether objections differ in substance, not just in category |
 
 **Result.** Confidence-weighted tally: base weight 1.0 (1.5 for the locked weighted seat) times confidence (high 1.0, med 0.75, low 0.5). The total uses base weights, so a hesitant panel raises its own bar. An option needs 2/3 of the total. Otherwise the result is a **split, returned to the human**; nobody writes a consensus. Dealbreaker dissents go in the minority report either way. Every run reports its enforcement counts.
 
@@ -51,6 +51,8 @@ runs/<panel_id>/
    {"id": "seat_deferential_judge", "lens": "lens_deferential_judge"},
    {"id": "seat_skeptic", "lens": "lens_skeptic", "aliases": ["the skeptic"]}]}
 ```
+
+**`objection_categories` is required**: a list of distinct names, at least as many as the dissent quota. Dissent is counted by category and the agreement check validates categories, so a panel without the list is refused at `lock` (until 2026-09-16 it silently accepted any category and counted dissent by wording).
 
 **Leave `thresholds` out** unless a human has decided otherwise; the defaults are exactly consensus 2/3, agreement 0.70, dissent quota 2. Do not write a rounded consensus such as `0.6667`: with three equal seats it raises the bar from 2.0 to 2.0001, so two high-confidence seats (2.0) can never reach consensus.
 
