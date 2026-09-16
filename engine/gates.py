@@ -29,7 +29,7 @@ EDGES = {
     "undercuts": ("fact", "conclusion"),
     "attacks": ("critique", "conclusion"),
     "answers": ("answer", "critique"),
-    "bears_on": ("label", "fact"),
+    "bears_on": ("label", "conclusion"),   # a label bears on a target; targets are conclusion rows
     "relies_on": ("conclusion", "authority"),
 }
 
