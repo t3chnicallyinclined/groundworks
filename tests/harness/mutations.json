@@ -1980,6 +1980,267 @@
     "tests.test_config.VerdictDefinitionTests.test_a_new_instance_starts_from_required_originals_owned_by_a_human"
    ],
    "needs_db": false
+  },
+  {
+   "id": "M300",
+   "guard": "license check: a tree with no Python file is NOT EXECUTED, never clean",
+   "defect": "checks lane 1",
+   "file": "scripts/license_check.py",
+   "anchor": "    if not counts[\"python_files\"] and not problems:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_license_check.ScannedNothingTests.test_a_tree_with_no_python_file_is_not_executed_and_a_run_prints_its_counts"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M301",
+   "guard": "license check: only `import `name`` in the notices allows an import",
+   "defect": "checks lane 1",
+   "file": "scripts/license_check.py",
+   "anchor": "IMPORT_NAME = re.compile(r\"\\bimport\\s+`",
+   "replacement": "IMPORT_NAME = re.compile(r\"`",
+   "must_fail": [
+    "tests.test_license_check.AllowlistTests.test_a_backticked_token_that_is_not_an_import_entry_allows_nothing"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M302",
+   "guard": "license check: a module elsewhere in the tree does not make a third-party name local",
+   "defect": "checks lane 1",
+   "file": "scripts/license_check.py",
+   "anchor": "    names = _modules_in(root)\n    if path is not None:",
+   "replacement": "    names = {p.stem for p in root.rglob(\"*.py\")}\n    if path is not None:",
+   "must_fail": [
+    "tests.test_license_check.AllowlistTests.test_a_module_elsewhere_in_the_tree_does_not_allow_a_third_party_import"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M303",
+   "guard": "license check: a directory a file puts on sys.path is local for that file",
+   "defect": "checks lane 1",
+   "file": "scripts/license_check.py",
+   "anchor": "            names |= _modules_in(directory)",
+   "replacement": "            pass",
+   "must_fail": [
+    "tests.test_license_check.AllowlistTests.test_a_directory_a_file_puts_on_sys_path_is_local_for_that_file_only"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M304",
+   "guard": "lookup hook: an unset XSCHOLAR_INSTANCE warns instead of printing nothing",
+   "defect": "checks lane 2",
+   "file": "xscholar/hooks/lookup.py",
+   "anchor": "        return NOT_RUN % \"XSCHOLAR_INSTANCE is not set, so no instance graph is attached to this session\"",
+   "replacement": "        return \"\"",
+   "must_fail": [
+    "tests.test_lookup_hook.LookupHookNeverSilentTests.test_an_unset_instance_warns_in_the_hook_output"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M305",
+   "guard": "lookup hook: input that is not JSON warns instead of printing nothing",
+   "defect": "checks lane 2",
+   "file": "xscholar/hooks/lookup.py",
+   "anchor": "        return NOT_RUN % (\"the hook input was not JSON (%s)\" % str(exc)[:80])",
+   "replacement": "        return \"\"",
+   "must_fail": [
+    "tests.test_lookup_hook.LookupHookNeverSilentTests.test_input_that_is_not_a_json_object_warns"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M306",
+   "guard": "lookup hook: JSON that is not an object warns instead of printing nothing",
+   "defect": "checks lane 2",
+   "file": "xscholar/hooks/lookup.py",
+   "anchor": "        return NOT_RUN % (\"the hook input was JSON %s, not an object with tool_input\" % type(payload).__name__)",
+   "replacement": "        return \"\"",
+   "must_fail": [
+    "tests.test_lookup_hook.LookupHookNeverSilentTests.test_input_that_is_not_a_json_object_warns"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M307",
+   "guard": "xscholar test passes the demo docs to the drift check's docs arm",
+   "defect": "checks lane 3",
+   "file": "xscholar/cli.py",
+   "anchor": "_stream([sys.executable, \"-m\", \"xscholar.drift\"] + list(DEMO) + list(DEMO_DOCS))",
+   "replacement": "_stream([sys.executable, \"-m\", \"xscholar.drift\"] + list(DEMO))",
+   "must_fail": [
+    "tests.test_skills_drift.DemoDocsArmTests.test_the_test_command_passes_the_demo_docs_and_a_drifted_doc_fails_the_run"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M308",
+   "guard": "CI passes the demo README to the drift check",
+   "defect": "checks lane 3",
+   "file": ".github/workflows/ci.yml",
+   "anchor": "instances/demo-incident/skills instances/demo-incident/README.md ",
+   "replacement": "instances/demo-incident/skills ",
+   "must_fail": [
+    "tests.test_skills_drift.DemoDocsArmTests.test_ci_passes_the_demo_readme_to_the_drift_check"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M309",
+   "guard": "drift docs arm: engine identifiers (lens_view, lens_bound) are not lens mentions",
+   "defect": "checks lane 3",
+   "file": "xscholar/drift.py",
+   "anchor": "if \"%s_%s\" % (kind, name) not in ENGINE_NAMES or name in known})",
+   "replacement": "if True})",
+   "must_fail": [
+    "tests.test_skills_drift.DemoDocsArmTests.test_the_real_demo_docs_are_clean_and_a_renamed_lens_in_them_is_drift",
+    "tests.test_skills_drift.DemoDocsArmTests.test_engine_identifiers_are_not_lens_mentions_and_a_doc_naming_none_is_drift"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M310",
+   "guard": "drift docs arm: a doc that names no lens or seat checked nothing and is drift",
+   "defect": "checks lane 3",
+   "file": "xscholar/drift.py",
+   "anchor": "        if not mentions:\n",
+   "replacement": "        if False:\n",
+   "must_fail": [
+    "tests.test_skills_drift.DemoDocsArmTests.test_engine_identifiers_are_not_lens_mentions_and_a_doc_naming_none_is_drift"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M311",
+   "guard": "panel: objection_categories are required and at least the dissent quota",
+   "defect": "checks lane 4b",
+   "file": "xscholar/panel/panel.py",
+   "edits": [
+    {
+     "anchor": "    if not categories or not all(categories) or len(set(categories)) != len(categories):",
+     "replacement": "    if False:"
+    },
+    {
+     "anchor": "    elif isinstance(th[\"dissent_quota\"], int) and len(categories) < th[\"dissent_quota\"]:",
+     "replacement": "    elif False:"
+    }
+   ],
+   "must_fail": [
+    "tests.test_panel.CategoriesRequiredTests.test_a_panel_without_categories_or_with_fewer_than_the_quota_is_not_executed"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M312",
+   "guard": "panel: dissent is counted by category, never by wording",
+   "defect": "checks lane 4b",
+   "file": "xscholar/panel/panel.py",
+   "anchor": "    return objection[\"category\"]\n",
+   "replacement": "    return norm(objection[\"text\"])\n",
+   "must_fail": [
+    "tests.test_panel.CategoriesRequiredTests.test_dissent_is_counted_by_category_never_by_wording"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M313",
+   "guard": "panel: a counterfactual objection outside the panel categories does not satisfy the agreement check",
+   "defect": "checks lane 4a",
+   "file": "xscholar/panel/panel.py",
+   "anchor": "    if not objections or any(o[\"category\"] not in cfg[\"categories\"] for o in objections):",
+   "replacement": "    if not objections:",
+   "must_fail": [
+    "tests.test_panel.CounterfactualContentTests.test_an_objection_outside_the_panel_categories_does_not_satisfy_it"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M314",
+   "guard": "panel: restating the seat's own round-2 objection does not satisfy the agreement check",
+   "defect": "checks lane 4a",
+   "file": "xscholar/panel/panel.py",
+   "anchor": " and norm(o[\"text\"]) not in own for o in objections)",
+   "replacement": " for o in objections)",
+   "must_fail": [
+    "tests.test_panel.CounterfactualContentTests.test_restating_the_seats_own_round2_objection_or_a_token_line_does_not_satisfy_it"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M315",
+   "guard": "panel: a token counterfactual objection (under three words) does not satisfy the agreement check",
+   "defect": "checks lane 4a",
+   "file": "xscholar/panel/panel.py",
+   "anchor": "    return any(len(words(o[\"text\"])) >= MIN_FLAW_WORDS and norm(",
+   "replacement": "    return any(norm(",
+   "must_fail": [
+    "tests.test_panel.CounterfactualContentTests.test_restating_the_seats_own_round2_objection_or_a_token_line_does_not_satisfy_it"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M316",
+   "guard": "temporal probes: history checks pass only on the append-only ASSERT's own refusal",
+   "defect": "checks lane 5a",
+   "file": "xscholar/temporal.py",
+   "anchor": "    return (\"for field `%s`\" % history_field) in message and \"must conform to\" in message",
+   "replacement": "    return history_field in message",
+   "must_fail": [
+    "tests.test_temporal.ServerTests.test_a_history_write_that_fails_for_any_other_reason_fails_the_append_only_probes"
+   ],
+   "needs_db": true,
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)"
+  },
+  {
+   "id": "M317",
+   "guard": "temporal probes: no conclusion.ready gate is reported NOT EXECUTED for the gated flip",
+   "defect": "checks lane 5b",
+   "file": "xscholar/temporal.py",
+   "anchor": "            report[\"not_executed\"].append(\"conclusion ready flip through its gate",
+   "replacement": "            [].append(\"conclusion ready flip through its gate",
+   "must_fail": [
+    "tests.test_temporal.ServerTests.test_a_config_with_no_ready_gate_says_the_gated_flip_was_not_probed"
+   ],
+   "needs_db": true,
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)"
   }
  ]
 }
