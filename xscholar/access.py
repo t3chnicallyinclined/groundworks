@@ -27,10 +27,12 @@ Rules the generated permissions hold, whatever the config says:
   * DELETE is NONE for every role: deletes go through the archive, by a human, as root;
   * the gates (ASSERTs from gates.py) stay in force for every credential: permissions never loosen a gate.
 
-Apply order: schema, gates, then access. Re-running the schema after access DOES reset permissions: its
-DEFINE TABLE OVERWRITE puts every table back to PERMISSIONS NONE (measured on 3.1.6, 2026-09-16; this said the
-opposite before), which locks every agent out without a word. Re-run access after any schema change, and run
-`python -m xscholar.live_schema` to see every table whose permissions are not what the config generates.
+Apply order: schema, gates, then access. Until 2026-09-16 re-running the schema after access reset permissions: its
+DEFINE TABLE OVERWRITE put every table back to PERMISSIONS NONE (measured on 3.1.6), locking every agent out
+without a word. The schema now re-shapes each table with ALTER TABLE, which keeps PERMISSIONS and CHANGEFEED
+(measured: a re-apply leaves every table definition identical; gates.table_definition). Re-running access after a
+config change is still what brings permissions in line with the config; `python -m xscholar.live_schema` shows
+every table whose permissions are not what the config generates.
 Standard library only.
 """
 import argparse

@@ -199,17 +199,18 @@
   },
   {
    "id": "M014",
-   "guard": "staged evidence behind an independent inner rule is reported, not built",
+   "guard": "staged evidence behind an independent inner rule that no probe credential could promote is reported, not built",
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B14 (scratch breaks.py)",
    "file": "xscholar/gates.py",
-   "anchor": "    if independent:\n        return None, None, (",
-   "replacement": "    if False:\n        return None, None, (",
+   "anchor": "        if role is None:\n            return None, None, (\"%s would have to be promoted past rule %s",
+   "replacement": "        if False:\n            return None, None, (\"%s would have to be promoted past rule %s",
    "must_fail": [
     "tests.test_gates.IndependenceDeclarationTests.test_staged_evidence_behind_an_independent_rule_is_reported_not_built"
    ],
-   "needs_db": false
+   "needs_db": false,
+   "note": "re-anchored 2026-09-16 (fix/gates, item 4): staged evidence behind an independence rule is now built on provisioned probe credentials (M260-M264); what is still reported, never built as root, is the case no access role could promote. The named test was rewritten to that case."
   },
   {
    "id": "M015",
@@ -1978,6 +1979,290 @@
    "replacement": "  mode: transition\n  store: originals\n",
    "must_fail": [
     "tests.test_config.VerdictDefinitionTests.test_a_new_instance_starts_from_required_originals_owned_by_a_human"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M250",
+   "guard": "every generated relation table is ENFORCED: a link to a missing record is refused",
+   "defect": "B-011",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "    shape = \"TYPE RELATION IN %s OUT %s ENFORCED SCHEMALESS\" % (src, dst)",
+   "replacement": "    shape = \"TYPE RELATION IN %s OUT %s SCHEMALESS\" % (src, dst)",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_every_generated_relation_table_is_enforced",
+    "tests.test_gates.GateFixServerTests.test_a_link_to_a_missing_record_is_refused_and_a_link_to_real_ones_is_taken"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M251",
+   "guard": "links stored before ENFORCED are counted by edge",
+   "defect": "B-011",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "        if n:\n            out[edge] = n",
+   "replacement": "        if False:\n            out[edge] = n",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_links_stored_before_enforcement_are_counted_by_name"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M252",
+   "guard": "a schema re-apply keeps a node table's PERMISSIONS and CHANGEFEED (ALTER, not OVERWRITE)",
+   "defect": "item 5",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "    return (\"DEFINE TABLE IF NOT EXISTS %s TYPE NORMAL SCHEMAFULL;\\nALTER TABLE %s TYPE NORMAL SCHEMAFULL;\"",
+   "replacement": "    return (\"DEFINE TABLE OVERWRITE %s SCHEMAFULL;%.0s\"",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_reapplying_the_schema_keeps_permissions_and_changefeeds"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M253",
+   "guard": "a schema re-apply keeps an edge table's PERMISSIONS and CHANGEFEED (ALTER, not OVERWRITE)",
+   "defect": "item 5",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "    return \"DEFINE TABLE IF NOT EXISTS %s %s;\\nALTER TABLE %s %s;\" % (edge, shape, edge, shape)",
+   "replacement": "    return \"DEFINE TABLE OVERWRITE %s %s;\" % (edge, shape)",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_reapplying_the_schema_keeps_permissions_and_changefeeds"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M254",
+   "guard": "config: a gate on a field with no enumerated domain is refused by name",
+   "defect": "B-014",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/config.py",
+   "anchor": "    if domain is None:\n        problems.append(\"%s: %s.%s has no enumerated domain",
+   "replacement": "    if False:\n        problems.append(\"%s: %s.%s has no enumerated domain",
+   "must_fail": [
+    "tests.test_gates.DomainRefusalTests.test_a_gate_on_a_field_with_no_enumerated_domain_is_refused_by_name"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M255",
+   "guard": "config: a gate value outside its field's domain is refused",
+   "defect": "B-014",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/config.py",
+   "anchor": "    elif gates._value_literal(rule[\"value\"]) not in [gates._value_literal(v) for v in domain]:",
+   "replacement": "    elif False:",
+   "must_fail": [
+    "tests.test_gates.DomainRefusalTests.test_a_gate_value_outside_its_field_domain_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M256",
+   "guard": "config: a clause comparing a field with no enumerated domain is refused",
+   "defect": "B-014",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/config.py",
+   "anchor": "                if values is None:\n                    problems.append(\"%s, which has no enumerated domain",
+   "replacement": "                if values is None:\n                    continue\n                    problems.append(\"%s, which has no enumerated domain",
+   "must_fail": [
+    "tests.test_gates.DomainRefusalTests.test_a_clause_comparing_a_field_with_no_domain_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M257",
+   "guard": "config: a clause comparing with a value outside the field's domain is refused",
+   "defect": "B-014",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/config.py",
+   "anchor": "                    if text not in allowed:",
+   "replacement": "                    if False:",
+   "must_fail": [
+    "tests.test_gates.DomainRefusalTests.test_a_clause_comparing_with_a_value_outside_the_domain_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M258",
+   "guard": "judge: a forbids-only rule's refusal is its forbidden-evidence refusal (no false alarm)",
+   "defect": "item 3",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "        entry[\"reject\"] = entry.get(\"forbidden_evidence_reject\") is True",
+   "replacement": "        pass",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_a_correct_forbids_only_rule_behaves_and_a_broken_one_does_not"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M259",
+   "guard": "a forbids-only rule's promotion is not attempted before the evidence probes (it would be taken)",
+   "defect": "item 3",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "                if not probe.get(\"forbids_only\"):",
+   "replacement": "                if True:",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_a_correct_forbids_only_rule_behaves_and_a_broken_one_does_not"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M260",
+   "guard": "staged evidence behind independence: the row is written by the proposer credential",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "    statements[0] = CredentialStatement(statements[0], inner, \"proposer\", stem)",
+   "replacement": "    pass",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_staged_evidence_behind_an_independent_rule_is_written_and_promoted_by_probe_credentials",
+    "tests.test_gates.GateFixServerTests.test_staged_evidence_behind_independence_is_probed_on_real_credentials"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M261",
+   "guard": "staged evidence behind independence: the promotion is made by the promoter credential",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "    statements.append(CredentialStatement(promotion, inner, \"promoter\", stem))",
+   "replacement": "    statements.append(promotion)",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_staged_evidence_behind_an_independent_rule_is_written_and_promoted_by_probe_credentials",
+    "tests.test_gates.GateFixServerTests.test_staged_evidence_behind_independence_is_probed_on_real_credentials"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M262",
+   "guard": "staged evidence behind own_evidence: the promoter creates a link of its own first",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "        statements.append(CredentialStatement(own, inner, \"promoter\", stem))",
+   "replacement": "        pass",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_staged_evidence_behind_an_independent_rule_is_written_and_promoted_by_probe_credentials",
+    "tests.test_gates.GateFixServerTests.test_staged_evidence_behind_independence_is_probed_on_real_credentials"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M263",
+   "guard": "a credential statement runs on its credential, not root",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "            return self.identities[stmt.stem][stmt.key].sql(stmt)",
+   "replacement": "            return self.db.sql(stmt)",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_staged_evidence_behind_independence_is_probed_on_real_credentials"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M264",
+   "guard": "staged evidence whose credentials cannot be provisioned is reported by name",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "                if staged_problem:\n                    entry[\"setup_error\"] = staged_problem",
+   "replacement": "                if False:\n                    entry[\"setup_error\"] = staged_problem",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_staged_evidence_without_credentials_to_sign_in_is_reported_by_name"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M265",
+   "guard": "originals probes promote an independence rule on provisioned credentials, not root",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/originals.py",
+   "anchor": "        writer, first, later = identities[\"proposer\"], identities[\"promoter\"], identities[\"promoter_b\"]",
+   "replacement": "        writer, first, later = db, db, db",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_originals_enforcement_is_probed_for_a_rule_needing_an_independent_promoter"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M266",
+   "guard": "originals probes: attempts after an accepted promotion use a second promoter",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/originals.py",
+   "anchor": "        writer, first, later = identities[\"proposer\"], identities[\"promoter\"], identities[\"promoter_b\"]",
+   "replacement": "        writer, first, later = identities[\"proposer\"], identities[\"promoter\"], identities[\"promoter\"]",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_originals_enforcement_is_probed_for_a_rule_needing_an_independent_promoter"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M267",
+   "guard": "originals probes: under own_evidence each promoter creates a link of its own",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/originals.py",
+   "anchor": "            for conn in (first, later):\n                conn.sql(link)",
+   "replacement": "            for conn in ():\n                conn.sql(link)",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_originals_enforcement_is_probed_for_a_rule_needing_an_independent_promoter"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M268",
+   "guard": "originals probes: an independence rule without credentials is reported by name",
+   "defect": "item 4",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/originals.py",
+   "anchor": "            entry[\"not_built\"] = (\"the rule requires an independent promoter and the probe could not provision the \"",
+   "replacement": "            entry[\"not_named\"] = (\"the rule requires an independent promoter and the probe could not provision the \"",
+   "must_fail": [
+    "tests.test_gates.GateFixServerTests.test_originals_probe_without_credentials_is_reported_by_name"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M269",
+   "guard": "no generator reads a database param (a DEFINE PARAM could loosen it unseen by the baseline)",
+   "defect": "item 6",
+   "commit": "fix/gates",
+   "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "        parts.append(\"%s >= %d\" % (_traversal(rule[\"table\"], clause, inst), int(clause.get(\"min\", 1))))",
+   "replacement": "        parts.append(\"%s >= $min_evidence\" % _traversal(rule[\"table\"], clause, inst))",
+   "must_fail": [
+    "tests.test_gates.ParamTests.test_no_generator_defines_or_reads_a_database_param"
    ],
    "needs_db": false
   }
