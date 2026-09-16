@@ -31,6 +31,20 @@ MISSING = ("SurrealDB binary not found. Install it (https://surrealdb.com/instal
            "XSCHOLAR_SURREAL to its path.")
 
 
+def free_port(host="127.0.0.1"):
+    """A port the OS reports free right now, for a server this process is about to start.
+
+    Suites used to hard-code ports in 8023-8039 and a registry test kept them apart. Ports collided with
+    other agents' servers at least four times in one day, each time as a skipped suite someone had to
+    chase. An OS-assigned port comes from the ephemeral range (49152+ on Windows, typically 32768+ on
+    Linux), so it can never be a live database's 8001-8003, and two concurrent runs of the same suite no
+    longer collide. There is still a window between choosing and binding; start_memory refuses a port
+    that is taken by then instead of borrowing it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
 def port_in_use(port, host="127.0.0.1"):
     """True if something is already listening. A test that finds a stranger on its port and uses it
     anyway is not testing anything: it inherits that database's rows and its schema. Measured once --

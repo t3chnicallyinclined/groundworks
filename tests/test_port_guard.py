@@ -39,8 +39,10 @@ def load_run_instance():
 # demo port, 8040 is CI's baseline port, 8001-8003 are live databases -- and 8050-8079 are handed to
 # agents for their own throwaway servers, which is why these moved out of that range: DOOMED asserts
 # its port is free, so an agent's server on 8053 would have failed this suite for no reason of its own.
-STRANGER = 8036
-DOOMED = 8037
+STRANGER = surreal_bin.free_port()    # OS-assigned, like every suite's port
+DOOMED = surreal_bin.free_port()
+while DOOMED == STRANGER:              # the OS may hand the same free port back twice
+    DOOMED = surreal_bin.free_port()
 
 
 class _Answers(http.server.BaseHTTPRequestHandler):
@@ -156,34 +158,36 @@ class PortGuardTests(unittest.TestCase):
                                         "port and stopping" % path.name)
         self.assertGreater(checked, 1, "no suite was examined; the walk found nothing to check")
 
-    def suite_ports(self):
-        ports = {}
+    def suite_port_assignments(self):
+        """name -> the AST node every module-level `PORT = ...` assigns."""
+        found = {}
         for path in sorted(ROOT.glob("tests/test_*.py")):
             for node in ast.parse(path.read_text(encoding="utf-8")).body:
                 if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PORT" for t in node.targets):
-                    ports.setdefault(node.value.value, []).append(path.name)
-        return ports
+                    found.setdefault(path.name, []).append(node.value)
+        return found
 
-    def test_no_two_suites_share_a_port(self):
-        ports = self.suite_ports()
-        self.assertTrue(ports)
-        for port, users in ports.items():
-            self.assertEqual(len(users), 1, "%s all use port %d" % (" and ".join(users), port))
+    def test_every_server_suite_takes_an_os_assigned_port(self):
+        """No suite hard-codes its port. The fixed registry (8023-8039, kept apart by a test) collided with
+        other agents' servers at least four times in one day, each time as a skipped suite, and two runs of
+        the same suite could never overlap. An OS-assigned port comes from the ephemeral range, so it can be
+        neither a live database's 8001-8003 nor another run's port."""
+        found = self.suite_port_assignments()
+        self.assertGreater(len(found), 1, "no suite assigns PORT; the walk found nothing to check")
+        for name, values in found.items():
+            with self.subTest(suite=name):
+                self.assertEqual(len(values), 1, "%s assigns PORT more than once" % name)
+                value = values[0]
+                is_free_port_call = (isinstance(value, ast.Call)
+                                     and getattr(value.func, "attr", getattr(value.func, "id", None)) == "free_port")
+                self.assertTrue(is_free_port_call, "%s hard-codes PORT = %s instead of surreal_bin.free_port()"
+                                % (name, ast.unparse(value)))
 
-    def test_no_suite_uses_a_port_that_belongs_to_something_else(self):
-        """8001-8003 are live databases and killing or writing into one has cost real data; 8025 is
-        the README demo port and 8040 is CI's baseline port. The suites own 8023-8034."""
-        # 8023-8039: the original 8023-8034 filled up (11 suites), so it was widened. The stand-in
-        # servers this file starts are reserved inside that window so no suite is handed one.
-        reserved = {8001: "a live database", 8002: "a live database", 8003: "a live database",
-                    8025: "the README demo port", 8040: "CI's gate-baseline port",
-                    STRANGER: "this file's stand-in stranger server", DOOMED: "this file's doomed-server port"}
-        for port, users in self.suite_ports().items():
-            with self.subTest(port=port):
-                self.assertNotIn(port, reserved, "%s uses %d, which is %s"
-                                 % (users[0], port, reserved.get(port)))
-                self.assertTrue(8023 <= port <= 8039, "%s uses %d, outside the suites' range 8023-8039"
-                                % (users[0], port))
+    def test_free_port_is_really_free_and_never_a_live_database(self):
+        seen = {surreal_bin.free_port() for _ in range(20)}
+        for port in seen:
+            self.assertNotIn(port, (8001, 8002, 8003), "the OS handed out a live database's port")
+            self.assertFalse(surreal_bin.port_in_use(port), "free_port returned a port something is listening on")
 
     def test_no_test_names_a_live_database_anywhere(self):
         """Not only `PORT = `: a URL string naming a live database in any test.

@@ -28,9 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 from xscholar import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
-PORT = 8023
-
-
+PORT = surreal_bin.free_port()   # OS-assigned (was 8023): suites no longer share a registry of fixed ports
 def declared_instance(base):
     """The demo config plus a node table and an edge type of its own, and a rule that uses both.
 

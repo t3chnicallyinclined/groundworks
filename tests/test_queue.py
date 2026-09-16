@@ -25,9 +25,7 @@ from xscholar import surreal_bin  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()
-PORT = 8033
-
-
+PORT = surreal_bin.free_port()   # OS-assigned (was 8033): suites no longer share a registry of fixed ports
 class ParsingTests(unittest.TestCase):
     """Pure Python, on records copied from SHOW CHANGES output on 3.1.6."""
 

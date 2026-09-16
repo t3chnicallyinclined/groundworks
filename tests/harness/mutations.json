@@ -1383,7 +1383,7 @@
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
    "file": "tests/harness/mutate.py",
-   "anchor": "            busy = sorted({p for p in (suite_port(tree, t) for t in entry[\"must_fail\"]) if p and port_in_use(p)})",
+   "anchor": "            busy = sorted({p for p in (suite_port(tree, t) for t in entry[\"must_fail\"])\n                           if isinstance(p, int) and port_in_use(p)})",
    "replacement": "            busy = []",
    "must_fail": [
     "tests.test_mutation_harness.RunOnAToyTreeTests.test_a_server_suite_whose_port_is_taken_is_not_executed_and_not_run"

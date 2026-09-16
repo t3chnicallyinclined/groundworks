@@ -43,7 +43,7 @@ from xscholar.pipeline import write  # noqa: E402
 ROOT = HERE.parent
 DEMO_DIR = ROOT / "instances" / "demo-incident"
 SURREAL = surreal_bin.find()
-PORT = 8039
+PORT = surreal_bin.free_port()   # OS-assigned (was 8039): suites no longer share a registry of fixed ports
 PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
 PROV = contract.Provenance("reader_test", "reader")
 

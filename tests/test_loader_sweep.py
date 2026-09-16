@@ -39,7 +39,7 @@ def _load(path):
     return module
 
 
-PORT = 8028
+PORT = surreal_bin.free_port()   # OS-assigned (was 8028): suites no longer share a registry of fixed ports
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident"
 SURREAL = surreal_bin.find()

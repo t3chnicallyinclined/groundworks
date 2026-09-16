@@ -34,7 +34,7 @@ from xscholar import surreal_bin  # noqa: E402
 from xscholar import temporal  # noqa: E402
 from xscholar.pipeline import write  # noqa: E402
 
-PORT = 8029
+PORT = surreal_bin.free_port()   # OS-assigned (was 8029): suites no longer share a registry of fixed ports
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()

@@ -24,7 +24,7 @@ from tests.test_independence_modes import RULE, mode_instance  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()
-PORT = 8035
+PORT = surreal_bin.free_port()   # OS-assigned (was 8035): suites no longer share a registry of fixed ports
 URL = "http://127.0.0.1:%d/sql" % PORT
 UNIT = ("CREATE unit:%s SET type='log_line', text='ok', locator={p: 1}, status='in_window', grade='%s', hash='h';")
 PROC = None

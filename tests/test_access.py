@@ -22,7 +22,7 @@ from xscholar.pipeline import write  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()
-PORT = 8032
+PORT = surreal_bin.free_port()   # OS-assigned (was 8032): suites no longer share a registry of fixed ports
 UNIT_OK = "CREATE unit:u_ok SET type='log_line', text='ok', locator={p: 1}, status='in_window', grade='original_log', hash='h';"
 
 

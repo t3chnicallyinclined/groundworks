@@ -25,7 +25,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 from xscholar import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
-PORT = 8031
+PORT = surreal_bin.free_port()   # OS-assigned (was 8031): suites no longer share a registry of fixed ports
 UTC = _dt.timezone.utc
 
 

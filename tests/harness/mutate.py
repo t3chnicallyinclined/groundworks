@@ -26,7 +26,7 @@ live tree. This makes that a program, and closes every trap those scripts had:
     machine, so a plain import from elsewhere reads the live, unmutated tree).
   - Bytecode is never written in the copy, so a restored file can never be shadowed by a mutant's .pyc
     written in the same second at the same size.
-  - Server tests: the suite's PORT is checked before running, runs are serial, and an OS lock stops two
+  - Server tests: each suite takes an OS-assigned port (a fixed one is checked first), runs are serial, and an OS lock stops two
     mutation runs on one machine at once. An occupied port is NOT EXECUTED, never borrowed.
 
 Exit: 0 every selected break killed; 1 any SURVIVED / INVALID / STILLBORN / PREFLIGHT FAILED / TIMEOUT;
@@ -275,8 +275,16 @@ def test_id_problem(root, test_id):
     return "%s: no class %s in %s" % (test_id, cls, path.name)
 
 
+OS_ASSIGNED = "os-assigned"
+
+
 def suite_port(root, test_id):
-    """The PORT a server suite declares, read from its source; None when it has none."""
+    """The PORT a server suite declares, read from its source; None when it declares none.
+
+    An int for a fixed port, or OS_ASSIGNED when the suite takes `surreal_bin.free_port()`. Every server
+    suite now takes an OS-assigned port (tests/test_port_guard.py enforces it), so there is nothing to
+    check in advance: the port is chosen when the suite imports, and a port taken by then makes
+    surreal_bin.start_memory refuse and the suite skip, which this runner reports as NOT EXECUTED."""
     parts = test_id.split(".")
     path = pathlib.Path(root, *parts[:-2]).with_suffix(".py")
     try:
@@ -284,9 +292,12 @@ def suite_port(root, test_id):
     except (OSError, SyntaxError):
         return None
     for node in tree.body:
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PORT" for t in node.targets) \
-                and isinstance(getattr(node, "value", None), ast.Constant):
-            return node.value.value
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PORT" for t in node.targets):
+            value = getattr(node, "value", None)
+            if isinstance(value, ast.Constant):
+                return value.value
+            if isinstance(value, ast.Call) and getattr(value.func, "attr", getattr(value.func, "id", None)) == "free_port":
+                return OS_ASSIGNED
     return None
 
 
@@ -553,7 +564,9 @@ def run(tree, entries, say=print):
             if not surreal_available():
                 rec["verdict"], rec["reason"] = NOT_EXECUTED, "SurrealDB binary not found"
                 continue
-            busy = sorted({p for p in (suite_port(tree, t) for t in entry["must_fail"]) if p and port_in_use(p)})
+            # only a FIXED port can be checked before the run; an OS-assigned one is chosen at import
+            busy = sorted({p for p in (suite_port(tree, t) for t in entry["must_fail"])
+                           if isinstance(p, int) and port_in_use(p)})
             if busy:
                 rec["verdict"], rec["reason"] = NOT_EXECUTED, "port(s) %s in use; a server suite will not borrow " \
                     "a server it did not start" % ", ".join(map(str, busy))
