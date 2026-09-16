@@ -167,7 +167,7 @@ class WriteTests(ServerCase):
         w = self.writer()
         with self.assertRaises(write.GateRefusal) as err:
             w.mark_ready("rc_pool_exhaustion")
-        self.assertIn("no supporting fact", str(err.exception))
+        self.assertIn("no confirmed supporting fact", str(err.exception))
         self.assertIn("never attacked", str(err.exception))
         w.propose("pool", "Pool exhausted", "direct_quote")
         w.confirm("pool", ["log_001"])

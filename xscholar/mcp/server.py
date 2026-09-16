@@ -42,7 +42,8 @@ from xscholar.mcp import panel_io  # noqa: E402
 from xscholar.present import render as present_render, features as present_features, policy as present_policy
 
 TOOL_NAMES = ("unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
-              "critique_add", "critique_answer", "panel_submit", "panel_status")
+              "critique_add", "critique_answer", "panel_submit", "panel_status",
+              "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready")
 IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 MAX_LIMIT = 200
 VIEWS = ("data",) + tuple(present_render.MODES)
@@ -295,6 +296,39 @@ def build_server(adapter, provenance, panel_root=None):
     def critique_answer(critique: str, answer: str) -> dict:
         return call("critique_answer", lambda: adapter.critique_answer(
             provenance, _required("critique", critique), _required("answer", answer)))
+
+    @server.tool(name="claim_propose", annotations=write, description=(
+        "Create a claim at status proposed, stamped with this server's launch identity. reasoning_type is one of "
+        "direct_quote, inference, structural_analogy, statistical, expert_judgment. Nothing is established by "
+        "proposing; cite units and call claim_confirm, or record what the source shows with claim_rule_out."))
+    def claim_propose(slug: str, claim: str, reasoning_type: str = "inference", note: str | None = None) -> dict:
+        return call("claim_propose", lambda: adapter.claim_propose(
+            provenance, _required("slug", slug), _required("claim", claim), reasoning_type, note or None))
+
+    @server.tool(name="claim_confirm", annotations=write, description=(
+        "Cite units (by id) for a proposed claim and ask the datastore to confirm it. The gate decides: on "
+        "rejected_by_gate, 'missing' says which grade and status a cited unit must have and what is cited now."))
+    def claim_confirm(slug: str, unit_ids: list[str] | None = None, note: str | None = None) -> dict:
+        return call("claim_confirm", lambda: adapter.claim_confirm(provenance, _required("slug", slug), unit_ids or [], note or None))
+
+    @server.tool(name="claim_rule_out", annotations=write, description=(
+        "Record an ELIMINATED claim: the statement that turned out false, what was tried, and what the source "
+        "actually shows. Never gated, and cheaper than a fact on purpose. Agents are shown these before repeating them."))
+    def claim_rule_out(slug: str, claim: str, tried: str, evidence: str) -> dict:
+        return call("claim_rule_out", lambda: adapter.claim_rule_out(
+            provenance, _required("slug", slug), _required("claim", claim), _required("tried", tried),
+            _required("evidence", evidence)))
+
+    @server.tool(name="claim_support", annotations=write, description=(
+        "Link a fact as support for a conclusion. Returns what still blocks the conclusion from being ready."))
+    def claim_support(slug: str, conclusion: str) -> dict:
+        return call("claim_support", lambda: adapter.claim_support(provenance, _required("slug", slug), _required("conclusion", conclusion)))
+
+    @server.tool(name="conclusion_mark_ready", annotations=write, description=(
+        "Ask the datastore to mark a conclusion ready. Refused unless it has a confirmed supporting fact, has been "
+        "attacked, has no fatal head standing and no damaging head unanswered; 'missing' says which."))
+    def conclusion_mark_ready(conclusion: str) -> dict:
+        return call("conclusion_mark_ready", lambda: adapter.conclusion_mark_ready(provenance, _required("conclusion", conclusion)))
 
     @server.tool(name="panel_submit", annotations=write, description=(
         "Save one panel seat's answer verbatim to round1/<seat>.md or round2/<seat>.md in a locked panel run "

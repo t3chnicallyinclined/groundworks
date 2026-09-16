@@ -159,6 +159,30 @@ class InstanceAdapter(abc.ABC):
     def critique_answer(self, provenance, critique, answer):
         """Record the answer to a critique. Returns {"critique", "target", "by", "blocking_now"}."""
 
+    # ---- claim lifecycle (OPTIONAL; the generic adapter implements all of them) ----------------
+    # An adapter that does not support one raises InvalidArgument, so the caller learns it is
+    # unsupported rather than getting an empty success.
+
+    def claim_propose(self, provenance, slug, statement, reasoning_type="inference", note=None):
+        """Create a claim at status proposed. Returns {"fact", "status", "by", "next"}."""
+        raise InvalidArgument("claim_propose is not supported by adapter %s" % self.name)
+
+    def claim_confirm(self, provenance, slug, unit_ids=None, note=None):
+        """Cite units, then ask the datastore to confirm. GateRejected names what is missing."""
+        raise InvalidArgument("claim_confirm is not supported by adapter %s" % self.name)
+
+    def claim_rule_out(self, provenance, slug, statement, tried, evidence):
+        """Record an eliminated claim with what was tried and what the source shows. Never gated."""
+        raise InvalidArgument("claim_rule_out is not supported by adapter %s" % self.name)
+
+    def claim_support(self, provenance, slug, conclusion):
+        """Link a fact as support for a conclusion. Returns what still blocks the conclusion."""
+        raise InvalidArgument("claim_support is not supported by adapter %s" % self.name)
+
+    def conclusion_mark_ready(self, provenance, conclusion):
+        """Ask the datastore to mark a conclusion ready. GateRejected names what is missing."""
+        raise InvalidArgument("conclusion_mark_ready is not supported by adapter %s" % self.name)
+
     # ---- presentation (OPTIONAL; engine/present renders what these return) ---------------------
 
     def present_rows(self, tool_name, result):
