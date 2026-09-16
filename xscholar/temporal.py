@@ -4,7 +4,8 @@
 Two time axes on every claim (roadmap B12, v0.2 item V2-2):
   valid time    `valid_from` / `valid_to` on fact: when the claim held in the source (supplied by the writer)
   transaction   `learned_at` (the moment the row was recorded) plus an append-only history the datastore
-                writes itself: `status_history` on fact, `ready_history` on conclusion. An event appends
+                writes itself: `status_history` on fact, `ready_history` on conclusion, `verdict_history` on
+                critique, `status_history` and `grade_history` on unit. An event appends
                 {status_before, status_after, at, by} only when the value actually changed, so a loader
                 re-write with the same status appends nothing.
 
@@ -52,6 +53,22 @@ TRACKED = {
                  "after": "verdict_after", "type": "option<string>", "event": "critique_verdict_history"},
 }
 
+# A unit's status and grade are the evidence axes every gate reads, and a change to either can take the
+# support out from under a confirmed fact. A reload used to put a human correction back silently
+# (loader.py, V2-19), so a correction -- and a reload that follows a real source change, and an accepted
+# source value -- is on the record too. Two tracked fields on one table, so these entries are keyed
+# `table.field` and name their table. A unit row has no `author`: the loader stamps `source` and a
+# correction stamps `corrected.<field>`, so `by` names whichever of those this write changed, and says
+# UNATTRIBUTED when it changed neither, rather than repeating whoever wrote the row last.
+_UNIT_BY = ("IF $after.corrected.{f} != $before.corrected.{f} AND $after.corrected.{f} != NONE "
+            "{{ <string> $after.corrected.{f}.by }} "
+            "ELSE IF $after.source != $before.source {{ 'loader|run=' + <string> $after.source.run }} "
+            "ELSE {{ 'UNATTRIBUTED: this write stamped neither source nor corrected.{f}' }}")
+for _field in ("status", "grade"):
+    TRACKED["unit." + _field] = {"table": "unit", "field": _field, "history": _field + "_history",
+                                 "before": _field + "_before", "after": _field + "_after", "type": "option<string>",
+                                 "event": "unit_%s_history" % _field, "by": _UNIT_BY.format(f=_field)}
+
 # append-only: the new array must be at least as long as the old one and start with it
 _APPEND_ONLY = ("array::len($value) >= array::len($before ?? []) "
                 "AND array::slice($value, 0, array::len($before ?? [])) = ($before ?? [])")
@@ -63,7 +80,13 @@ class TemporalError(Exception):
 
 # ---- surql -----------------------------------------------------------------------------------------
 
-def _history_block(table, spec, noop_guard=True):
+def _table(name):
+    """The table a tracked entry lives on: its key, unless the entry names one (`unit.status`)."""
+    return TRACKED[name].get("table", name)
+
+
+def _history_block(name, spec, noop_guard=True):
+    table = spec.get("table", name)
     field, hist = spec["field"], spec["history"]
     guard = "$before.%s != $after.%s" % (field, field) if noop_guard else "$before.%s = $after.%s" % (hist, hist)
     return [
@@ -76,8 +99,8 @@ def _history_block(table, spec, noop_guard=True):
         "DEFINE EVENT OVERWRITE %s ON TABLE %s" % (spec["event"], table),
         "  WHEN $event = 'UPDATE' AND %s" % guard,
         "  THEN {",
-        "    UPDATE $after.id SET %s += {%s: $before.%s, %s: $after.%s, at: time::now(), by: $after.author};"
-        % (hist, spec["before"], field, spec["after"], field),
+        "    UPDATE $after.id SET %s += {%s: $before.%s, %s: $after.%s, at: time::now(), by: %s};"
+        % (hist, spec["before"], field, spec["after"], field, spec.get("by", "$after.author")),
         "  };",
         "-- rows that existed before these fields were defined hold NONE and any later write on them would fail",
         "-- coercion; both fields are backfilled in ONE statement (setting one alone trips coercion on the other)",
@@ -102,8 +125,8 @@ def temporal_surql(inst, noop_guard=True):
              ""]
     if not noop_guard:
         lines.insert(1, "-- WARNING: no-op guard removed (test variant); same-status re-writes append entries")
-    for table, spec in TRACKED.items():
-        lines.extend(_history_block(table, spec, noop_guard))
+    for name, spec in TRACKED.items():
+        lines.extend(_history_block(name, spec, noop_guard))
     return "\n".join(lines) + "\n"
 
 
@@ -180,9 +203,10 @@ def as_of(db, table, ident, when):
     spec = _spec(table)
     when = to_datetime(when)
     extra = ", valid_from, valid_to" if table == "fact" else ""
+    record = _record(_table(table), ident)
     rows = db.sql("SELECT %s AS value, learned_at, %s AS history%s FROM %s"
-                  % (spec["field"], spec["history"], extra, _record(table, ident)), expect=1)[0]
-    out = {"table": table, "id": _record(table, ident), "field": spec["field"], "when": iso(when)}
+                  % (spec["field"], spec["history"], extra, record), expect=1)[0]
+    out = {"table": _table(table), "id": record, "field": spec["field"], "when": iso(when)}
     if not rows:
         out.update({"known": False, "reason": "no such row"})
         return out
@@ -213,7 +237,7 @@ def snapshot(db, when):
     out = {"when": iso(when)}
     for table, spec in TRACKED.items():
         rows = db.sql("SELECT %s AS value, learned_at, %s AS history FROM %s"
-                      % (spec["field"], spec["history"], table), expect=1)[0]
+                      % (spec["field"], spec["history"], _table(table)), expect=1)[0]
         counts, unknown = {}, 0
         for row in rows:
             if when < to_datetime(row["learned_at"]):
@@ -231,7 +255,7 @@ def history_count(db, table="fact"):
     """How many rows carry at least one history entry (the health line's `temporal` number)."""
     spec = _spec(table)
     rows = db.sql("SELECT count() AS n FROM %s WHERE array::len(%s ?? []) > 0 GROUP ALL"
-                  % (table, spec["history"]), expect=1)[0]
+                  % (_table(table), spec["history"]), expect=1)[0]
     return rows[0]["n"] if rows else 0
 
 

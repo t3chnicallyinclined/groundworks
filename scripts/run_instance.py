@@ -25,6 +25,7 @@ if __package__ in (None, ""):  # run as a plain script: make the repo root impor
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
 from xscholar import access  # noqa: E402
 from xscholar import config  # noqa: E402
+from xscholar import consistency  # noqa: E402
 from xscholar import db as dbmod  # noqa: E402
 from xscholar import gates  # noqa: E402
 from xscholar import lens as lensmod  # noqa: E402
@@ -149,7 +150,16 @@ def main(argv=None):
     parser.add_argument("--ns")
     parser.add_argument("--db")
     parser.add_argument("--labels", help="use these already-written label files (for example from agents) instead of the stub")
+    parser.add_argument("--accept-source", action="append", default=[], metavar="UNIT.FIELD",
+                        help="let the source replace a corrected unit status or grade; name each pair a human decided "
+                             "(repeatable). Without it a reload keeps every correction and reports each disagreement")
     args = parser.parse_args(argv)
+    accept_source = []
+    for pair in args.accept_source:
+        unit_id, _, field = pair.rpartition(".")
+        if not unit_id or not field:
+            parser.error("--accept-source takes UNIT.FIELD, got %r" % pair)
+        accept_source.append((unit_id, field))
     inst_dir = pathlib.Path(args.instance_dir)
     inst = config.load(inst_dir / "instance.yaml")
     out = inst_dir / "out"
@@ -169,7 +179,8 @@ def main(argv=None):
         conn.script(gates.gate_surql(inst))
         conn.script(temporal.temporal_surql(inst))
         say("temporal", "valid_from/valid_to, learned_at and an append-only status_history on fact; "
-                        "learned_at and ready_history on conclusion")
+                        "learned_at and ready_history on conclusion; verdict_history on critique; "
+                        "status_history and grade_history on unit")
         report = gates.run_probes(inst, conn)
         say("gates", "%d rule(s): %d rejected as required, %d accepted as required, %d misbehaved"
             % (len(report["rules"]), report["rejected_ok"], report["accepted_ok"], report["misbehaved"]))
@@ -228,9 +239,17 @@ def main(argv=None):
         if failures:
             return 1
 
-        counts = loader.load(out / "units.jsonl", labels_dir, conn, inst)
+        counts = loader.load(out / "units.jsonl", labels_dir, conn, inst, accept_source=accept_source)
         say("load", "%d units, %d labels (grade agent), %d targets, %d bears_on edges, %d swept"
             % (counts["units"], counts["labels"], counts["targets"], counts["edges"], counts["swept"]))
+        say("corrections", "%d unit field(s) followed a source change, %d held against the source, "
+                           "%d CONFLICT(S) with the source, %d accepted from source by name"
+            % (counts["followed"], counts["held"], counts["conflicts"], counts["accepted"]))
+        for row in counts["conflict_rows"]:
+            print("   CONFLICT unit %s %s: kept %r (%s, by %s); source says %r -- to take the source, "
+                  "re-run with --accept-source %s.%s"
+                  % (row["unit"], row["field"], row["corrected"], row["reason"], row["by"], row["source"],
+                     row["unit"], row["field"]))
 
         lensmod.apply(conn, inst)
         filed = lensmod.build_framework(conn, inst)
@@ -280,6 +299,10 @@ def main(argv=None):
             "conclusions_ready": conn.sql("SELECT count() AS n FROM conclusion WHERE ready = true GROUP ALL")[0],
             "critiques_unanswered": conn.sql("SELECT count() AS n FROM critique WHERE answered = false GROUP ALL")[0],
             "temporal": temporal.history_count(conn, "fact"),   # facts whose status has changed since learned
+            # every gate rule, not only the one DRIFT_confirmed_without_valid_cite hard-codes: rows at a gated
+            # value whose own gate no longer holds, next to how many rows stand at a gated value at all
+            "DRIFT_gate_no_longer_holds": {k: v for k, v in consistency.report(conn, inst).items() if k != "rules"},
+            "load_conflicts": counts["conflicts"],
             "DRIFT_confirmed_without_valid_cite": conn.sql(
                 "SELECT count() AS n FROM fact WHERE status = 'confirmed' AND "
                 "count(SELECT VALUE id FROM $parent->cites->unit WHERE grade IN %s AND status IN %s) = 0 GROUP ALL"
