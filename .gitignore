@@ -12,3 +12,8 @@ __pycache__/
 .venv/
 
 instances/*/out/
+
+# build artefacts from `pip install -e .` -- the README tells an agent to run that
+*.egg-info/
+build/
+dist/
