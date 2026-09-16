@@ -78,10 +78,14 @@ class VersionTests(unittest.TestCase):
 
     def test_the_version_url_is_derived_from_the_sql_url(self):
         asked = []
-        conn = dbmod.Db(url="http://127.0.0.1:8002/sql")
+        # Port 9 (discard), never a real one: 8001-8003 are live databases on the machine this was
+        # written on. `version` is stubbed so nothing connects today -- but a test naming a live
+        # database is one careless edit away from reading or writing it, which is how a fixture
+        # starts depending on live data.
+        conn = dbmod.Db(url="http://127.0.0.1:9/sql")
         conn.version = lambda: asked.append(conn.url) or "surrealdb-3.1.6"
         conn.version_problem()
-        self.assertEqual(asked, ["http://127.0.0.1:8002/sql"])
+        self.assertEqual(asked, ["http://127.0.0.1:9/sql"])
 
 
 if __name__ == "__main__":   # last, so running this file directly runs every class in it

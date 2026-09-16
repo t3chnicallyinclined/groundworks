@@ -77,6 +77,12 @@ Example `.mcp.json` entry (paths are placeholders):
 
 A client shares one server process across the agents it runs, so every write from that client carries the same identity. A seat or a critic with its own identity needs its own launch entry (slice 2 replaces this with per-agent credentials).
 
+**Check that the server is actually connected before trusting anything an agent says it did through it.** This fails silently, and it has happened on a real instance: a project-root `.mcp.json` is **not seen by a session launched in a subdirectory**, and a project whose MCP servers have never been through an approval prompt has them **not connected at all**. Neither case produces an error. The agent just has no XScholar tools. An agent that is not told the tools are missing may improvise the same work some other way, and nothing it writes then passes through the gates. Before relying on the server:
+
+1. Launch the session from the directory that holds `.mcp.json`, or put the entry where that client looks for its config.
+2. Confirm the tools are listed in the session (for example, that `health` is callable) **before** the first write.
+3. Call `health` once and read the result. A reply with the instance id you expect proves the server, the adapter and the datastore are all connected, not just the first of them.
+
 ## Design rules
 
 1. **No raw query tool, no delete tool, no tool that edits gates, thresholds, schema or tables.** Required by the method (gates are human-owned) and by SurrealDB's Business Source License boundary (`docs/LICENSING.md` section 1). `test_server.py` introspects the registered tools and fails on any such name or argument.

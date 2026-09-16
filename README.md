@@ -32,6 +32,7 @@ This repository contains **no client or matter data**, ever:
 | `docs/ARCHITECTURE.md` | The system: layers, invariants, what an instance supplies vs what is generated, each layer's fixed test, how to map a new domain, open design decisions |
 | `docs/TUNING.md` | Per layer: the knobs, defaults, how to measure a change, failure modes, measured starting points |
 | `docs/MODULES.md` | Engine modules, file contracts (units, labels, vocabulary, gate rules), modularity rules |
+| `docs/PATTERNS.md` | Designs from running a real instance that any instance can declare in config, with what was verified and their limits (first: contentions) |
 | `instances/` | 19 domain specs mapping the method (eight answers, evidence model, gates with probes, roles, lenses, evaluator, walkthrough, usage, synthetic worked example, pitfalls, module reuse) plus a template and `instance.yaml` schema |
 | `.claude/skills/design-instance/` | The skill that maps the method onto a new domain |
 | `xscholar/panel/` | Panel module: several lenses judge one target under a program-checked protocol (`PROTOCOL.md`, `panel.py`, tests, `NOTICE.md`) |

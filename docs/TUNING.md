@@ -2,6 +2,11 @@
 
 Every layer has knobs. This is what each one does, where to start, how to tell whether a change helped, and how it fails. **Rule for all of them: change one knob, run that layer's fixed test, keep or discard, and log the attempt.** Numbers marked *measured* come from real runs; treat them as starting points, not laws.
 
+**Two rules for every agent lane, whatever the layer.** Both come from a real instance in beta.
+
+1. **A lane saves its result before it returns.** It writes each row as it finds it, not at the end of the lane and not by a later stage. *Measured: three workflows lost whole stages to a usage limit on one day. Work survived only where agents had written rows as they went. A result held in an agent's reply is lost when the agent dies, and the stages after it never run.*
+2. **A stage whose job is to hold something back cannot sit after the point where the thing is written.** If a verifier is a later stage and it dies, nothing holds the promotion back. *Measured: a research lane wrote `verified` on authorities it had read once, meaning an adversarial verifier to run later. The verifier died on a usage limit, and 50 authorities went verified on a single reading.* The fix is structural, not a stronger prompt. The promotion belongs to a gate the datastore enforces, and the proposer must not be the promoter.
+
 ---
 
 ## L0/L1 Intake and evidence

@@ -14,6 +14,7 @@ import contextlib
 import http.server
 import importlib.util
 import pathlib
+import re
 import socket
 import sys
 import threading
@@ -34,10 +35,12 @@ def load_run_instance():
     return module
 
 
-# 8050 and up: throwaway ports for this suite's own stand-in servers. The suites own 8023-8034,
-# 8025 is the README demo port and 8040 is CI's baseline port; 8001-8003 are live databases.
-STRANGER = 8052
-DOOMED = 8053
+# Throwaway ports for this suite's own stand-in servers. The suites own 8023-8034, 8025 is the README
+# demo port, 8040 is CI's baseline port, 8001-8003 are live databases -- and 8050-8079 are handed to
+# agents for their own throwaway servers, which is why these moved out of that range: DOOMED asserts
+# its port is free, so an agent's server on 8053 would have failed this suite for no reason of its own.
+STRANGER = 8036
+DOOMED = 8037
 
 
 class _Answers(http.server.BaseHTTPRequestHandler):
@@ -178,6 +181,27 @@ class PortGuardTests(unittest.TestCase):
                                  % (users[0], port, reserved.get(port)))
                 self.assertTrue(8023 <= port <= 8034, "%s uses %d, outside the suites' range 8023-8034"
                                 % (users[0], port))
+
+    def test_no_test_names_a_live_database_anywhere(self):
+        """Not only `PORT = `: a URL string naming a live database in any test.
+
+        The check above reads PORT assignments only, and missed tests/test_db.py building
+        `Db(url="http://127.0.0.1:8002/sql")` -- 8002 being a live database. It never connected,
+        because `version` was stubbed. But a test that names live data is one careless edit away from
+        reading or writing it, and a beta tester's instance lost a check exactly that way: its
+        fixture was a real row, a research run changed it, and the test silently started passing
+        what it should have rejected."""
+        live = re.compile(r"(?:127\.0\.0\.1|localhost):(800[123])\b")
+        offenders = []
+        for path in sorted(ROOT.glob("tests/test_*.py")):
+            if path.name == "test_port_guard.py":
+                continue   # this file names them, to forbid them
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                for port in live.findall(line):
+                    offenders.append("%s:%d names live database port %s" % (path.name, number, port))
+        self.assertEqual(offenders, [], "\n".join(offenders))
 
 
 if __name__ == "__main__":
