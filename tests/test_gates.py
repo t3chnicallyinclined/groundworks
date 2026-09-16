@@ -293,6 +293,9 @@ class ServerTests(unittest.TestCase):
         # loosen: confirmed no longer needs any citation (what a careless edit would do)
         conn.sql("DEFINE FIELD OVERWRITE status ON fact TYPE string DEFAULT 'proposed' "
                  "ASSERT $value IN %s;" % gates._lit(gates.FACT_STATUSES))
+        # the rule is also an event (it holds for a caller who cannot read the evidence): a weakened gate
+        # has lost both, or it has not been weakened at all -- tests/test_tamper_evidence.py covers each alone
+        conn.sql("REMOVE EVENT %s ON TABLE fact;" % gates.gate_event_name({"id": "confirmed_needs_source_grade"}))
         report = gates.run_probes(self.inst, conn)
         bad = [r for r in report["rules"] if r["rule"] == "confirmed_needs_source_grade"][0]
         self.assertFalse(bad["reject"], "the weakened gate accepted a write it should refuse")
@@ -407,6 +410,22 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(rc, 2, text)
         self.assertIn("NOT EXECUTED", text)
 
+    def test_the_cli_applies_originals_enforcement_after_its_probes_and_can_run_again(self):
+        """`gates --apply` leaves the database enforcing originals, probed both ways. A second run on the same
+        database must still probe the gates -- in a scratch database, because the probe units carry no originals
+        and enforcement would refuse every accept for the wrong reason -- and leave the scratch database gone."""
+        rc, text = self.cli(db="cli_originals")
+        self.assertEqual(rc, 0, text[-3000:])
+        self.assertIn("ORIGINALS: enforcement applied on 3 rule(s): 6 refused as required, 6 accepted as required, "
+                      "0 misbehaved", text)
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="cli_originals")
+        events = conn.sql("INFO FOR TABLE fact")[0]["events"]
+        self.assertIn("confirmed_needs_source_grade_originals", events)
+        rc, text = self.cli(db="cli_originals")
+        self.assertEqual(rc, 0, text[-3000:])
+        self.assertIn("0 misbehaved (in scratch database cli_originals%s" % gates.SCRATCH_PROBE_SUFFIX, text)
+        self.assertNotIn("cli_originals" + gates.SCRATCH_PROBE_SUFFIX, conn.sql("INFO FOR NS")[0]["databases"])
+
     def test_the_cli_exits_0_against_the_committed_baseline(self):
         """The exact comparison CI runs; if this cannot pass, the mechanism is not usable."""
         rc, text = self.cli("--baseline", str(ROOT / "instances" / "demo-incident" / "gate_baseline.json"),
@@ -499,10 +518,95 @@ class ServerTests(unittest.TestCase):
         conn.script(gates.gate_surql(inst))
         conn.sql("DEFINE FIELD OVERWRITE disposition ON contention TYPE string "
                  "ASSERT $value IN ['verified', 'partly', 'open', 'not_in_record', 'ruled_out'];")
+        conn.sql("REMOVE EVENT %s ON TABLE contention;" % gates.gate_event_name({"id": StagedEvidenceTests.RULE}))
         report = gates.run_probes(inst, conn)
         entry = [r for r in report["rules"] if r["rule"] == StagedEvidenceTests.RULE][0]
         self.assertFalse(entry["behaved"], "a loosened gate on gated evidence reported green: %s" % entry)
         self.assertGreaterEqual(report["misbehaved"], 1)
+
+    def test_a_gated_built_in_field_still_refuses_a_value_outside_its_list(self):
+        """V2-22(a) on a real datastore: with a gate on unit.status and on unit.grade applied after the schema, a
+        value outside the config's lists is refused, and a value inside them is still taken."""
+        inst = built_in_field_gate_instance(self.inst)
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="builtin_field_gate")
+        conn.script(gates.schema_surql(inst))
+        conn.script(gates.gate_surql(inst))
+        usable, other = inst.usable_statuses()[0], [s for s in inst.status_values() if s not in inst.usable_statuses()][0]
+        conn.sql("CREATE unit:u1 SET type=%s, text='t', locator={}, status=%s, grade=%s, hash='h'"
+                 % (json.dumps(inst.unit_names()[0]), json.dumps(other), json.dumps(inst.grades()[1])))
+        for field in ("status", "grade"):
+            with self.subTest(field=field):
+                ok, message = conn.try_sql("UPDATE unit:u1 SET %s = 'not_a_value_the_config_allows'" % field)
+                self.assertFalse(ok, "unit.%s took a value outside its list once gated" % field)
+        ok, message = conn.try_sql("UPDATE unit:u1 SET grade = %s" % json.dumps(inst.grades()[2]))
+        self.assertTrue(ok, "a legal, ungated grade was refused: %s" % message)
+        ok, _ = conn.try_sql("UPDATE unit:u1 SET status = %s" % json.dumps(usable))
+        self.assertFalse(ok, "the gate itself stopped holding: an uncited unit reached %s" % usable)
+        # the demo's own gated fields keep their restrictions
+        demo = self.fresh("builtin_field_demo")
+        demo.sql("CREATE fact:f1 SET statement='s'; CREATE conclusion:c1 SET statement='s'; "
+                 "CREATE authority:a1 SET citation='c'")
+        for statement in ("UPDATE fact:f1 SET status = 'not_a_status'", "UPDATE conclusion:c1 SET ready = 'yes'",
+                          "UPDATE authority:a1 SET verified = 'yes'"):
+            with self.subTest(statement=statement):
+                ok, _ = demo.try_sql(statement)
+                self.assertFalse(ok, "accepted: %s" % statement)
+
+
+def built_in_field_gate_instance(base):
+    """The demo config plus a gate on unit.status and one on unit.grade: built-in fields whose enumerations come
+    from the config (`status.values`, `fidelity.order`), not from the engine. A unit reaches `in_window` or the
+    first grade only when a confirmed fact cites it. Nothing about the rule matters here except its field."""
+    data = json.loads(json.dumps(base.data))
+    for rule_id, field, value in (("unit_status_needs_a_confirmed_citation", "status", base.usable_statuses()[0]),
+                                  ("unit_grade_needs_a_confirmed_citation", "grade", base.grades()[0])):
+        data["gates"].append({"id": rule_id, "table": "unit", "field": field, "value": value,
+                              "requires": [{"edge": "cites", "where": "status = 'confirmed'", "min": 1}]})
+    return config.load(data)
+
+
+def final_field_definition(text, table, field):
+    """The LAST `DEFINE FIELD OVERWRITE <field> ON <table>` in applied order: the one the datastore keeps."""
+    found = [line for line in text.splitlines()
+             if re.match(r"^DEFINE FIELD OVERWRITE %s ON %s TYPE " % (re.escape(field), re.escape(table)), line)]
+    return found[-1] if found else None
+
+
+class BuiltInFieldGateTests(unittest.TestCase):
+    """ROADMAP V2-22(a). A gate is a DEFINE FIELD OVERWRITE applied after the schema, so it replaces the field's
+    whole definition. For a DECLARED field b52ea90 restated the type and `one_of`; a BUILT-IN field whose list
+    comes from the config was restated as a bare `TYPE string`, so a gate on unit.status kept the gate condition
+    and lost `$value IN [statuses]` -- the field then took any string."""
+
+    def setUp(self):
+        self.demo = config.load(DEMO)
+        self.inst = built_in_field_gate_instance(self.demo)
+        self.applied = gates.schema_surql(self.inst) + gates.gate_surql(self.inst)
+
+    def test_a_gated_built_in_field_keeps_the_enumeration_the_config_gives_it(self):
+        for field, values in (("status", self.inst.status_values()), ("grade", self.inst.grades())):
+            with self.subTest(field=field):
+                line = final_field_definition(self.applied, "unit", field)
+                self.assertIn("_needs_a_confirmed_citation", line, "the gate is not the final definition: %s" % line)
+                self.assertIn("$value IN %s" % gates._lit(values), line,
+                              "the gate replaced unit.%s and dropped its own list: %s" % (field, line))
+
+    def test_the_demo_gated_fields_keep_their_restrictions(self):
+        applied = gates.schema_surql(self.demo) + gates.gate_surql(self.demo)
+        fact = final_field_definition(applied, "fact", "status")
+        self.assertIn("$value IN %s" % gates._lit(gates.FACT_STATUSES), fact)
+        for table, field in (("conclusion", "ready"), ("authority", "verified")):
+            with self.subTest(field="%s.%s" % (table, field)):
+                line = final_field_definition(applied, table, field)
+                self.assertIn(" TYPE bool DEFAULT false ASSERT ", line)
+
+    def test_a_gate_on_a_field_the_engine_cannot_restate_is_refused_by_name(self):
+        data = json.loads(json.dumps(self.demo.data))
+        data["gates"].append({"id": "unknown_field_rule", "table": "fact", "field": "no_such_field", "value": "x",
+                              "requires": [{"edge": "cites", "min": 1}]})
+        with self.assertRaises(gates.GateError) as raised:
+            gates.gate_surql(config.load(data))
+        self.assertIn("unknown_field_rule", str(raised.exception))
 
 
 class LooseningTests(unittest.TestCase):

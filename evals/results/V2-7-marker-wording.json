@@ -1,0 +1,30 @@
+{
+ "eval_id": "V2-7-marker-wording",
+ "source": "notes/2026-09-16_marker_wording.md lines 109-128 (tables 'Reviewer results' and 'By error type', and the reviewer-level sentence); transcribed, not re-run",
+ "run": {
+  "started_at": "2026-09-16T06:01:06+00:00",
+  "started_at_note": "UNKNOWN exact start; this is the latest possible time, the author time of commit aa284c1 that reported the run",
+  "engine_commit": "aa284c1 (reporting commit; the experiment harness itself was not committed)",
+  "models": ["Claude Sonnet subagents (one model), not human readers"],
+  "design": "2 seeded copies (plant.py --per-type 2, seeds 7 and 23) x 3 arms x 2 reviewers = 12 sessions; 8 lookups each; 43-row document",
+  "contended": null,
+  "materials": {
+   "sha256": null,
+   "utf8_roundtrip": false,
+   "note": "the first render pass loaded rows in the platform default encoding, so a curly apostrophe reached every reviewer's document as mojibake (note line 201, defect D21); the renderings the reviewers actually read were not kept"
+  }
+ },
+ "arms": {
+  "A_control": {"k": 0, "n": 8, "clusters": [[0, 2], [0, 2], [0, 2], [0, 2]]},
+  "B_c20_wording": {"k": 2, "n": 8, "clusters": [[2, 2], [0, 2], [0, 2], [0, 2]]},
+  "C_c20_plus_counts": {"k": 2, "n": 8, "clusters": [[2, 2], [0, 2], [0, 2], [0, 2]]}
+ },
+ "unflattering": {
+  "overall_catch_rate_all_types": {"A_control": "23/40", "B_c20_wording": "24/40", "C_c20_plus_counts": "21/40"},
+  "false_alarms": {"A_control": 0, "B_c20_wording": 2, "C_c20_plus_counts": 0},
+  "verdict_soften_recall": {"A_control": "4/8", "B_c20_wording": "3/8", "C_c20_plus_counts": "0/8"},
+  "status_upgrade_targets_not_independent": "plant.py targeting is deterministic given the policy: both seeds upgraded the same two rows (note line 193)",
+  "reviewer_level": {"A_control": "0 of 4", "B_c20_wording": "1 of 4", "C_c20_plus_counts": "1 of 4"}
+ },
+ "anchors": null
+}

@@ -1,0 +1,14 @@
+{
+ "eval_id": "V2-7-marker-wording",
+ "written_at": "2026-09-16T18:00:00+00:00",
+ "retrofit_note": "RETROFIT. Written 2026-09-16 while migrating the measurement into the eval history, AFTER the run (the run predates commit aa284c1). The hypothesis is the one the note states under 'Why each was expected to help' (notes/2026-09-16_marker_wording.md); the smallest effect and minimum n are the ones docs/TESTING.md s.7 rule 4 names for this question. Nothing here was fixed before the data was seen, so record.py refuses it without --retrofit and may never adopt anything from it.",
+ "hypothesis": "Naming the defect and its remedy in the rule-fail marker (arm B), or adding hand-checkable counts to that (arm C), raises the rate at which reviewers report a planted status upgrade, compared with the shipped marker (arm A).",
+ "arms": ["A_control", "B_c20_wording", "C_c20_plus_counts"],
+ "baseline_arm": "A_control",
+ "primary_metric": "reviewer.status_upgrade.recall",
+ "unit_of_analysis": "planted status-upgrade error, clustered by reviewer session (2 planted per session): catches within one reviewer are not independent",
+ "smallest_effect": {"p_baseline": 0.10, "p_arm": 0.40},
+ "min_n_per_arm": 32,
+ "direction": "higher",
+ "decision_rule": "adopt a wording only if its 95% Wilson interval lies wholly above the control's, at n >= the minimum per arm, with materials that pass the UTF-8 round trip; overlapping intervals are no evidence"
+}

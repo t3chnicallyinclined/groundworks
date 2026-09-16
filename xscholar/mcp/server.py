@@ -44,7 +44,7 @@ from xscholar.present import render as present_render, features as present_featu
 TOOL_NAMES = ("unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
               "critique_add", "critique_answer", "panel_submit", "panel_status",
               "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready",
-              "lens_view")
+              "lens_view", "document_get")
 IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 MAX_LIMIT = 200
 VIEWS = ("data",) + tuple(present_render.MODES)
@@ -273,7 +273,10 @@ def build_server(adapter, provenance, panel_root=None):
 
     @server.tool(name="health", annotations=read, description=(
         "The graph audit: flattering and unflattering numbers side by side (unsupported promotions, drift, "
-        "open review items, one-sided conclusions), plus this server's launch identity." + VIEW_HELP))
+        "open review items, one-sided conclusions; the originals gap; live-schema drift against the config; the "
+        "promotion log verified, with its `late` count; promoted assertions that contradict their target), plus this "
+        "server's launch identity. A check that cannot run under this server's connection says NOT_EXECUTED, never 0."
+        + VIEW_HELP))
     def health(view: str = "data") -> dict:
         def run():
             return {"instance": adapter.health(),
@@ -281,6 +284,17 @@ def build_server(adapter, provenance, panel_root=None):
                                "identity": provenance.as_dict(), "tools": list(TOOL_NAMES),
                                "panel_root": str(panel_root) if panel_root else None}}
         return call_view("health", run, adapter, view)
+
+    @server.tool(name="document_get", annotations=read, description=(
+        "The original a unit was extracted from (ref: a unit id), or an original by its sha256 (ref: document:<sha256> "
+        "or the hex). Returns its metadata (sha256, media_type, bytes, capture, source_uri, retrieved_at, "
+        "original_name, integrity, how many units point at it), the unit's locator into it, and for a text original "
+        "the whole original under untrusted_source_text. The bytes are re-hashed on every read: a missing or corrupt "
+        "original is status error naming it, never served. Binary content (a scan, an image) is refused as "
+        "invalid_argument; call with include_content=false for its metadata. not_found: no such unit or document, "
+        "or the unit links to no retrievable original."))
+    def document_get(ref: str, include_content: bool = True) -> dict:
+        return call("document_get", lambda: adapter.document_get(_required("ref", ref), bool(include_content)))
 
     @server.tool(name="lens_view", annotations=read, description=(
         "The graph through one configured lens (health lists the lens names, kinds and backing grades). Returns "

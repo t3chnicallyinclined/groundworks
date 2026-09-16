@@ -25,10 +25,11 @@ Every result is an envelope: `{"status", "tool", "data"}` on success, or `{"stat
 | `unit_search(query, usable_only=true, limit=20, view="data")` | read | Keyword search over located units (plain words, not a query language) | ok (possibly empty), invalid_argument, db_unreachable |
 | `claim_explain(claim_id, view="data")` | read | Status, support with grades, adverse material, critiques, and in words everything that blocks readiness | ok, not_found, db_unreachable |
 | `eliminated_claims(about=None, view="data")` | read | Claims investigated and found false, shown as `ELIMINATED CLAIM (false)`, and failed approaches | ok (possibly empty), db_unreachable |
-| `health(view="data")` | read | The instance audit, plus the server's identity and tool list | ok, db_unreachable |
+| `health(view="data")` | read | The instance audit, plus the server's identity and tool list. For the generic adapter: counts by status, the originals gap (units without a verified original), live-schema drift (missing / altered / unexpected definitions against what the config generates; needs a root connection, else `NOT_EXECUTED`), the promotion log verified with its `late` count (or `off`), and contradicting assertions (or `none declared`) | ok, db_unreachable |
 | `critique_add(target, head, verdict, lens=None, text=None)` | write | One critique against a conclusion; returns what still blocks it | ok, not_found, rejected_by_gate, invalid_argument |
 | `critique_answer(critique, answer)` | write | The answer to a critique; returns what still blocks its target | ok, not_found, invalid_argument |
 | `panel_submit(run_dir, round, seat, text)` | write | Saves a seat's answer verbatim to `round1/` or `round2/<seat>.md`; logs `submissions.jsonl` | ok, rejected_by_gate, not_found, invalid_argument |
+| `document_get(ref, include_content=true)` | read | The original a unit was extracted from (`ref` a unit id), or an original by sha256: metadata (sha256, media type, bytes, capture, source, integrity, units pointing at it), the unit's locator into it, and a text original whole under `untrusted_source_text`. Re-hashed on every read. Binary content is refused; `include_content=false` returns its metadata | ok, not_found, invalid_argument (binary, or over 200000 characters), error (original missing or corrupt, named) |
 | `panel_status(run_dir)` | read | Phase and every re-prompt owed (from `panel.evaluate`), with the prompt text | ok, rejected_by_gate, not_found |
 
 `panel_status` after anonymization calls `panel.evaluate`, which may write `counterfactual.json` (the panel's agreement check). Nothing else in the read tools writes.
@@ -127,7 +128,7 @@ generic adapter and the instance config:
 
 Tools then available: `unit_get`, `unit_search`, `claim_explain`, `eliminated_claims`, `health`,
 `claim_propose`, `claim_confirm`, `claim_rule_out`, `claim_support`, `conclusion_mark_ready`,
-`critique_add`, `critique_answer`, `panel_submit`, `panel_status`. Every write is stamped with the
+`critique_add`, `critique_answer`, `panel_submit`, `panel_status`, `lens_view`, `document_get`. Every write is stamped with the
 launch identity; every gate refusal comes back as `rejected_by_gate` with `missing` naming what the
 datastore wants. A hand-written adapter (for an instance with its own schema) implements the read and
 critique methods and may leave the lifecycle methods unimplemented; the server then reports

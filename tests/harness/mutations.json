@@ -1,0 +1,1985 @@
+{
+ "doc": "Human-owned (METHOD s.15, docs/TESTING.md s.2). One named break per guard, each with the test that must go red on it. Entries may be added; removing or loosening one takes a human, and mutations_ids.json makes a removal fail `python -m tests.harness.mutate lint`. `source` says where the break was first proven by hand: a commit message, or a scratch script named in it. Every anchor is matched against a copy of the tree, never the live one.",
+ "mutations": [
+  {
+   "id": "M001",
+   "guard": "unique: a field the table does not have is refused at config load",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B1 (scratch breaks.py)",
+   "file": "xscholar/config.py",
+   "anchor": "            if str(field) not in known:",
+   "replacement": "            if False and str(field) not in known:",
+   "must_fail": [
+    "tests.test_gates.UniqueDeclarationTests.test_a_unique_field_the_table_does_not_have_is_refused_by_name"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M002",
+   "guard": "the built-in field list matches the schema (authority.source_grade)",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B2 (scratch breaks.py)",
+   "file": "xscholar/config.py",
+   "anchor": "\"authority\": {\"citation\": \"string\", \"verified\": \"bool\", \"source_grade\": \"string\"},",
+   "replacement": "\"authority\": {\"citation\": \"string\", \"verified\": \"bool\"},",
+   "must_fail": [
+    "tests.test_gates.UniqueDeclarationTests.test_the_built_in_field_list_matches_the_schema_it_validates_against"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M003",
+   "guard": "unique is human-owned when declared",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B3 (scratch breaks.py)",
+   "file": "xscholar/config.py",
+   "anchor": "HUMAN_OWNED_IF_PRESENT = [\"verdicts\", \"unique\", \"assertions\", \"promotion_log\"]",
+   "replacement": "HUMAN_OWNED_IF_PRESENT = [\"verdicts\", \"assertions\", \"promotion_log\"]",
+   "must_fail": [
+    "tests.test_gates.UniqueDeclarationTests.test_unique_is_human_owned_when_declared"
+   ],
+   "needs_db": false,
+   "note": "re-anchored 2026-09-16 (integration): the list gained assertions and promotion_log; the break still removes only unique"
+  },
+  {
+   "id": "M004",
+   "guard": "the baseline catches a removed unique field",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B4 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "            if field not in now_fields:",
+   "replacement": "            if False:",
+   "must_fail": [
+    "tests.test_gates.UniqueDeclarationTests.test_the_baseline_catches_a_removed_unique_field"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M005",
+   "guard": "the baseline reads unique probe results",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B5 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "        for key, was in old_unique.items():",
+   "replacement": "        for key, was in {}.items():",
+   "must_fail": [
+    "tests.test_gates.UniqueDeclarationTests.test_the_baseline_catches_a_unique_probe_that_went_quiet_or_red"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M006",
+   "guard": "probe rows get a distinct value for each unique field",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B6 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "    fields = _row_template(table, inst, unit_id=unit_id)\n    fields.update(_unique_overrides(table, row_id, inst))",
+   "replacement": "    fields = _row_template(table, inst, unit_id=unit_id)",
+   "must_fail": [
+    "tests.test_gates.UniqueDeclarationTests.test_probe_rows_of_one_table_never_collide_on_its_unique_index"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M007",
+   "guard": "the schema emits the unique index",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B7 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "    lines.extend(unique_surql(inst))\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_gates.ServerTests.test_a_unique_field_refuses_a_duplicate_and_takes_a_distinct_value"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M008",
+   "guard": "the unique probe reports a refusal only when the index refused",
+   "defect": "V2-20",
+   "commit": "dff134c",
+   "source": "dff134c B8 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "                result[\"duplicate_reject\"] = (not ok) and (\"`%s`\" % plan[\"index\"] in message) and absent",
+   "replacement": "                result[\"duplicate_reject\"] = True",
+   "must_fail": [
+    "tests.test_gates.ServerTests.test_the_unique_probe_goes_red_when_the_index_is_missing"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M009",
+   "guard": "config validates independence (credentials that can write the table)",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B9 (scratch breaks.py)",
+   "file": "xscholar/config.py",
+   "anchor": "                _validate_independent(data, rule, problems)",
+   "replacement": "                pass",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_independence_needs_credentials_that_can_write_the_table"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M010",
+   "guard": "gate_surql emits the independence event",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B10 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "    lines.extend(independence_surql(inst))\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_independence_is_an_event_over_a_record_the_caller_cannot_write",
+    "tests.test_access.ServerTests.test_a_proposer_cannot_promote_its_own_row_and_a_second_credential_can"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M011",
+   "guard": "an independence-only rule is not sent to gate_expression",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B11 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "            continue          # an independence-only rule has no clause to assert; its event is below",
+   "replacement": "            pass",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_an_independence_only_rule_is_allowed_and_asserts_no_clause"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M012",
+   "guard": "judge needs both independence refusals",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B12 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "edits": [
+    {
+     "anchor": "    if probe.get(\"independent\"):\n        # Both refusals",
+     "replacement": "    if False:\n        # Both refusals"
+    },
+    {
+     "anchor": "and entry.get(\"self_promotion_reject\") in ((True,) if probe.get(\"independent\") else (None, True))",
+     "replacement": "and True"
+    },
+    {
+     "anchor": "and entry.get(\"root_promotion_reject\") in ((True,) if probe.get(\"independent\") else (None, True))",
+     "replacement": "and True"
+    }
+   ],
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_judge_needs_both_independence_refusals"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M013",
+   "guard": "the baseline catches independence switched off",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B13 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "        if was.get(\"independent\") is True and now.get(\"independent\") is not True:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_the_baseline_catches_independence_switched_off_or_its_probe_going_red"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M014",
+   "guard": "staged evidence behind an independent inner rule is reported, not built",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B14 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "    if independent:\n        return None, None, (",
+   "replacement": "    if False:\n        return None, None, (",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_staged_evidence_behind_an_independent_rule_is_reported_not_built"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M015",
+   "guard": "the generated skill tells the agent who may promote",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B15 (scratch breaks.py)",
+   "file": "xscholar/skills.py",
+   "anchor": "        mode = config.independence_of(rule)\n        if mode:\n            parts.append(\"the change is made",
+   "replacement": "        mode = config.independence_of(rule)\n        if False:\n            parts.append(\"the change is made",
+   "must_fail": [
+    "tests.test_gates.IndependenceDeclarationTests.test_the_generated_skill_tells_the_agent_who_may_promote"
+   ],
+   "needs_db": false,
+   "note": "re-anchored 2026-09-16 (integration): independence is read through config.independence_of now; the break still drops the who-may-promote sentence"
+  },
+  {
+   "id": "M016",
+   "guard": "the event refuses a credential already on the record",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B16 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "OR $auth IN ($before.%s ?? []) { \"",
+   "replacement": "OR ('%s' = '' AND false) { \"",
+   "must_fail": [
+    "tests.test_access.ServerTests.test_a_proposer_cannot_promote_its_own_row_and_a_second_credential_can"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M017",
+   "guard": "written_by is computed by the datastore, not settable by the caller",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B17 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "\"DEFINE FIELD OVERWRITE %s ON %s TYPE array<record> VALUE array::union($before ?? [], \"\n                     \"IF $auth = NONE { [] } ELSE { [$auth] });\"",
+   "replacement": "\"DEFINE FIELD OVERWRITE %s ON %s TYPE array<record> DEFAULT [] \"\n                     \"ASSERT true;\"",
+   "must_fail": [
+    "tests.test_access.ServerTests.test_the_record_of_who_wrote_a_row_cannot_be_forged"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M018",
+   "guard": "a row no credential wrote cannot be promoted",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B18 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "OR array::len($before.%s ?? []) = 0 OR ",
+   "replacement": "OR ('%s' = '' AND false) OR ",
+   "must_fail": [
+    "tests.test_access.ServerTests.test_a_row_only_root_wrote_has_no_proposer_and_no_one_may_promote_it"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M019",
+   "guard": "the probe promotes on the promoter's credential, not root",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B19 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "                writer, promoter = identities[\"proposer\"], identities[\"promoter\"]",
+   "replacement": "                writer, promoter = identities[\"proposer\"], db",
+   "must_fail": [
+    "tests.test_access.ServerTests.test_the_generated_probe_proves_independence_both_ways_and_leaves_nothing_behind"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M020",
+   "guard": "the probe records an independence refusal only when that rule refused",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B20 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "                        entry[flag] = not ok and independence_rule_in(message) == rule_id",
+   "replacement": "                        entry[flag] = True",
+   "must_fail": [
+    "tests.test_access.ServerTests.test_the_probe_goes_red_when_independence_is_taken_out_of_the_datastore"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M021",
+   "guard": "a probe with no credentials is reported untested, never run as root",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B21 (scratch breaks.py)",
+   "file": "xscholar/gates.py",
+   "edits": [
+    {
+     "anchor": "            if identities is None:\n                entry[\"missing_independence_probe\"] = (",
+     "replacement": "            if identities is None:\n                entry[\"_unused\"] = ("
+    },
+    {
+     "anchor": "                if probe[\"independent\"] and identities is None:\n                    raise _NotRun()",
+     "replacement": "                if False:\n                    raise _NotRun()"
+    }
+   ],
+   "must_fail": [
+    "tests.test_access.ServerTests.test_without_credentials_to_sign_in_the_rule_is_reported_untested_by_name"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M022",
+   "guard": "the Writer explains an independence refusal as who is writing",
+   "defect": "D17",
+   "commit": "dff134c",
+   "source": "dff134c B22 (scratch breaks.py)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "        _raise_if_not_independent(message, rid(\"fact\", slug))\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_access.ServerTests.test_the_writer_explains_a_refusal_as_who_is_writing_not_as_missing_evidence"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M023",
+   "guard": "a gate whose evidence is itself gated is staged through the real inner gate",
+   "defect": "D14",
+   "commit": "fa0c668",
+   "source": "fa0c668 (scratch red_staged.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "    if not gating:\n        return [_create(row, table, inst, assignments, unit_id=ids[\"ok\"])], [], None",
+   "replacement": "    if True:\n        return [_create(row, table, inst, assignments, unit_id=ids[\"ok\"])], [], None",
+   "must_fail": [
+    "tests.test_gates.StagedEvidenceTests.test_the_gated_row_is_created_unpromoted_then_promoted_by_the_real_gate"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M024",
+   "guard": "staged evidence: the inner evidence is built before the promotion",
+   "defect": "D14",
+   "commit": "fa0c668",
+   "source": "fa0c668 (scratch red_staged.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "    statements = [_create(row, table, inst, assignments, unit_id=ids[\"ok\"])]\n    removals = []",
+   "replacement": "    statements = [_create(row, table, inst, assignments, unit_id=ids[\"ok\"]), \"UPDATE %s SET %s;\" % (row, \", \".join(\"%s = %s\" % kv for kv in promote.items()))]\n    removals = []",
+   "must_fail": [
+    "tests.test_gates.StagedEvidenceTests.test_the_gated_row_is_created_unpromoted_then_promoted_by_the_real_gate"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M025",
+   "guard": "nested probe rows carry the outer prefix so cleanup removes them",
+   "defect": "D14",
+   "commit": "fa0c668",
+   "source": "fa0c668 (scratch red_staged.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "        stem = prefix or \"zz_probe_%s\" % rule[\"id\"]",
+   "replacement": "        stem = \"zz_nested_%s\" % rule[\"id\"] if prefix else \"zz_probe_%s\" % rule[\"id\"]",
+   "must_fail": [
+    "tests.test_gates.StagedEvidenceTests.test_nested_rows_carry_the_outer_rule_prefix_so_cleanup_removes_them"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M026",
+   "guard": "a cycle of gated evidence stops at a depth limit",
+   "defect": "D14",
+   "commit": "fa0c668",
+   "source": "fa0c668 (scratch red_staged.py)",
+   "file": "xscholar/gates.py",
+   "anchor": "MAX_EVIDENCE_CHAIN = 4 ",
+   "replacement": "MAX_EVIDENCE_CHAIN = 10**9 ",
+   "must_fail": [
+    "tests.test_gates.StagedEvidenceTests.test_a_cycle_of_gated_evidence_is_reported_not_followed_forever"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M027",
+   "guard": "re-stating a critique head replaces its verdict (stable id)",
+   "defect": "D15",
+   "commit": "7733fd5",
+   "source": "7733fd5 (scratch red_verdict.py)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "edge_ids.edge_id(\"critique\", \"head\", conclusion, head)[-8:]",
+   "replacement": "self.keyer(\"write\", \"critique\", conclusion, head)[-8:]",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_re_stating_a_head_replaces_its_verdict_instead_of_adding_a_second"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M028",
+   "guard": "a critique is UPSERTed, so a later session can re-state it",
+   "defect": "D15",
+   "commit": "7733fd5",
+   "source": "7733fd5 (scratch red_verdict.py)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "self.db.sql(\"UPSERT %s SET lens=%s, head=%s, verdict=%s, text=%s, author=%s, \"\n                    \"answered = IF answered != NONE { answered } ELSE { false }\"",
+   "replacement": "self.db.sql(\"CREATE %s SET lens=%s, head=%s, verdict=%s, text=%s, author=%s, \"\n                    \"answered = false\"",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_a_later_session_can_re_state_the_head_at_all"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M029",
+   "guard": "a re-statement does not reset `answered`",
+   "defect": "D15",
+   "commit": "7733fd5",
+   "source": "7733fd5 (scratch red_verdict.py)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "\"answered = IF answered != NONE { answered } ELSE { false }\"",
+   "replacement": "\"answered = false\"",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_answering_survives_a_re_statement"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M030",
+   "guard": "a verdict downgrade is on the append-only record",
+   "defect": "D15",
+   "commit": "7733fd5",
+   "source": "7733fd5 (scratch red_verdict.py)",
+   "file": "xscholar/temporal.py",
+   "anchor": "    \"critique\": {\"field\": \"verdict\", \"history\": \"verdict_history\", \"before\": \"verdict_before\",",
+   "replacement": "    \"_critique_disabled\": {\"field\": \"verdict\", \"history\": \"verdict_history\", \"before\": \"verdict_before\",",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_a_downgrade_is_on_the_record_with_its_author_and_time"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M031",
+   "guard": "the demo verdict: a walkthrough the datastore never refused has not shown a gate working",
+   "defect": "D6",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": "scripts/run_instance.py",
+   "anchor": "    if not tally[\"refusals\"] and not tally[\"denials\"]:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_run_verdict.ScenarioVerdictTests.test_a_scenario_the_datastore_never_refused_has_not_shown_a_gate_working"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M032",
+   "guard": "the demo verdict: an empty graph is not a passing run",
+   "defect": "D6",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": "scripts/run_instance.py",
+   "anchor": "    if conn.count(\"fact\") == 0:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_run_verdict.ScenarioVerdictTests.test_an_empty_graph_is_not_a_passing_run"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M033",
+   "guard": "the privacy scan reads unknown extensions (deny list of binaries, not allow list of text)",
+   "defect": "D7",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": "scripts/privacy_scan.py",
+   "anchor": "        if f.suffix.lower() in BINARY_EXT:",
+   "replacement": "        if f.suffix.lower() not in {\".md\", \".txt\", \".py\", \".yaml\", \".json\"}:",
+   "must_fail": [
+    "tests.test_run_verdict.PrivacyScanTests.test_formats_the_old_allow_list_walked_past_are_read_now"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M034",
+   "guard": "the privacy scan is not clean over zero files",
+   "defect": "D7",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": "scripts/privacy_scan.py",
+   "anchor": "    if not scanned:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_run_verdict.PrivacyScanTests.test_a_scan_that_read_nothing_is_not_clean"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M035",
+   "guard": "CI declares pipefail for every step",
+   "defect": "D5",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": ".github/workflows/ci.yml",
+   "anchor": "shell: bash -euo pipefail {0}",
+   "replacement": "shell: bash -e {0}",
+   "must_fail": [
+    "tests.test_run_verdict.CiTests.test_a_failing_command_inside_a_pipe_fails_the_step"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M036",
+   "guard": "CI requires the database suites to run",
+   "defect": "D5",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": ".github/workflows/ci.yml",
+   "anchor": "python -m xscholar.cli test --require-db",
+   "replacement": "python -m xscholar.cli test",
+   "must_fail": [
+    "tests.test_run_verdict.CiTests.test_a_skipped_suite_fails_the_build"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M037",
+   "guard": "xscholar test runs the privacy scan",
+   "defect": "D7",
+   "commit": "6c54f25",
+   "source": "6c54f25 (scratch redproof.py)",
+   "file": "xscholar/cli.py",
+   "anchor": "str(ROOT / \"scripts\" / \"privacy_scan.py\")",
+   "replacement": "str(ROOT / \"scripts\" / \"license_check.py\")",
+   "must_fail": [
+    "tests.test_run_verdict.CiTests.test_the_privacy_scan_has_an_automated_caller"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M038",
+   "guard": "reconcile: a held field is not overwritten by the source (the V2-19 defect)",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if reason is None:                        # nobody corrected it: the source decides",
+   "replacement": "        if True:                        # nobody corrected it: the source decides",
+   "must_fail": [
+    "tests.test_load_corrections.ReconcileTests.test_a_held_field_is_not_set_and_its_disagreement_is_a_conflict"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M039",
+   "guard": "reconcile: a held value that differs from the source is a reported conflict",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if current != incoming:\n            plan[\"conflict\"].append(row)",
+   "replacement": "        if False:\n            plan[\"conflict\"].append(row)",
+   "must_fail": [
+    "tests.test_load_corrections.ReconcileTests.test_a_held_field_is_not_set_and_its_disagreement_is_a_conflict"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M040",
+   "guard": "reconcile: an uncorrected field still follows the source (nothing frozen)",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if reason is None:                        # nobody corrected it: the source decides",
+   "replacement": "        if False:                        # nobody corrected it: the source decides",
+   "must_fail": [
+    "tests.test_load_corrections.ReconcileTests.test_an_uncorrected_field_follows_a_source_change"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M041",
+   "guard": "accept_source is honoured for the pair a human named",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if (uid, field) in accept:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_accept_source_overwrites_only_the_pair_a_human_named"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M042",
+   "guard": "accept_source releases only the named pair, never every held pair",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if (uid, field) in accept:",
+   "replacement": "        if True:",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_accept_source_overwrites_only_the_pair_a_human_named"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M043",
+   "guard": "grade is held against the source as well as status",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "HELD_FIELDS = (\"status\", \"grade\")",
+   "replacement": "HELD_FIELDS = (\"status\",)",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_a_grade_correction_survives_and_its_conflict_is_reported"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M044",
+   "guard": "a unit write is guarded, so a correction landing mid-load stops the load",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "\"UPDATE %s SET %s WHERE %s\" % (rid(\"unit\", unit[\"id\"]), \", \".join(sets), guard)",
+   "replacement": "\"UPDATE %s SET %s\" % (rid(\"unit\", unit[\"id\"]), \", \".join(sets))",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_a_correction_landing_mid_load_stops_the_load_instead_of_being_overwritten"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M045",
+   "guard": "an acceptance that matches no hold is refused before writing",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "    if unused:\n        raise LoadError(",
+   "replacement": "    if False:\n        raise LoadError(",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_an_acceptance_that_matches_no_hold_is_refused_before_anything_is_written"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M046",
+   "guard": "a row with no provenance that differs is held, not read as a source change",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "            reason, by = ((\"no_provenance\", \"UNKNOWN: row predates load provenance\")\n                          if current != incoming else (None, None))",
+   "replacement": "            reason, by = (None, None)",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_a_row_loaded_before_provenance_existed_is_held_not_reverted"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M047",
+   "guard": "unit history names the corrector, never the row author",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/temporal.py",
+   "anchor": ", \"by\": _UNIT_BY.format(f=_field)}",
+   "replacement": "}",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_history_names_the_corrector_the_loader_and_an_unattributed_edit"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M048",
+   "guard": "the consistency query keeps its NOT",
+   "defect": "V2-19",
+   "commit": "a330b34",
+   "source": "a330b34 (message; scratch breaks_out.txt)",
+   "file": "xscholar/consistency.py",
+   "anchor": "\"NOT \" if negate else \"\"",
+   "replacement": "\"\"",
+   "must_fail": [
+    "tests.test_load_corrections.CorrectionServerTests.test_a_confirmed_fact_whose_cited_unit_became_unusable_is_reported"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M049",
+   "guard": "a run that read no label files does not sweep",
+   "defect": "D4",
+   "commit": "34960cf",
+   "source": "34960cf (message)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "    if not label_files:\n        counts[\"sweep\"] = (",
+   "replacement": "    if False:\n        counts[\"sweep\"] = (",
+   "must_fail": [
+    "tests.test_loader_sweep.SweepTests.test_an_empty_labels_directory_keeps_every_edge_and_says_so"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M050",
+   "guard": "a labels directory that does not exist is a LoadError, not an empty run",
+   "defect": "D4",
+   "commit": "34960cf",
+   "source": "34960cf (message)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if not labels_root.is_dir():",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_loader_sweep.SweepTests.test_a_missing_labels_directory_is_refused_not_treated_as_empty"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M051",
+   "guard": "compare_baseline: a rule pointed at another value/table/field is a weakening",
+   "defect": "D2",
+   "commit": "8a73fa4",
+   "source": "8a73fa4 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "        for part in (\"table\", \"field\", \"value\"):",
+   "replacement": "        for part in ():",
+   "must_fail": [
+    "tests.test_gates.BaselineBlindSpotTests.test_pointing_a_rule_at_another_value_is_a_weakening",
+    "tests.test_gates.BaselineBlindSpotTests.test_moving_a_rule_to_another_field_or_table_is_a_weakening"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M052",
+   "guard": "compare_baseline: a baseline that pins nothing is refused",
+   "defect": "D2",
+   "commit": "8a73fa4",
+   "source": "8a73fa4 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "    if not old_rules:\n        # A baseline that pins nothing",
+   "replacement": "    if False:\n        # A baseline that pins nothing",
+   "must_fail": [
+    "tests.test_gates.BaselineBlindSpotTests.test_a_baseline_that_pins_nothing_is_refused_not_read_as_unchanged"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M053",
+   "guard": "compare_baseline: two clauses that read the same are two requirements",
+   "defect": "D2",
+   "commit": "8a73fa4",
+   "source": "8a73fa4 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "            unmatched.remove(best)",
+   "replacement": "            pass",
+   "must_fail": [
+    "tests.test_gates.BaselineBlindSpotTests.test_two_clauses_that_read_the_same_are_two_requirements"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M054",
+   "guard": "compare_baseline: a rule that stopped producing a probe result is caught",
+   "defect": "D2",
+   "commit": "8a73fa4",
+   "source": "8a73fa4 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "            if rule_id in new_rules and rule_id not in now_entries:",
+   "replacement": "            if False:",
+   "must_fail": [
+    "tests.test_gates.BaselineBlindSpotTests.test_a_rule_that_stopped_producing_a_probe_result_is_caught"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M055",
+   "guard": "--write-baseline and --baseline on one file is refused",
+   "defect": "D2",
+   "commit": "8a73fa4",
+   "source": "8a73fa4 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "    if same_file:\n",
+   "replacement": "    if False:\n",
+   "must_fail": [
+    "tests.test_gates.CliBaselineTests.test_writing_and_comparing_the_same_file_in_one_run_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M056",
+   "guard": "start_memory does not trust a health answer from a server it did not start (SETTLE)",
+   "defect": "D3",
+   "commit": "8a73fa4",
+   "source": "8a73fa4 (message)",
+   "file": "xscholar/surreal_bin.py",
+   "anchor": "        time.sleep(SETTLE)\n        if proc.poll() is not None:",
+   "replacement": "        time.sleep(SETTLE)\n        if False:",
+   "must_fail": [
+    "tests.test_port_guard.PortGuardTests.test_start_memory_will_not_trust_a_health_answer_from_a_server_it_did_not_start"
+   ],
+   "needs_db": false,
+   "note": "the test binds stand-in servers on 8036/8037; if another process holds them the pre-flight fails by name; moved 2026-09-16 (integration) with the guard itself: run_instance.start_memory and evaluator.start_server both call surreal_bin.start_memory, the one implementation (docs/TUNING.md, third lane rule)"
+  },
+  {
+   "id": "M057",
+   "guard": "judge: a constrained rule whose wrong-evidence probe never ran is misbehaviour",
+   "defect": "D1",
+   "commit": "d636282",
+   "source": "d636282 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "    if probe[\"constrained\"] and (entry[\"wrong_evidence_reject\"] is None or failed_to_fail):",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_gates.LooseningTests.test_a_constrained_rule_without_its_sharper_probe_is_misbehaviour"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M058",
+   "guard": "compare_baseline: a rule gone from the config is a weakening",
+   "defect": "D1",
+   "commit": "d636282",
+   "source": "d636282 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "        if now is None:\n            failures.append(\"rule %s is in the baseline and gone from the config\" % rule_id)\n            continue",
+   "replacement": "        if now is None:\n            continue",
+   "must_fail": [
+    "tests.test_gates.LooseningTests.test_the_baseline_catches_a_removed_rule_and_a_lowered_minimum"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M059",
+   "guard": "compare_baseline: a lowered min is a weakening",
+   "defect": "D1",
+   "commit": "d636282",
+   "source": "d636282 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "            if best[\"min\"] < clause[\"min\"]:",
+   "replacement": "            if False:",
+   "must_fail": [
+    "tests.test_gates.LooseningTests.test_the_baseline_catches_a_removed_rule_and_a_lowered_minimum"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M060",
+   "guard": "compare_baseline: a probe flag that went from true to false is caught",
+   "defect": "D1",
+   "commit": "d636282",
+   "source": "d636282 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "                if was.get(flag) is True and entry.get(flag) is not True:",
+   "replacement": "                if False:",
+   "must_fail": [
+    "tests.test_gates.BaselineBlindSpotTests.test_a_probe_flag_that_went_from_true_to_false_is_caught"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M061",
+   "guard": "kappa is undefined (None) on a single-valued sample, never 1.0",
+   "defect": "D11",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/pipeline/agreement.py",
+   "anchor": "    if expected >= 1.0:\n        return None",
+   "replacement": "    if expected >= 1.0:\n        return 1.0",
+   "must_fail": [
+    "tests.test_agreement.AgreementTests.test_kappa_is_undefined_on_a_degenerate_sample_not_perfect"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M062",
+   "guard": "the validator fails an empty slice",
+   "defect": "D13",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/pipeline/validator.py",
+   "anchor": "    if not units:\n        # intake.py already refuses",
+   "replacement": "    if False:\n        # intake.py already refuses",
+   "must_fail": [
+    "tests.test_pipeline.ValidatorTests.test_an_empty_slice_is_a_failure_not_a_pass"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M063",
+   "guard": "plant refuses a seeded copy with no seeds",
+   "defect": "D13",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/present/plant.py",
+   "anchor": "    if not list(types):",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_present.NothingIsNotAPass.test_plant_refuses_to_write_a_seeded_copy_with_no_seeds_in_it"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M064",
+   "guard": "preservation over zero rows is not a pass",
+   "defect": "D10",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/present/metrics.py",
+   "anchor": "        result[\"pct\"] = None\n        result[\"ok\"] = False",
+   "replacement": "        result[\"pct\"] = 100.0\n        result[\"ok\"] = True",
+   "must_fail": [
+    "tests.test_present.NothingIsNotAPass.test_preservation_over_zero_rows_in_scope_is_not_a_pass"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M065",
+   "guard": "a two-layer rendering with no scan layer fails instead of dropping two checks",
+   "defect": "D10",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/present/metrics.py",
+   "anchor": "        if two_layer:\n            result[\"ok\"] = False",
+   "replacement": "        if False:\n            result[\"ok\"] = False",
+   "must_fail": [
+    "tests.test_present.NothingIsNotAPass.test_the_scan_checks_can_never_just_stop_being_generated"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M066",
+   "guard": "the queue worker names a watched table with no changefeed as an error",
+   "defect": "D12",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/queue.py",
+   "anchor": "        counts[\"changefeeds_missing\"] = self.missing_changefeeds()",
+   "replacement": "        counts[\"changefeeds_missing\"] = []",
+   "must_fail": [
+    "tests.test_queue.ServerTests.test_a_watched_table_with_no_changefeed_is_an_error_not_a_quiet_pass"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M067",
+   "guard": "a fresh queue start is never reported as a resume",
+   "defect": "D12",
+   "commit": "277eded",
+   "source": "277eded (message)",
+   "file": "xscholar/queue.py",
+   "anchor": "(counts[\"tables_replayed\"] if self.replay_from_start else counts[\"tables_fresh\"]).append(table)",
+   "replacement": "(counts[\"tables_replayed\"] if self.replay_from_start else counts[\"tables_resumed\"]).append(table)",
+   "must_fail": [
+    "tests.test_queue.ServerTests.test_a_fresh_start_is_never_reported_as_a_clean_resume"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M068",
+   "guard": "judge: a forbids rule with no forbidden-evidence result is untested",
+   "defect": "V2-13",
+   "commit": "89f7b78",
+   "source": "89f7b78 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "        if len(built) < len(entry[\"forbids\"]):",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_gates.JudgeTests.test_a_rule_that_forbids_something_with_no_forbidden_result_is_untested"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M069",
+   "guard": "judge: both directions of the forbidden probe are required",
+   "defect": "V2-13",
+   "commit": "89f7b78",
+   "source": "89f7b78 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "r.get(\"evidence_present\") and r.get(\"reject\") and r.get(\"cleared\") and r.get(\"restored_accept\")",
+   "replacement": "r.get(\"reject\")",
+   "must_fail": [
+    "tests.test_gates.JudgeTests.test_both_directions_of_the_forbidden_probe_are_required"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M070",
+   "guard": "every forbids clause gets a forbidden-evidence probe",
+   "defect": "V2-13",
+   "commit": "89f7b78",
+   "source": "89f7b78 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "            forbidden.append(_forbidden_plan(rule, index, clause, inst, ids))",
+   "replacement": "            pass",
+   "must_fail": [
+    "tests.test_gates.GenerationTests.test_every_forbids_clause_gets_a_forbidden_evidence_probe"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M071",
+   "guard": "judge: an accept probe that built no (or unmatched) evidence is untested",
+   "defect": "D9",
+   "commit": "b52ea90",
+   "source": "b52ea90 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "    if unbuilt or unmatched:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_gates.ProbeShapeTests.test_evidence_the_accept_probe_cannot_build_is_reported_untested",
+    "tests.test_gates.ProbeShapeTests.test_evidence_the_datastore_says_does_not_match_is_reported_untested"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M072",
+   "guard": "judge: a probe whose setup failed may not report behaviour",
+   "defect": "D9",
+   "commit": "b52ea90",
+   "source": "b52ea90 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "                   and not entry.get(\"setup_error\"))",
+   "replacement": "                   )",
+   "must_fail": [
+    "tests.test_gates.ProbeShapeTests.test_a_probe_whose_setup_failed_may_not_report_behaviour"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M073",
+   "guard": "judge: wrong evidence that did not actually fail the clause is reported",
+   "defect": "D9",
+   "commit": "b52ea90",
+   "source": "b52ea90 (message)",
+   "file": "xscholar/gates.py",
+   "anchor": "    failed_to_fail = [r for r in wrong if r.get(\"really_fails\") is not True]",
+   "replacement": "    failed_to_fail = []",
+   "must_fail": [
+    "tests.test_gates.ProbeShapeTests.test_wrong_evidence_that_did_not_actually_fail_the_clause_is_reported"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M074",
+   "guard": "config refuses a declared regression file that is missing or malformed",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/config.py",
+   "anchor": "    inst = Instance(validate(data), source=path)\n    refuse_unusable_regression_file(inst)",
+   "replacement": "    inst = Instance(validate(data), source=path)\n    pass",
+   "must_fail": [
+    "tests.test_evaluator.ConfigRefusalTests.test_a_declared_regression_file_that_does_not_exist_is_refused_by_name",
+    "tests.test_evaluator.ConfigRefusalTests.test_an_unparseable_or_malformed_regression_file_is_refused_by_name"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M075",
+   "guard": "a regression file resolves against the config file's own directory, never the working directory",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/config.py",
+   "anchor": "        base_dir = pathlib.Path(inst.source).resolve().parent",
+   "replacement": "        base_dir = pathlib.Path.cwd()",
+   "must_fail": [
+    "tests.test_evaluator.ConfigRefusalTests.test_a_valid_file_loads_and_resolves_against_the_config_files_own_directory"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M076",
+   "guard": "a config loaded from a mapping does not guess a directory for its regression file",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/config.py",
+   "anchor": "        if not inst.source:\n            raise ConfigError(\"instance %s was loaded from a mapping",
+   "replacement": "        if False:\n            raise ConfigError(\"instance %s was loaded from a mapping",
+   "must_fail": [
+    "tests.test_evaluator.ConfigRefusalTests.test_a_config_loaded_from_a_mapping_has_no_directory_and_says_so"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M077",
+   "guard": "a writes check must show both directions",
+   "defect": "rule 4",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "        if steps and (\"accepted\" not in expects or not expects & {\"refused\", \"denied\"}):",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_evaluator.FormatTests.test_a_writes_check_must_show_both_directions"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M078",
+   "guard": "a loads check that expects nothing is refused",
+   "defect": "D10",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "        if not any(n and n.startswith(\"expect\") for n in names):",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_evaluator.FormatTests.test_a_loads_check_that_expects_nothing_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M079",
+   "guard": "duplicate regression ids are refused",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "        if entry.get(\"id\") in seen:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_evaluator.FormatTests.test_unknown_kinds_ops_and_duplicate_ids_are_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M080",
+   "guard": "a write step whose outcome differs from its expectation regresses",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "        if got != step[\"expect\"]:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_evaluator.RunTests.test_a_writes_check_classifies_each_step_and_names_the_one_that_regressed"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M081",
+   "guard": "an unexpected exception in a write step is never read as a refusal",
+   "defect": "D15",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "            got, detail = \"error:%s\" % type(exc).__name__, str(exc)",
+   "replacement": "            got, detail = \"refused\", str(exc)",
+   "must_fail": [
+    "tests.test_evaluator.RunTests.test_a_step_that_raises_something_else_is_never_read_as_accepted_or_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M082",
+   "guard": "a database check with no database is NOT EXECUTED, never caught",
+   "defect": "D5",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "verdict, reason, log = NOT_EXECUTED, \"this check needs a database and none was given\", []",
+   "replacement": "verdict, reason, log = CAUGHT, \"this check needs a database and none was given\", []",
+   "must_fail": [
+    "tests.test_evaluator.RunTests.test_a_check_that_needs_a_database_with_none_given_is_not_executed_never_caught"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M083",
+   "guard": "an evaluator with no entries is not a pass",
+   "defect": "D13",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "    if not results:\n        return 2\n    if any(",
+   "replacement": "    if not results:\n        return 0\n    if any(",
+   "must_fail": [
+    "tests.test_evaluator.RunTests.test_an_empty_evaluator_is_not_a_pass"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M084",
+   "guard": "a regression file rewritten during a run is refused",
+   "defect": "METHOD s.15",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "    if sha256(path) != digest:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_evaluator.RunTests.test_a_regression_file_rewritten_during_the_run_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M085",
+   "guard": "a planted validator error that is no longer reported regresses",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "    if missing:\n        return REGRESSED, \"the planted error(s)",
+   "replacement": "    if False:\n        return REGRESSED, \"the planted error(s)",
+   "must_fail": [
+    "tests.test_evaluator.RunTests.test_a_planted_misquote_is_caught_and_a_validator_that_stopped_checking_quotes_regresses"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M086",
+   "guard": "xscholar test runs the evaluator",
+   "defect": "D22",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/cli.py",
+   "anchor": "rc_eval, out_eval = _stream([sys.executable, \"-m\", \"xscholar.evaluator\", DEMO_DIR, \"--memory\", port])",
+   "replacement": "rc_eval, out_eval = 0, \"EVALUATOR skipped\"",
+   "must_fail": [
+    "tests.test_evaluator.TestCommandWiringTests.test_the_evaluator_and_the_mutation_lint_are_run"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M087",
+   "guard": "an evaluator that could not run fails under --require-db",
+   "defect": "D5",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/cli.py",
+   "anchor": "        steps.append((\"evaluator\", False if strict_db else None,",
+   "replacement": "        steps.append((\"evaluator\", None,",
+   "must_fail": [
+    "tests.test_evaluator.TestCommandWiringTests.test_an_evaluator_that_could_not_run_fails_under_require_db_and_is_named_otherwise"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M088",
+   "guard": "xscholar test runs the mutation lint",
+   "defect": "D19",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/cli.py",
+   "anchor": "rc_lint, out_lint = _stream([sys.executable, \"-m\", \"tests.harness.mutate\", \"lint\", \"--from\", \"worktree\"])",
+   "replacement": "rc_lint, out_lint = 0, \"skipped\"",
+   "must_fail": [
+    "tests.test_evaluator.TestCommandWiringTests.test_the_evaluator_and_the_mutation_lint_are_run",
+    "tests.test_evaluator.TestCommandWiringTests.test_a_regressed_known_error_or_a_stale_mutation_anchor_fails_the_run"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M089",
+   "guard": "mutation runner: an anchor must occur exactly once",
+   "defect": "D19",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        if count != 1:",
+   "replacement": "        if count < 1:",
+   "must_fail": [
+    "tests.test_mutation_harness.AnchorTests.test_an_anchor_must_occur_exactly_once"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M090",
+   "guard": "mutation runner: an anchor wholly inside a comment is refused",
+   "defect": "D8",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        if not any(mask[start:start + len(anchor)]):",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_mutation_harness.AnchorTests.test_an_anchor_inside_a_comment_or_a_docstring_is_refused_and_one_in_a_sql_string_is_not",
+    "tests.test_mutation_harness.AnchorTests.test_a_yaml_anchor_inside_a_comment_is_refused"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M091",
+   "guard": "mutation runner: a docstring is not code",
+   "defect": "D8",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        if tok.type == tokenize.STRING and tok.start in doc_starts:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_mutation_harness.AnchorTests.test_an_anchor_inside_a_comment_or_a_docstring_is_refused_and_one_in_a_sql_string_is_not"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M092",
+   "guard": "mutation runner: an AST-identical break is INVALID",
+   "defect": "TESTING s.2",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        if ast.dump(ast.parse(before)) == ast.dump(tree):",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_mutation_harness.AnchorTests.test_a_break_that_leaves_the_ast_identical_is_invalid_and_one_that_does_not_compile_is_stillborn"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M093",
+   "guard": "mutation runner: a named test that still passes is SURVIVED",
+   "defect": "TESTING s.2",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "    if passed:\n        return SURVIVED",
+   "replacement": "    if False:\n        return SURVIVED",
+   "must_fail": [
+    "tests.test_mutation_harness.ClassifyTests.test_every_outcome_maps_to_exactly_one_verdict",
+    "tests.test_mutation_harness.RunOnAToyTreeTests.test_a_real_break_is_killed_and_the_same_break_under_a_test_that_asserts_nothing_survives"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M094",
+   "guard": "mutation runner: a skip under the break is NOT EXECUTED",
+   "defect": "D5",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "    skipped = [t for t in entry[\"must_fail\"] if outcomes.get(t) in (\"skip\", \"not_run\", None)]",
+   "replacement": "    skipped = [t for t in entry[\"must_fail\"] if outcomes.get(t) in (\"not_run\", None)]",
+   "must_fail": [
+    "tests.test_mutation_harness.ClassifyTests.test_every_outcome_maps_to_exactly_one_verdict"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M095",
+   "guard": "mutation runner: a break that stops the code importing is not a catch",
+   "defect": "TESTING s.2",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "    if dead:\n        return STILLBORN",
+   "replacement": "    if False:\n        return STILLBORN",
+   "must_fail": [
+    "tests.test_mutation_harness.ClassifyTests.test_every_outcome_maps_to_exactly_one_verdict",
+    "tests.test_mutation_harness.RunOnAToyTreeTests.test_a_break_that_stops_the_test_module_importing_is_stillborn"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M096",
+   "guard": "mutation runner: a test that skips unmutated judges nothing",
+   "defect": "D5",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        if skipped:\n            rec[\"verdict\"], rec[\"reason\"] = NOT_EXECUTED",
+   "replacement": "        if False:\n            rec[\"verdict\"], rec[\"reason\"] = NOT_EXECUTED",
+   "must_fail": [
+    "tests.test_mutation_harness.RunOnAToyTreeTests.test_a_test_that_skips_on_the_unmutated_tree_is_not_executed"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M097",
+   "guard": "mutation runner: a server suite's taken port is NOT EXECUTED, never borrowed",
+   "defect": "D3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "            busy = sorted({p for p in (suite_port(tree, t) for t in entry[\"must_fail\"]) if p and port_in_use(p)})",
+   "replacement": "            busy = []",
+   "must_fail": [
+    "tests.test_mutation_harness.RunOnAToyTreeTests.test_a_server_suite_whose_port_is_taken_is_not_executed_and_not_run"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M098",
+   "guard": "mutation runner: the mutated file is restored byte for byte",
+   "defect": "TESTING s.2",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        finally:\n            path.write_bytes(original)",
+   "replacement": "        finally:\n            pass",
+   "must_fail": [
+    "tests.test_mutation_harness.RunOnAToyTreeTests.test_a_real_break_is_killed_and_the_same_break_under_a_test_that_asserts_nothing_survives"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M099",
+   "guard": "mutation lint: a removed pinned id fails",
+   "defect": "METHOD s.15",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "        for gone in sorted(set(pinned_ids) - set(ids)):",
+   "replacement": "        for gone in []:",
+   "must_fail": [
+    "tests.test_mutation_harness.RegistryTests.test_lint_fails_a_removed_pinned_id_and_an_unpinned_new_one"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M100",
+   "guard": "mutation runner: a failed restore is told apart from a file a test wrote",
+   "defect": "TESTING s.2",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/mutate.py",
+   "anchor": "    return [c for c in changed if c in targets], [c for c in changed if c not in targets]",
+   "replacement": "    return [], changed",
+   "must_fail": [
+    "tests.test_mutation_harness.RegistryTests.test_snapshot_drift_tells_a_failed_restore_from_a_file_a_test_wrote"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M101",
+   "guard": "mutation reporter: a module imported from outside the copy is reported",
+   "defect": "TESTING s.2",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/_testrun.py",
+   "anchor": "        if module is not None and where and root not in pathlib.Path(where).resolve().parents:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_mutation_harness.ReporterTests.test_a_module_imported_from_outside_the_tree_copy_is_reported_so_the_break_is_never_judged"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M102",
+   "guard": "CI runs the registered breaks for the files a change touched",
+   "defect": "D5",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": ".github/workflows/ci.yml",
+   "anchor": "python -m tests.harness.mutate run --from HEAD --changed-since \"$BASE\"",
+   "replacement": "python -m tests.harness.mutate lint --from HEAD",
+   "must_fail": [
+    "tests.test_mutation_harness.CiWiringTests.test_every_push_runs_the_breaks_for_the_files_it_changed_and_a_schedule_runs_them_all"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M103",
+   "guard": "generator: the same seed gives the same case",
+   "defect": "TESTING s.6",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/gen.py",
+   "anchor": "    words = [rng.choice(SYLLABLES) + rng.choice(SYLLABLES) for _ in range(40)]",
+   "replacement": "    words = [random.choice(SYLLABLES) + random.choice(SYLLABLES) for _ in range(40)]",
+   "must_fail": [
+    "tests.test_invariants.GeneratorTests.test_the_same_seed_gives_byte_identical_cases_and_different_seeds_differ"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M104",
+   "guard": "generator: a config the loader refuses is counted, and more than 5% fails",
+   "defect": "TESTING s.6",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/gen.py",
+   "anchor": "    n_confirming = rng.randint(1, len(order) - 2)",
+   "replacement": "    n_confirming = rng.randint(1, len(order))",
+   "must_fail": [
+    "tests.test_invariants.GeneratorTests.test_generated_configs_load_and_a_refusal_is_counted_not_dropped"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M105",
+   "guard": "property runner: a counterexample is shrunk",
+   "defect": "TESTING s.6",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/props.py",
+   "anchor": "            if isinstance(result, tuple) and result[2] == kind:",
+   "replacement": "            if False:",
+   "must_fail": [
+    "tests.test_invariants.PropertyRunnerTests.test_a_planted_kappa_that_returns_one_on_a_single_value_is_found_and_shrunk"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M106",
+   "guard": "property runner: a property that checked nothing fails",
+   "defect": "D10",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/props.py",
+   "anchor": "    testcase.assertGreaterEqual(result[\"checked\"], min_checked,",
+   "replacement": "    testcase.assertGreaterEqual(result[\"checked\"], 0,",
+   "must_fail": [
+    "tests.test_invariants.PropertyRunnerTests.test_a_property_that_discards_every_case_fails"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M107",
+   "guard": "property runner: a saved counterexample is replayed",
+   "defect": "METHOD s.15",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "tests/harness/props.py",
+   "anchor": "        if isinstance(outcome, tuple):\n            failures.append((path.name, outcome[1]))",
+   "replacement": "        if False:\n            failures.append((path.name, outcome[1]))",
+   "must_fail": [
+    "tests.test_invariants.PropertyRunnerTests.test_a_saved_failure_is_replayed"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M108",
+   "guard": "invariant: kappa is undefined exactly when chance agreement is 1 (D11, by property)",
+   "defect": "D11",
+   "commit": "277eded",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/pipeline/agreement.py",
+   "anchor": "    if expected >= 1.0:\n        return None",
+   "replacement": "    if expected >= 1.0:\n        return 1.0",
+   "must_fail": [
+    "tests.test_invariants.KappaInvariantTests.test_kappa_is_symmetric_bounded_order_free_and_undefined_exactly_when_chance_is_one"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M109",
+   "guard": "invariant: reconcile never overwrites a held field (D16, by property)",
+   "defect": "D16",
+   "commit": "a330b34",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/pipeline/loader.py",
+   "anchor": "        if reason is None:                        # nobody corrected it: the source decides",
+   "replacement": "        if True:                        # nobody corrected it: the source decides",
+   "must_fail": [
+    "tests.test_invariants.ReconcileInvariantTests.test_a_held_field_is_never_overwritten_unless_named_and_every_disagreement_is_reported"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M110",
+   "guard": "invariant: compare_baseline sees every generated weakening (D2, by property)",
+   "defect": "D2",
+   "commit": "8a73fa4",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/gates.py",
+   "anchor": "        for part in (\"table\", \"field\", \"value\"):",
+   "replacement": "        for part in ():",
+   "must_fail": [
+    "tests.test_invariants.BaselineInvariantTests.test_unchanged_is_clean_every_weakening_is_caught_and_an_addition_is_not_a_failure"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M111",
+   "guard": "invariant: no slice is larger than its chunk_size",
+   "defect": "coverage",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/pipeline/chunker.py",
+   "anchor": "        if piece and len(piece) + len(group) > size:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_invariants.ChunkerInvariantTests.test_every_unit_lands_in_exactly_one_slice_no_larger_than_its_chunk_size"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M112",
+   "guard": "invariant: a planted misquote is reported for any generated config",
+   "defect": "D13",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/pipeline/validator.py",
+   "anchor": "            elif quote not in _norm(units[uid][\"text\"]):",
+   "replacement": "            elif False:",
+   "must_fail": [
+    "tests.test_invariants.ValidatorInvariantTests.test_oracle_labels_pass_and_every_planted_defect_names_its_unit"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M113",
+   "guard": "invariant: every forbids clause gets a forbidden-evidence plan (by property)",
+   "defect": "V2-13",
+   "commit": "89f7b78",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/gates.py",
+   "anchor": "            forbidden.append(_forbidden_plan(rule, index, clause, inst, ids))",
+   "replacement": "            pass",
+   "must_fail": [
+    "tests.test_invariants.GateShapeInvariantTests.test_every_constrained_or_forbidding_clause_gets_a_probe_or_a_named_reason"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M114",
+   "guard": "invariant: a gate traversal reaches the table its edge really joins (D9, by property)",
+   "defect": "D9",
+   "commit": "b52ea90",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/gates.py",
+   "anchor": "        path, other = \"->%s->%s\" % (edge, dst), dst",
+   "replacement": "        path, other = \"->%s->%s\" % (edge, \"unit\"), dst",
+   "must_fail": [
+    "tests.test_invariants.GateShapeInvariantTests.test_gate_expressions_name_only_the_instances_own_edges_and_tables"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M115",
+   "guard": "eval: Wilson, not the normal approximation",
+   "defect": "TESTING s.7",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/stats.py",
+   "anchor": "    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom",
+   "replacement": "    half = z * math.sqrt(p * (1 - p) / n)",
+   "must_fail": [
+    "tests.test_eval_harness.StatsTests.test_wilson_matches_the_published_values_this_repo_quotes"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M116",
+   "guard": "eval: the sample size includes power",
+   "defect": "TESTING s.7",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/stats.py",
+   "anchor": "    zb = statistics.NormalDist().inv_cdf(power)",
+   "replacement": "    zb = 0.0",
+   "must_fail": [
+    "tests.test_eval_harness.StatsTests.test_the_two_proportion_sample_size_matches_the_documented_figures"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M117",
+   "guard": "eval: a cluster bootstrap resamples whole clusters",
+   "defect": "TESTING s.7",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/stats.py",
+   "anchor": "        groups = list(by.values())",
+   "replacement": "        groups = [[v] for v in values]",
+   "must_fail": [
+    "tests.test_eval_harness.StatsTests.test_a_cluster_bootstrap_is_wider_than_pretending_every_catch_is_independent"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M118",
+   "guard": "eval: below the minimum n there is no verdict",
+   "defect": "TESTING s.7",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "        underpowered = min(arm[\"n\"], base[\"n\"]) < minimum",
+   "replacement": "        underpowered = False",
+   "must_fail": [
+    "tests.test_eval_harness.RecordRuleTests.test_an_underpowered_run_reports_no_verdict_and_records_no_evidence"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M119",
+   "guard": "eval: a prereg written after the run is refused",
+   "defect": "TESTING s.7",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "    if not before and not retrofit:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_eval_harness.RecordRuleTests.test_a_prereg_written_after_the_run_is_refused_and_a_retrofit_may_never_adopt"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M120",
+   "guard": "eval: a retrofit never adopts",
+   "defect": "TESTING s.7",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "        if retrofit and decision == \"adopted\":",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_eval_harness.RecordRuleTests.test_a_prereg_written_after_the_run_is_refused_and_a_retrofit_may_never_adopt"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M121",
+   "guard": "eval: materials that failed the UTF-8 round trip do not count",
+   "defect": "D21",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "    if not materials.get(\"sha256\") or materials.get(\"utf8_roundtrip\") is not True:",
+   "replacement": "    if False:",
+   "must_fail": [
+    "tests.test_eval_harness.RecordRuleTests.test_materials_that_failed_the_utf8_round_trip_do_not_count"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M122",
+   "guard": "eval: an oracle arm below n of n marks the eval broken",
+   "defect": "TESTING s.9",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "        if oracle and oracle[\"k\"] != oracle[\"n\"]:",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_eval_harness.RecordRuleTests.test_an_oracle_below_n_of_n_or_a_null_arm_away_from_chance_marks_the_eval_broken"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M123",
+   "guard": "eval history: an edited earlier line breaks the chain",
+   "defect": "METHOD s.15",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "        if record.get(\"prev_sha256\") != sha256_bytes(raw[:offset]):",
+   "replacement": "        if False:",
+   "must_fail": [
+    "tests.test_eval_harness.HistoryTests.test_every_run_is_kept_and_an_edited_earlier_line_breaks_the_chain"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M124",
+   "guard": "eval history: a missing history is a problem, not an intact chain",
+   "defect": "D13",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "evals/record.py",
+   "anchor": "        return [\"no history for %s at %s\" % (eval_id, path)]",
+   "replacement": "        return []",
+   "must_fail": [
+    "tests.test_eval_harness.HistoryTests.test_a_missing_history_is_a_problem_not_an_intact_chain"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M125",
+   "guard": "the engine imports neither evals/ nor the test harness",
+   "defect": "TESTING s.3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
+   "file": "xscholar/evaluator.py",
+   "anchor": "from xscholar import config  # noqa: E402\n",
+   "replacement": "from xscholar import config  # noqa: E402\nimport evals.stats  # noqa: E402\n",
+   "must_fail": [
+    "tests.test_eval_harness.SeparationTests.test_the_engine_imports_neither_the_evals_nor_the_test_harness"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M126",
+   "guard": "every MCP tool, document_get included, has a table grant and a purpose in the generated skills",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/skills.py",
+   "anchor": "    \"document_get\":          ((\"unit\", \"document\"), ()),\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_skills_drift.GenerateTests.test_tool_tables_cover_every_mcp_tool"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M127",
+   "guard": "a gate on a built-in field restates the field's own ASSERT (unit.status and unit.grade keep their lists)",
+   "defect": "V2-22(a)",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "            enum = \" AND (%s)\" % own_assert if own_assert is not None else \"\"",
+   "replacement": "            enum = \"\"",
+   "must_fail": [
+    "tests.test_gates.BuiltInFieldGateTests.test_a_gated_built_in_field_keeps_the_enumeration_the_config_gives_it",
+    "tests.test_gates.ServerTests.test_a_gated_built_in_field_still_refuses_a_value_outside_its_list"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M128",
+   "guard": "answering the same critique again revises the answer instead of hard-erroring",
+   "defect": "V2-22(f)",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "self.db.sql(\"UPSERT %s SET text=%s, author=%s\" % (rid(\"answer\", aid)",
+   "replacement": "self.db.sql(\"CREATE %s SET text=%s, author=%s\" % (rid(\"answer\", aid)",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_answering_the_same_critique_again_revises_the_answer_in_the_same_and_a_later_session"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M129",
+   "guard": "a repeated answer adds no second answers edge (a deterministic edge id, not the session Keyer)",
+   "defect": "V2-22(f)",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "eid = edge_ids.edge_id(\"write\", \"answers\", aid, critique_id)",
+   "replacement": "eid = self.keyer(\"write\", \"answers\", aid, critique_id)",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_answering_the_same_critique_again_revises_the_answer_in_the_same_and_a_later_session"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M130",
+   "guard": "an answer revision is on the record (append-only text_history)",
+   "defect": "V2-22(f)",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/temporal.py",
+   "anchor": "    \"answer\": {\"field\": \"text\", \"history\": \"text_history\", \"before\": \"text_before\", \"after\": \"text_after\",\n               \"type\": \"option<string>\", \"event\": \"answer_text_history\", \"snapshot\": False},\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_critique_verdict.VerdictTests.test_an_answer_revision_is_on_the_record_and_its_history_cannot_be_rewritten"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M131",
+   "guard": "the Writer explains an originals or an assertion refusal as what it is, not as a missing grade",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/pipeline/write.py",
+   "anchor": "        _raise_if_not_about_evidence(self.db, self.inst, message, rid(\"fact\", slug))\n",
+   "replacement": "",
+   "must_fail": [
+    "tests.test_originals_db.EnforcementTests.test_the_writer_explains_an_originals_refusal_as_a_missing_original_not_a_missing_grade",
+    "tests.test_assertions.EnforceTests.test_the_writer_explains_an_assertion_refusal_as_a_contradiction_not_a_missing_grade"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M132",
+   "guard": "the one throwaway-server start refuses an occupied port, for the demo runner and the evaluator alike",
+   "defect": "D3",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/surreal_bin.py",
+   "anchor": "    if port_in_use(port):\n        raise NotStarted(occupied(port))",
+   "replacement": "    if False:\n        raise NotStarted(occupied(port))",
+   "must_fail": [
+    "tests.test_port_guard.PortGuardTests.test_the_demo_runner_refuses_an_occupied_port_instead_of_using_it",
+    "tests.test_port_guard.OneStartImplementationTests.test_the_evaluator_refuses_an_occupied_port_through_the_shared_guard"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M133",
+   "guard": "the demo probes the gates again under access, so the blind-caller probe (V2-21) actually runs",
+   "defect": "V2-21",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "scripts/run_instance.py",
+   "anchor": "            report, where = gates.run_probes_where_they_can_run(inst, conn)\n            say(\"gates\", \"again under access",
+   "replacement": "            report, where = {\"rules\": [], \"rejected_ok\": 0, \"accepted_ok\": 0, \"misbehaved\": 0}, \"\"\n            say(\"gates\", \"again under access",
+   "must_fail": [
+    "tests.test_originals_db.DemoTests.test_the_demo_probes_a_blind_caller_under_access_and_compares_the_live_schema"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M134",
+   "guard": "live-schema drift stops the demo run",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "scripts/run_instance.py",
+   "anchor": "        if not drift.ok:\n            print(\"LIVE SCHEMA DRIFT",
+   "replacement": "        if False:\n            print(\"LIVE SCHEMA DRIFT",
+   "must_fail": [
+    "tests.test_originals_db.DemoTests.test_a_definition_nobody_generated_stops_the_demo"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M135",
+   "guard": "an assertion contradiction is never printed as a gate that no longer holds",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "scripts/run_instance.py",
+   "anchor": "    drift = {k: v for k, v in report.items() if k not in (\"rules\", \"assertions\")}",
+   "replacement": "    drift = {k: v for k, v in report.items() if k != \"rules\"}",
+   "must_fail": [
+    "tests.test_run_verdict.ScenarioVerdictTests.test_an_assertion_contradiction_is_never_printed_as_a_gate_that_no_longer_holds"
+   ],
+   "needs_db": false
+  },
+  {
+   "id": "M136",
+   "guard": "MCP health says NOT_EXECUTED for a live-schema check its connection cannot run, never 0",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "            return {\"NOT_EXECUTED\": str(exc), \"components\": components}",
+   "replacement": "            return {\"missing\": 0, \"altered\": 0, \"unexpected\": 0, \"components\": components}",
+   "must_fail": [
+    "tests.test_tamper_evidence.McpHealthTests.test_a_check_this_connection_cannot_run_says_not_executed_never_zero"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M137",
+   "guard": "MCP health counts contradicting assertions",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/mcp/instance_adapter.py",
+   "anchor": "                \"contradictions\": len(rep[\"contradictions\"]),",
+   "replacement": "                \"contradictions\": 0,",
+   "must_fail": [
+    "tests.test_assertions.ReportTests.test_mcp_health_counts_a_contradicting_assertion"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M138",
+   "guard": "gates --apply applies originals enforcement after its probes",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "xscholar/gates.py",
+   "anchor": "        conn.script(originals.enforcement_surql(inst))\n        oprobes",
+   "replacement": "        oprobes",
+   "must_fail": [
+    "tests.test_gates.ServerTests.test_the_cli_applies_originals_enforcement_after_its_probes_and_can_run_again"
+   ],
+   "needs_db": true
+  },
+  {
+   "id": "M139",
+   "guard": "a new instance starts from originals: required",
+   "defect": "integration",
+   "commit": "uncommitted",
+   "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
+   "file": "instances/_template/instance.yaml",
+   "anchor": "  mode: required\n  store: originals\n",
+   "replacement": "  mode: transition\n  store: originals\n",
+   "must_fail": [
+    "tests.test_config.VerdictDefinitionTests.test_a_new_instance_starts_from_required_originals_owned_by_a_human"
+   ],
+   "needs_db": false
+  }
+ ]
+}

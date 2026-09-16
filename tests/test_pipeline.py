@@ -33,11 +33,31 @@ def log(i, text, status="in_window", grade="original_log", **extra):
 
 
 class Adapter:
+    """The demo instance's originals are required (instance.yaml `originals:`), so this fixture supplies
+    them: one synthetic log file per `locator.file`, whose line N is the text of the unit at line N. A unit
+    that names its own `document` keeps it."""
+
     def __init__(self, units):
         self._units = units
 
+    def documents(self):
+        files = {}
+        for unit in self._units:
+            if "exclude" in unit or not isinstance(unit.get("locator"), dict):
+                continue
+            file_lines = files.setdefault(str(unit["locator"].get("file") or "fixture.log"), {})
+            file_lines.setdefault(unit["locator"].get("line") or 1, str(unit.get("text")))
+        for name, by_line in files.items():
+            last = max([n for n in by_line if isinstance(n, int)] or [0])
+            body = "".join("%s\n" % by_line.get(n, "") for n in range(1, last + 1))
+            yield {"key": name, "bytes": body.encode("utf-8"), "media_type": "text/plain", "capture": "raw"}
+
     def units(self):
-        return iter(self._units)
+        for unit in self._units:
+            if "exclude" in unit or "document" in unit or not isinstance(unit.get("locator"), dict):
+                yield unit
+            else:
+                yield dict(unit, document=str(unit["locator"].get("file") or "fixture.log"))
 
 
 CORPUS = [log(1, "pool exhausted: waited 30000ms for connection"),

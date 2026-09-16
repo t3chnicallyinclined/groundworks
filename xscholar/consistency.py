@@ -14,7 +14,12 @@ wrong (the unit's value or the fact's promotion), because that is a human's call
                          "rows_at_gated_value": N, "contradictions": M}
 
 `rows_at_gated_value` is printed next to `contradictions` so "0 contradictions" over 0 promoted rows
-reads as what it is. Standard library only.
+reads as what it is.
+
+What this cannot see is a promoted row whose TEXT says another row holds a value it does not: that needs
+reading free text. An instance that makes the claim structured (`assertions:`, xscholar/assertions.py) gets
+it checked too, under the `assertions` key, which is present only when the instance declares any.
+Standard library only.
 """
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
@@ -40,4 +45,10 @@ def report(db, inst, negate=True):
                              "value": rule["value"], "at_value": at_value, "no_longer_holds": ids})
         out["rows_at_gated_value"] += at_value
         out["contradictions"] += len(ids)
+    # The second kind: a promoted row that asserts, in structure, a value another row's field does not hold
+    # (xscholar/assertions.py). Present only when the instance declares `assertions:`, and counted apart from
+    # `contradictions` above, which keeps meaning "gate no longer holds".
+    from xscholar import assertions
+    if assertions.declared(inst):
+        out["assertions"] = assertions.report(db, inst)
     return out

@@ -12,10 +12,16 @@
     xscholar present render ROWS.json --mode speedread --policy P.json
     xscholar skills generate INSTANCE.yaml OUT_DIR
     xscholar drift INSTANCE.yaml SKILLS_DIR [DOC ...]
+    xscholar evaluate INSTANCE_DIR --memory PORT | --url URL --ns NS | --check
+                             the instance's regression file: every error it has made, checked again
+    xscholar mutate lint | run [--no-db] [--ids ..] [--changed-since REV] | canaries
+                             the mutation registry: one named break per guard (tests/harness/mutate.py)
     xscholar test [--require-db] [--require-privacy]
-                             every suite, the license check, the drift check and the privacy
-                             scan, ending with a summary naming any check that did NOT run
+                             every suite, the license check, the drift check, the mutation-registry
+                             lint, the demo's evaluator and the privacy scan, ending with a summary
+                             naming any check that did NOT run
 """
+import os
 import pathlib
 import re
 import subprocess
@@ -52,6 +58,7 @@ def _skills(args):
 
 
 DEMO = ("instances/demo-incident/instance.yaml", "instances/demo-incident/skills")
+DEMO_DIR = "instances/demo-incident"
 
 
 def _stream(cmd):
@@ -64,6 +71,11 @@ def _stream(cmd):
         lines.append(line)
     proc.wait()
     return proc.returncode, "".join(lines)
+
+
+def _last_line(out):
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return lines[-1][:160] if lines else "(no output)"
 
 
 def _test(args):
@@ -100,6 +112,24 @@ def _test(args):
     rc_drift = _module("xscholar.drift", list(DEMO))
     steps.append(("drift check", rc_drift == 0, "clean" if rc_drift == 0 else "drift found"))
 
+    # The mutation registry (docs/TESTING.md s.2), without running a break: every anchor still matches
+    # exactly once and outside comments, every named test still exists above its file's __main__ block,
+    # and no pinned id was removed. A stale anchor is a guard nobody is checking any more.
+    rc_lint, out_lint = _stream([sys.executable, "-m", "tests.harness.mutate", "lint", "--from", "worktree"])
+    steps.append(("mutation lint", rc_lint == 0, _last_line(out_lint)))
+
+    # The evaluator the config declares (docs/METHOD.md s.15, docs/TESTING.md s.3). Until 2026-09-16 it was
+    # required by config, declared by the demo, and never run. It starts its own throwaway server on
+    # XSCHOLAR_EVAL_PORT, or an OS-assigned free port; exit 2 is NOT EXECUTED (no server), never a pass.
+    port = os.environ.get("XSCHOLAR_EVAL_PORT", "0")
+    rc_eval, out_eval = _stream([sys.executable, "-m", "xscholar.evaluator", DEMO_DIR, "--memory", port])
+    if rc_eval == 2:
+        steps.append(("evaluator", False if strict_db else None,
+                      "NOT EXECUTED: %s%s" % (_last_line(out_eval),
+                                              "; this run was told every suite must execute" if strict_db else "")))
+    else:
+        steps.append(("evaluator", rc_eval == 0, _last_line(out_eval)))
+
     # The privacy scan had no automated caller at all until now. Its deny list lives outside the
     # repository by design, so on a machine without one it cannot run -- and that must be visible,
     # not silent. Exit 2 is "NOT EXECUTED", which is not a pass and not a failure.
@@ -128,6 +158,8 @@ COMMANDS = {
     "present": _present,
     "skills": _skills,
     "drift": lambda a: _module("xscholar.drift", a),
+    "evaluate": lambda a: _module("xscholar.evaluator", a),
+    "mutate": lambda a: _module("tests.harness.mutate", a),
     "test": _test,
 }
 

@@ -64,6 +64,10 @@ class Base(unittest.TestCase):
         import json
         path = self.tmp / name
         path.write_text(json.dumps(data), encoding="utf-8")
+        # a config loaded from a file must have its declared regression file beside it (xscholar/config.py)
+        regression = self.tmp / data["evaluator"]["regression_file"]
+        regression.parent.mkdir(parents=True, exist_ok=True)
+        regression.write_text('{"format": "xscholar.known_errors/1", "entries": []}', encoding="utf-8")
         return path
 
     def build(self, data=None, sub="skills"):

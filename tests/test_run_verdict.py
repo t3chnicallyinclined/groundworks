@@ -78,6 +78,19 @@ class ScenarioVerdictTests(unittest.TestCase):
         self.assertEqual(self.problems(tally={"calls": 9, "refusals": 1, "denials": 0}), [])
         self.assertEqual(self.problems(tally={"calls": 9, "refusals": 0, "denials": 1}), [])
 
+    def test_an_assertion_contradiction_is_never_printed_as_a_gate_that_no_longer_holds(self):
+        """consistency.report() gained an `assertions` key. Copied whole under DRIFT_gate_no_longer_holds, a
+        contradicting assertion read as a promoted row whose gate had stopped holding: a different finding, cured
+        a different way."""
+        report = {"rules": [{"rule": "r"}], "rows_at_gated_value": 3, "contradictions": 0,
+                  "assertions": {"assertion_rows": 2, "counted": 1, "agree": 0,
+                                 "contradictions": [{"target": "unit:u1"}], "disagreeing_assertions": []}}
+        drift, found = self.run_instance.health_consistency(report)
+        self.assertEqual(drift, {"rows_at_gated_value": 3, "contradictions": 0})
+        self.assertEqual(found, {"assertion_rows": 2, "counted": 1, "agree": 0, "contradictions": 1,
+                                 "disagreeing_assertions": 0})
+        self.assertEqual(self.run_instance.health_consistency({"contradictions": 0})[1], "none declared")
+
     def test_an_empty_graph_is_not_a_passing_run(self):
         problems = self.problems(facts=0)
         self.assertTrue(any("no fact rows" in p for p in problems), problems)

@@ -207,5 +207,49 @@ class PortGuardTests(unittest.TestCase):
         self.assertEqual(offenders, [], "\n".join(offenders))
 
 
+class OneStartImplementationTests(unittest.TestCase):
+    """docs/TUNING.md, third lane rule: one rule, one implementation. The throwaway-server start and its guards
+    were copied into xscholar/evaluator.py from scripts/run_instance.py; a copy is where a later fix to one
+    silently misses the other. Both now call xscholar/surreal_bin.py."""
+
+    def test_only_surreal_bin_starts_a_throwaway_server_in_engine_and_script_code(self):
+        starters = []
+        for path in sorted(list(ROOT.glob("xscholar/**/*.py")) + list(ROOT.glob("scripts/*.py"))):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", None)) == "Popen":
+                    words = {n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+                    if {"start", "memory"} <= words:
+                        starters.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(starters, ["xscholar/surreal_bin.py"],
+                         "a second implementation of the throwaway-server start: %s" % starters)
+
+    def test_the_evaluator_and_the_demo_runner_both_go_through_it(self):
+        from xscholar import evaluator
+        run_instance = load_run_instance()
+        calls = []
+
+        def fake(port, binary=None, attempts=80):
+            calls.append(port)
+            raise surreal_bin.NotStarted("NOT EXECUTED: stand-in refusal for port %d" % port)
+        with mock.patch.object(surreal_bin, "start_memory", side_effect=fake):
+            with self.assertRaises(evaluator.NotExecuted) as raised:
+                evaluator.start_server(DOOMED)
+            self.assertIn("stand-in refusal", str(raised.exception))
+            self.assertFalse(str(raised.exception).startswith("NOT EXECUTED"), "the evaluator adds its own prefix")
+            with self.assertRaises(SystemExit) as stopped:
+                run_instance.start_memory(DOOMED)
+            self.assertIn("stand-in refusal", str(stopped.exception))
+        self.assertEqual(calls, [DOOMED, DOOMED])
+
+    def test_the_evaluator_refuses_an_occupied_port_through_the_shared_guard(self):
+        from xscholar import evaluator
+        with occupied_port() as port:
+            with self.assertRaises(evaluator.NotExecuted) as raised:
+                evaluator.start_server(port)
+        self.assertIn("already in use", str(raised.exception))
+        self.assertIn("by PID (never by name)", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

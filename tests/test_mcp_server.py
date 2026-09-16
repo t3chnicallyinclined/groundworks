@@ -33,7 +33,7 @@ from xscholar.present import metrics  # noqa: E402
 EXPECTED_TOOLS = {"unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
                   "critique_add", "critique_answer", "panel_submit", "panel_status",
                   "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready",
-                  "lens_view"}
+                  "lens_view", "document_get"}
 
 # ---- synthetic instances ------------------------------------------------------------------------
 
