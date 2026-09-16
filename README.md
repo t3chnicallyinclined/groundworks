@@ -59,6 +59,10 @@ That runs a complete non-legal instance on a throwaway in-memory database: confi
 
 To map your own domain: copy `instances/demo-incident/`, answer the eight questions in `instance.yaml`, write an adapter that yields units with exact locators, and run the same command.
 
+## License
+
+Copyright (c) 2026 t3chnicallyinclined. All rights reserved (see `LICENSE`). Adapted and depended-upon third-party material is listed in `THIRD_PARTY_NOTICES.md` under its own licenses.
+
 ## Using the expert
 
 Open this repo in Claude Code and ask for the `scholar-architect` agent, for example:
