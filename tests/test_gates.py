@@ -438,6 +438,36 @@ class ServerTests(unittest.TestCase):
         conn.sql("DELETE fact:zz_raw")
 
 
+    def test_a_gate_whose_evidence_is_itself_gated_is_probed_and_behaves(self):
+        """V2-18. Before staged evidence: `1 misbehaved`, MISSING PROBE, `could not write the rows it
+        needs`, because no probe can create a confirmed fact in one statement."""
+        inst = gated_evidence_instance(self.inst)
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="staged")
+        conn.script(gates.schema_surql(inst))
+        conn.script(gates.gate_surql(inst))
+        report = gates.run_probes(inst, conn)
+        entry = [r for r in report["rules"] if r["rule"] == StagedEvidenceTests.RULE][0]
+        self.assertEqual(report["misbehaved"], 0, entry)
+        self.assertTrue(entry["reject"] and entry["accept"], entry)
+        self.assertIs(entry["wrong_evidence_reject"], True, "an unconfirmed fact must not verify a contention")
+        for table in ("fact", "unit", "contention"):
+            left = conn.sql("SELECT id FROM %s WHERE record::id(id) CONTAINS 'zz_probe'" % table)[0]
+            self.assertEqual(left, [], "staged evidence left rows behind in %s" % table)
+
+    def test_the_staged_probe_catches_that_gate_being_loosened(self):
+        """Green on its own proves nothing: loosen the outer gate and the probe must go red."""
+        inst = gated_evidence_instance(self.inst)
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="staged_loose")
+        conn.script(gates.schema_surql(inst))
+        conn.script(gates.gate_surql(inst))
+        conn.sql("DEFINE FIELD OVERWRITE disposition ON contention TYPE string "
+                 "ASSERT $value IN ['verified', 'partly', 'open', 'not_in_record', 'ruled_out'];")
+        report = gates.run_probes(inst, conn)
+        entry = [r for r in report["rules"] if r["rule"] == StagedEvidenceTests.RULE][0]
+        self.assertFalse(entry["behaved"], "a loosened gate on gated evidence reported green: %s" % entry)
+        self.assertGreaterEqual(report["misbehaved"], 1)
+
+
 class LooseningTests(unittest.TestCase):
     """A weakened rule must not report green. Measured on a second instance: deleting a `where`
     silently stopped the sharper probe being generated, and the suite still said misbehaved 0."""
@@ -889,6 +919,74 @@ class CliBaselineTests(unittest.TestCase):
             self.assertEqual(rc, 2, out.getvalue())
             self.assertIn("NOT EXECUTED", out.getvalue())
             self.assertFalse(path.exists(), "nothing was written, and nothing reached a database")
+
+
+
+def gated_evidence_instance(base):
+    """A rule whose required evidence is ITSELF behind a gate.
+
+    `contention.disposition = 'verified'` requires a rests_on edge to a CONFIRMED fact -- and `confirmed`
+    is gated on the demo's own citation rule. Before staged evidence, no probe could write a confirmed
+    fact in one statement, so this rule could not be probed at all (V2-18). Built from a pattern another
+    session invented and declared through the tables:/edges: contract.
+    """
+    data = json.loads(json.dumps(base.data))
+    data.setdefault("tables", {})["contention"] = {"fields": {
+        "said": "string", "asserts": "string",
+        "disposition": {"type": "string", "one_of": ["verified", "partly", "open", "not_in_record", "ruled_out"]},
+        "why": {"type": "string", "optional": True}}}
+    data["edges"]["rests_on"] = {"from": "contention", "to": "fact"}
+    data["gates"].append({"id": "contention_verified_needs_a_confirmed_fact", "table": "contention",
+                          "field": "disposition", "value": "verified",
+                          "requires": [{"edge": "rests_on", "to": ["fact"], "where": "status = 'confirmed'", "min": 1}]})
+    data["access"]["roles"]["coordinator"]["read"].append("contention")
+    data["access"]["roles"]["coordinator"]["write"] += ["contention", "rests_on"]
+    return config.load(data)
+
+
+class StagedEvidenceTests(unittest.TestCase):
+    """V2-18: a gate whose evidence is itself gated is probed through the real inner gate."""
+
+    RULE = "contention_verified_needs_a_confirmed_fact"
+
+    def setUp(self):
+        self.inst = gated_evidence_instance(config.load(DEMO))
+
+    def probe(self):
+        return [p for p in gates.probes(self.inst) if p["rule"] == self.RULE][0]
+
+    def test_the_evidence_is_built_instead_of_reported_unbuildable(self):
+        plan = self.probe()["evidence"][0]
+        self.assertTrue(plan["built"], plan["reason"])
+
+    def test_the_gated_row_is_created_unpromoted_then_promoted_by_the_real_gate(self):
+        """The order IS the fix: a fact created already confirmed is refused by its own gate."""
+        fix = self.probe()["fix"]
+        fact_create = next(i for i, s in enumerate(fix) if s.startswith("CREATE fact:"))
+        promote = next(i for i, s in enumerate(fix) if s.startswith("UPDATE fact:") and "'confirmed'" in s)
+        cite = next(i for i, s in enumerate(fix) if "->cites->" in s)
+        self.assertNotIn("'confirmed'", fix[fact_create], "created already promoted: its own gate refuses it")
+        self.assertLess(fact_create, cite)
+        self.assertLess(cite, promote, "promoted before the evidence its gate requires existed")
+        self.assertLess(promote, next(i for i, s in enumerate(fix) if "->rests_on->" in s))
+
+    def test_nested_rows_carry_the_outer_rule_prefix_so_cleanup_removes_them(self):
+        for statement in self.probe()["fix"]:
+            if statement.startswith("CREATE "):
+                self.assertIn("zz_probe_%s" % self.RULE, statement.split(" SET ")[0])
+
+    def test_a_cycle_of_gated_evidence_is_reported_not_followed_forever(self):
+        """Rule A's evidence gated by B, B's by A. Must terminate, and must say so by name."""
+        data = json.loads(json.dumps(self.inst.data))
+        data["edges"]["backs"] = {"from": "fact", "to": "contention"}
+        for rule in data["gates"]:
+            if rule["id"] == "confirmed_needs_source_grade":
+                rule["requires"] = [{"edge": "backs", "to": ["contention"], "where": "disposition = 'verified'", "min": 1}]
+        data["access"]["roles"]["coordinator"]["write"].append("backs")
+        cyclic = config.load(data)
+        plan = [p for p in gates.probes(cyclic) if p["rule"] == self.RULE][0]["evidence"][0]
+        self.assertFalse(plan["built"], "a cycle must not be reported as built evidence")
+        self.assertIn("chain", plan["reason"])
 
 
 if __name__ == "__main__":   # last, so running this file directly runs every class in it

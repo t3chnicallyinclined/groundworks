@@ -499,13 +499,70 @@ def _clause_text(clause, inst):
     return "%s%s" % (clause.get("edge"), " where %s" % where if where else "")
 
 
-def _rows_plan(rule, index, clause, inst, ids, tag, assignments, why):
+MAX_EVIDENCE_CHAIN = 4   # rule A's evidence gated by rule B's, gated by C's ... a cycle must end somewhere
+
+
+def _staged_create(row, table, inst, assignments, ids, depth):
+    """Create `row` carrying `assignments`, even when one of them is itself behind a gate.
+
+    Returns (statements, removals, problem). The naive CREATE writes every assignment at once, so a row
+    whose value is gated -- a fact created already `confirmed` -- is refused by its OWN gate, because the
+    evidence that gate requires does not exist yet. Found by building another session's pattern through
+    the tables:/edges: contract: `contention.disposition = 'verified' requires rests_on -> fact WHERE
+    status = 'confirmed'` could not be probed at all, since no probe can write a confirmed fact in one
+    statement. So a gated assignment is STAGED: create the row at an ungated value, build the evidence
+    its own gate requires (recursively, through this same planner), then promote it. The promotion is
+    therefore made by the real gate, not around it -- a probe that bypassed the inner gate would prove
+    the outer rule against evidence the datastore would never let exist.
+    """
+    assignments = dict(assignments or {})
+    gating = [r for r in inst.gate_rules()
+              if r["table"] == table and r["field"] in assignments
+              and _value_literal(r["value"]) == assignments[r["field"]]]
+    if not gating:
+        return [_create(row, table, inst, assignments, unit_id=ids["ok"])], [], None
+    if depth >= MAX_EVIDENCE_CHAIN:
+        return None, None, ("the evidence chain is deeper than %d gated rules (%s); a cycle, or a chain "
+                            "too long to probe" % (MAX_EVIDENCE_CHAIN, " -> ".join(r["id"] for r in gating)))
+    promote = {}
+    for r in gating:
+        promote[r["field"]] = assignments.pop(r["field"])
+    template = _row_template(table, inst, unit_id=ids["ok"])
+    for field, gated in promote.items():
+        if template.get(field) not in (None, gated):
+            continue                          # the blandest value is already ungated: leave it
+        other = next((v for v in _field_domain(table, field, inst) or [] if _value_literal(v) != gated), None)
+        if other is None:
+            return None, None, ("%s.%s has no value other than %s to start from, so %s cannot be "
+                                "created unpromoted" % (table, field, gated, row))
+        assignments[field] = _value_literal(other)
+    statements = [_create(row, table, inst, assignments, unit_id=ids["ok"])]
+    removals = []
+    local = row.split(":", 1)[1]
+    for r in gating:
+        for index, clause in enumerate(r.get("requires") or []):
+            sub = _rows_plan(r, index, clause, inst, {"row": row, "ok": ids["ok"]}, "via",
+                             *_where_assignments(_expand(clause.get("where"), inst)),
+                             prefix=local, depth=depth + 1)
+            if not sub["built"]:
+                return None, None, ("to promote %s past rule %s it needs %s, and that could not be built: %s"
+                                    % (row, r["id"], sub["clause"], sub["reason"]))
+            statements += sub["create"] + sub["relate"]
+            removals += sub["remove"]
+    statements.append("UPDATE %s SET %s;" % (row, ", ".join("%s = %s" % kv for kv in promote.items())))
+    return statements, removals, None
+
+
+def _rows_plan(rule, index, clause, inst, ids, tag, assignments, why, prefix=None, depth=0):
     """How to make `min` neighbours of the rule's row for one clause, and how to take them away.
 
     Everything comes from the clause: the edge decides the table and the direction of the RELATE,
     `assignments` decides the field values, `min` decides how many rows. A clause this cannot build
     carries `built: False` and the reason, which judge() turns into a failure -- a clause that
-    quietly generated nothing is exactly how the wrong-evidence probe stopped running."""
+    quietly generated nothing is exactly how the wrong-evidence probe stopped running.
+
+    `prefix` and `depth` are for staged evidence (_staged_create): a nested row's id must still carry
+    the outer rule's `zz_probe_<id>` so the outer cleanup removes it."""
     table = rule["table"]
     where = _expand(clause.get("where"), inst)
     _, other = _edge_path(table, clause, inst)
@@ -520,12 +577,20 @@ def _rows_plan(rule, index, clause, inst, ids, tag, assignments, why):
         plan["reason"] = why
         return plan
     try:
-        rows = ["%s:zz_probe_%s_%s%d_%d" % (other, rule["id"], tag, index, k) for k in range(count)]
-        creates = [_create(row, other, inst, assignments, unit_id=ids["ok"]) for row in rows]
+        stem = prefix or "zz_probe_%s" % rule["id"]
+        rows = ["%s:%s_%s%d_%d" % (other, stem, tag, index, k) for k in range(count)]
+        creates, nested = [], []
+        for row in rows:
+            statements, removals, problem = _staged_create(row, other, inst, assignments, ids, depth)
+            if problem:
+                plan["reason"] = problem
+                return plan
+            creates += statements
+            nested += removals
     except GateError as exc:
         plan["reason"] = "cannot build a %s row for %s: %s" % (other, plan["clause"], exc)
         return plan
-    drop_edges, drop_rows = [], []
+    drop_edges, drop_rows = [], nested
     for row in rows:
         near, far = (ids["row"], row) if table == inst.edge_map()[clause["edge"]][0] else (row, ids["row"])
         plan["relate"].append(_relate(near, clause["edge"], far, inst))
