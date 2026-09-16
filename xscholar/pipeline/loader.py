@@ -77,7 +77,14 @@ def load(units_path, labels_dir, db, inst, scope="load"):
         _run_batches(db, statements, counts, "targets")
         # 3. labels and bears_on edges
         statements, edge_statements = [], []
-        for labels_file in sorted(pathlib.Path(labels_dir).glob("*.jsonl")):
+        labels_root = pathlib.Path(labels_dir)
+        if not labels_root.is_dir():
+            # glob() on a path that does not exist returns nothing and raises nothing, so a mistyped
+            # labels directory used to read as "this run has no labels" -- and then swept every edge.
+            raise LoadError("labels directory %s does not exist; a mistyped path is not an empty run"
+                            % labels_root)
+        label_files = sorted(labels_root.glob("*.jsonl"))
+        for labels_file in label_files:
             chunk = labels_file.stem
             for label in read_units(labels_file):
                 lid = "%s__%s" % (chunk, label["id"])
@@ -101,7 +108,15 @@ def load(units_path, labels_dir, db, inst, scope="load"):
     finally:
         if failed:
             counts["sweep"] = "SKIPPED: a write failed, previous edges kept"
-    # 4. sweep only after a fully successful run
+    # 4. sweep only after a fully successful run that actually read labels.
+    # A run that read no label files is not evidence that the previous run's edges are stale: it is
+    # evidence that this run found nothing. Writing zero statements is not a failed write, so the
+    # `failed` flag above never caught it, and the sweep deleted the whole scope on the strength of a
+    # run that wrote nothing. Measured: an empty labels directory took bears_on from 3 rows to 0 and
+    # returned {'labels': 0, 'edges': 0, 'swept': 3} with no error.
+    if not label_files:
+        counts["sweep"] = ("SKIPPED: no *.jsonl label files in %s; previous edges kept" % labels_root)
+        return counts
     before = db.sql("SELECT count() AS n FROM bears_on WHERE seed = %s AND run != %s GROUP ALL" % (q(scope), q(token)),
                     expect=1)[0]
     stale = before[0]["n"] if before else 0
