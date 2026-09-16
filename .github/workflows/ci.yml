@@ -1,9 +1,21 @@
 name: ci
 
+# Every step here must be able to go red. Two ways one could not, both measured and both fixed below:
+#   - `curl -sSf ... | sh` exits 0 when curl fails, because Actions runs `bash -e` WITHOUT pipefail.
+#     SurrealDB was then absent, every database suite raised SkipTest, and `unittest` printed
+#     "Ran 0 tests ... OK (skipped=N)" and exited 0 -- so the step named "run every suite" reported
+#     success having tested nothing that touches the datastore.
+#   - A backgrounded `surreal start &` loses its exit status, and a `curl && break || sleep` loop
+#     always exits 0, so a server that never started looked exactly like one that did.
+
 on:
   push:
     branches: [main]
   pull_request:
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}   # pipefail: a failing command inside a pipe fails the step
 
 jobs:
   test:
@@ -13,19 +25,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install SurrealDB (for the gate and loader tests)
+
+      - name: Install SurrealDB (the database suites do not run without it)
         run: |
           curl -sSf https://install.surrealdb.com | sh
           echo "$HOME/.surrealdb" >> "$GITHUB_PATH"
-      - name: Run every suite and the license check
-        run: python -m xscholar.cli test
+
+      - name: SurrealDB really is installed
+        run: |
+          # Without this the install can fail and every database test skips behind a green tick.
+          command -v surreal || { echo "NOT EXECUTED: surreal is not on PATH after the install step"; exit 1; }
+          surreal version
+
+      - name: Every suite, the license check, the drift check and the privacy scan
+        # --require-db turns a skipped suite into a failure instead of "OK (skipped=N)".
+        run: python -m xscholar.cli test --require-db
+
       - name: Role skills still match the config they came from
         run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills
+
       - name: Gates are no weaker than the committed baseline
         run: |
-          # 8040: no test suite owns it (the suites use 8023-8034 and refuse a port already in use)
+          # 8040: no test suite owns it (the suites use 8023-8034 and refuse a port already in use).
           surreal start --bind 127.0.0.1:8040 --user root --pass root memory &
-          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8040/health && break || sleep 0.25; done
+          server=$!
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8040/health >/dev/null; then break; fi
+            # `&` throws the exit status away, so ask directly whether our server is still alive
+            kill -0 "$server" 2>/dev/null || { echo "NOT EXECUTED: the throwaway SurrealDB on 8040 exited"; exit 1; }
+            sleep 0.25
+          done
+          curl -sf http://127.0.0.1:8040/health >/dev/null || { echo "NOT EXECUTED: nothing answered on 8040"; exit 1; }
           python -m xscholar.gates instances/demo-incident/instance.yaml --apply --url http://127.0.0.1:8040/sql --baseline instances/demo-incident/gate_baseline.json
+          kill "$server"
+
       - name: Demo instance end to end
         run: python scripts/run_instance.py instances/demo-incident --memory 8025

@@ -12,9 +12,12 @@
     xscholar present render ROWS.json --mode speedread --policy P.json
     xscholar skills generate INSTANCE.yaml OUT_DIR
     xscholar drift INSTANCE.yaml SKILLS_DIR [DOC ...]
-    xscholar test            run every suite, the license check and the demo drift check
+    xscholar test [--require-db] [--require-privacy]
+                             every suite, the license check, the drift check and the privacy
+                             scan, ending with a summary naming any check that did NOT run
 """
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -51,12 +54,68 @@ def _skills(args):
 DEMO = ("instances/demo-incident/instance.yaml", "instances/demo-incident/skills")
 
 
+def _stream(cmd):
+    """Run a command, show its output as it arrives, and keep it for inspection."""
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, errors="replace")
+    lines = []
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        lines.append(line)
+    proc.wait()
+    return proc.returncode, "".join(lines)
+
+
 def _test(args):
-    rc = subprocess.call([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"] + args,
-                         cwd=str(ROOT))
-    rc = rc or subprocess.call([sys.executable, str(ROOT / "scripts" / "license_check.py")], cwd=str(ROOT))
-    # last: the generated role skills must still match the config they came from (ROADMAP C8)
-    return rc or _module("xscholar.drift", list(DEMO))
+    """Every check, and a summary that names any one that did NOT run.
+
+    `unittest` exits 0 when a suite skips, so a machine (or a CI job) with no SurrealDB runs none of
+    the database tests and still prints OK. Measured: `Ran 0 tests ... OK (skipped=2)`, exit 0. The
+    suites are honest -- they say NOT EXECUTED -- but they say it through a green exit code, and the
+    line a human reads is the last one. So the last line here names what ran and what did not.
+    """
+    strict_db = "--require-db" in args
+    strict_privacy = "--require-privacy" in args
+    passthrough = [a for a in args if a not in ("--require-db", "--require-privacy")]
+
+    steps = []          # (name, ok, detail)  ok: True pass, False fail, None did not run
+    rc, out = _stream([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
+                      + passthrough)
+    ran = re.search(r"^Ran (\d+) tests?", out, re.M)
+    skipped = re.search(r"skipped=(\d+)", out)
+    n_ran, n_skipped = int(ran.group(1)) if ran else 0, int(skipped.group(1)) if skipped else 0
+    steps.append(("tests", rc == 0, "%d ran, %d skipped" % (n_ran, n_skipped)))
+    if n_skipped and strict_db:
+        steps.append(("--require-db", False,
+                      "%d test(s) skipped; this run was told every suite must execute" % n_skipped))
+    elif n_skipped:
+        steps.append(("skipped suites", None,
+                      "%d test(s) skipped -- read the NOT EXECUTED lines above; pass --require-db "
+                      "to make that a failure" % n_skipped))
+
+    rc_lic, _ = _stream([sys.executable, str(ROOT / "scripts" / "license_check.py")])
+    steps.append(("license check", rc_lic == 0, "clean" if rc_lic == 0 else "problems found"))
+
+    # the generated role skills must still match the config they came from (ROADMAP C8)
+    rc_drift = _module("xscholar.drift", list(DEMO))
+    steps.append(("drift check", rc_drift == 0, "clean" if rc_drift == 0 else "drift found"))
+
+    # The privacy scan had no automated caller at all until now. Its deny list lives outside the
+    # repository by design, so on a machine without one it cannot run -- and that must be visible,
+    # not silent. Exit 2 is "NOT EXECUTED", which is not a pass and not a failure.
+    rc_priv, _ = _stream([sys.executable, str(ROOT / "scripts" / "privacy_scan.py")])
+    if rc_priv == 2:
+        steps.append(("privacy scan", False if strict_privacy else None,
+                      "NOT EXECUTED (see the line above)" +
+                      ("; this run was told it must run" if strict_privacy else
+                       "; pass --require-privacy on a machine that holds matter data")))
+    else:
+        steps.append(("privacy scan", rc_priv == 0, "clean" if rc_priv == 0 else "identifiers found"))
+
+    print("\n%-16s %s" % ("CHECK", "RESULT"))
+    for name, ok, detail in steps:
+        print("%-16s %-14s %s" % (name, {True: "passed", False: "FAILED", None: "NOT EXECUTED"}[ok], detail))
+    return 1 if any(ok is False for _, ok, _ in steps) else 0
 
 
 COMMANDS = {

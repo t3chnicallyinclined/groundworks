@@ -88,6 +88,59 @@ def say(step, detail=""):
     print("%-12s %s" % (step, detail))
 
 
+class Counted:
+    """A Writer that keeps count of what was actually attempted and what the datastore refused.
+
+    The walkthrough's verdict has to come from the engine, not from the adapter's prose: the adapter
+    is the code under test, and it chooses every word the old check read.
+    """
+
+    def __init__(self, writer):
+        self._writer = writer
+        self.calls, self.refusals, self.denials = 0, 0, 0
+
+    def __getattr__(self, name):
+        attr = getattr(self._writer, name)
+        if not callable(attr):
+            return attr
+
+        def counted(*args, **kwargs):
+            self.calls += 1
+            try:
+                return attr(*args, **kwargs)
+            except write.GateRefusal:
+                self.refusals += 1
+                raise
+            except dbmod.PermissionDenied:
+                self.denials += 1
+                raise
+        return counted
+
+    @staticmethod
+    def tally(writers):
+        out = {"calls": 0, "refusals": 0, "denials": 0}
+        for w in writers:
+            for key in out:
+                out[key] += getattr(w, key)
+        return out
+
+
+def scenario_problems(lines, tally, conn):
+    """Everything that means the walkthrough did not actually happen. Empty list means it did."""
+    problems = []
+    if not lines:
+        problems.append("the adapter's scenario reported no steps at all")
+    if not tally["calls"]:
+        problems.append("nothing went through the typed write surface; the scenario wrote nothing")
+    if not tally["refusals"] and not tally["denials"]:
+        problems.append("the datastore refused nothing. A walkthrough that is never refused has not "
+                        "shown a gate working -- it has shown writes that happened to be allowed")
+    if conn.count("fact") == 0:
+        problems.append("no fact rows exist after the scenario; there is nothing for the gates to have "
+                        "gated (this is the state that used to print 'done')")
+    return problems
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("instance_dir")
@@ -200,14 +253,25 @@ def main(argv=None):
                     % (agent_id, role, " lens " + lens if lens else "", agent_id, creds["XSCHOLAR_DB_ACCESS"]))
             else:
                 agent_db = conn
-            writers[role] = write.Writer(agent_db, inst, {"agent_id": agent_id, "role": role, "lens": lens})
+            writers[role] = Counted(write.Writer(agent_db, inst, {"agent_id": agent_id, "role": role, "lens": lens}))
         lines = []
         adapter.scenario(writers, lambda who, step, outcome: lines.append((who, step, outcome)))
         print("scenario     the typed write surface, with the datastore answering; [who did it]:")
         for who, step, outcome in lines:
             print("   - [%s] %s\n       %s" % (who, step, outcome))
+        tally = Counted.tally(writers.values())
+        say("scenario", "%d step(s) reported, %d call(s) through the typed write surface, "
+                        "%d refused by a gate, %d refused by permissions"
+            % (len(lines), tally["calls"], tally["refusals"], tally["denials"]))
+        # The verdict used to be this substring alone -- a phrase chosen by the instance's own
+        # adapter, in the code under test. An adapter that reported nothing gave `any([]) is False`,
+        # and the run printed "done" over a graph with zero facts. Measured: exit 0, "facts": [].
+        # So the checks below count what the ENGINE saw, which an adapter cannot talk its way out of.
         if any("would be a bug" in outcome for _, _, outcome in lines):
             print("SCENARIO FAILED: a write that must be refused was accepted")
+            return 1
+        for problem in scenario_problems(lines, tally, conn):
+            print("SCENARIO NOT EXECUTED: %s" % problem)
             return 1
 
         health = {
