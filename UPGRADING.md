@@ -144,6 +144,46 @@ Not required, but this is what the release is for.
 
 ---
 
+## 7b. Your first reload after upgrading will report conflicts. That is expected, and you must read them
+
+**A reload no longer overwrites a corrected unit status or grade.** Before this, `loader.load()` ran an unconditional `UPSERT`. A human correction was silently put back to the source value on the next routine reload, and a unit could quietly move from usable to unusable. A real instance lost a correction this way for weeks.
+
+Now each unit remembers what the source said at the last load, and which fields someone corrected. **But every row you loaded before upgrading has no such record yet.** Guessing "the source changed" for those rows would repeat the silent revert. So on your first reload, **any unit whose status or grade differs from the source is kept and reported as `no_provenance`**, and the load report shows it:
+
+```
+corrections  0 followed a source change, 0 held, 12 CONFLICT(S) with the source, 0 accepted from source by name
+   CONFLICT unit u_0042 status: kept 'in_window' (no_provenance, by UNATTRIBUTED); source says 'redacted' -- to take the source, ...
+```
+
+**For each conflict, decide which value is right.** Do not accept them all in bulk. That would repeat the original defect by hand.
+- **The kept value is a real correction:** do nothing. It is now held, and later reloads keep it.
+- **The source is right:** name that unit and field and reload:
+  ```
+  python scripts/run_instance.py <your instance> --url <url> --accept-source u_0042.status
+  ```
+  Naming a unit and field with no correction to accept is refused before anything is written, so a typo cannot pass silently.
+
+From then on, record corrections with `loader.correct_unit(db, unit_id, field, value, by, note)` so each one is attributed. A raw `UPDATE` is still caught, but it is recorded as `UNATTRIBUTED`.
+
+**If you had facts confirmed on a unit that a past reload reverted to unusable, re-check them.** The reload that undid the correction may also have removed their support without saying so. `xscholar/consistency.py` reports every row that stands at a gated value its gate no longer supports.
+
+---
+
+## 7c. Two new rules you may declare: independent promotion and unique fields
+
+**Independent promotion.** Add `independent: true` to a gate rule, and the database refuses the promotion from whoever proposed the row. **It refuses root too.** A different signed-in credential must promote it. This exists because a research lane on a real instance marked **50 authorities verified on a single reading each**: the verifier that was meant to check them was a later stage, and it died on a usage limit.
+- It needs an `access:` section with a role that both reads and writes the table. Without one, loading the config fails and names the rule.
+- A row written only by root cannot be promoted by anyone, because nobody is recorded as its proposer. Write rows through agent credentials.
+- If your own code confirms rows as root or under a single identity, turning this on will break that code. That is the point of the rule. Fix the code, don't remove the rule.
+
+**Unique fields.** Add `unique: {authority: [citation]}` at the top level, and add `unique` to `human_owned`.
+- **If your database already holds duplicates, applying the schema fails** and names the first duplicate pair. Merge the duplicates first.
+- **The comparison is exact.** `'Ref 1'` and `'ref 1 '` are different values. It stops copied rows, not rows typed differently.
+
+Regenerate your gate baseline after declaring either rule (step 4), then prove it can still fail.
+
+---
+
 ## 8. What this release does NOT give you
 
 - **No container.** Deliberate, see step 2.
