@@ -102,3 +102,27 @@ No datastore needed: fake adapters stand in. Adapter tests for an instance live 
 - **Change feeds:** notify agents when a unit, claim or conclusion they read changes status (for example a claim demoted to stale).
 
 Files: `server.py` (front door), `adapter.py` (contract, including the optional presentation methods), `panel_io.py` (panel submit and status), `test_server.py`. Views render through `xscholar/present` (standard library, loaded by path). Dependency: the `mcp` Python SDK (MIT).
+
+## Generic launch: any instance, no hand-written adapter
+
+An instance that runs on the engine's generated schema needs no adapter code. Point the server at the
+generic adapter and the instance config:
+
+```json
+{"mcpServers": {"xscholar": {
+  "command": "python",
+  "args": ["-m", "xscholar.mcp.server"],
+  "env": {"XSCHOLAR_ADAPTER": "xscholar.mcp.instance_adapter",
+          "XSCHOLAR_INSTANCE": "/path/to/instance.yaml",
+          "XSCHOLAR_DB_URL": "http://127.0.0.1:8002/sql",
+          "XSCHOLAR_NS": "my_instance", "XSCHOLAR_DB": "my_instance",
+          "XSCHOLAR_AGENT_ID": "reader_1", "XSCHOLAR_ROLE": "reader"}}}}
+```
+
+Tools then available: `unit_get`, `unit_search`, `claim_explain`, `eliminated_claims`, `health`,
+`claim_propose`, `claim_confirm`, `claim_rule_out`, `claim_support`, `conclusion_mark_ready`,
+`critique_add`, `critique_answer`, `panel_submit`, `panel_status`. Every write is stamped with the
+launch identity; every gate refusal comes back as `rejected_by_gate` with `missing` naming what the
+datastore wants. A hand-written adapter (for an instance with its own schema) implements the read and
+critique methods and may leave the lifecycle methods unimplemented; the server then reports
+`invalid_argument` for them, never an empty success.
