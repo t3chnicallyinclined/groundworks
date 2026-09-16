@@ -7,14 +7,15 @@ A method and engine for making AI agents reliably expert in one large body of ma
 
 Descriptive term: **evidence-gated knowledge graph built by exhaustive, verified agent reading.**
 
-## Status (2026-09-15)
+## Status (2026-09-16) -- v0.2, feature complete
 
-- **Method written down:** `docs/METHOD.md`.
-- **First instance built and running privately:** an appellate case record.
-  - 9,101 units read by 77 agents; 77 of 77 chunks passed the verbatim validator.
-  - Datastore gates proven by probe tests; lookup and compaction hooks live.
-  - Four role skills; a regression suite of past errors; a framework lens with a factor matrix.
-- **Not in this repo:** any instance's code or data. **An instance lives in its own project** (its adapters, vocabularies, settings and material); this repo holds the method, the engine and domain specs with synthetic examples. Extracting the still-coupled generic parts from the first instance is roadmap Track C.
+- **Method written down:** `docs/METHOD.md`. **Upgrading from an older checkout:** [`UPGRADING.md`](UPGRADING.md).
+- **424 tests, 0 skipped**, plus a license check, a config/skills drift check and a privacy scan, all run by `xscholar test` and summarised by name so a check that did NOT run is visible rather than green.
+- **The graph's shape belongs to the instance:** declare your own node tables and edge types in `instance.yaml` and they get schema, gate traversals, all three probe kinds, cleanup, per-role PERMISSIONS and a write path -- with no engine change.
+- **Gates are probed in both directions and pinned to a committed baseline**, so a rule that is quietly loosened fails the run instead of reporting `0 misbehaved`.
+- **First instance built and running privately:** an appellate case record. 9,101 units read by 77 agents; 77 of 77 chunks passed the verbatim validator.
+- **Not in this repo:** any instance's code or data. **An instance lives in its own project**; this repo holds the method, the engine and domain specs with synthetic examples.
+- **Known gaps, plainly:** there is no public demo instance (`demo-incident` is synthetic), and the MCP server has never been driven by a real external application. Two presentation ideas were measured and **not adopted** -- see `notes/`.
 
 ## Privacy boundary (non-negotiable)
 
@@ -85,6 +86,14 @@ python scripts/run_instance.py instances/demo-incident --url http://127.0.0.1:80
 Back it up with `surreal export` on whatever scheduler your machine already has (cron, systemd timer, Task Scheduler). That is one line, it runs on the host, and it fails visibly.
 
 **SurrealDB's license.** SurrealDB is Business Source License 1.1 (`docs/LICENSING.md` s.1). You install it yourself, so this repo distributes none of it -- but if you ever bundle or redistribute it, its `LICENSE` must stay conspicuous and `THIRD_PARTY_NOTICES.md` names it.
+
+### If you are an agent upgrading an existing instance
+
+Read **[`UPGRADING.md`](UPGRADING.md)** and work top to bottom. It is written for you, not for a
+human, and it is not optional maintenance: v0.2 fixes one data-loss defect (an empty labels
+directory deleted every evidence edge in scope and returned success) and several checks that
+reported green while doing nothing. It also tells you the two things a schema re-apply silently
+drops, and how to prove your regenerated gate baseline can still fail.
 
 ### If you are an agent working in this repository
 
