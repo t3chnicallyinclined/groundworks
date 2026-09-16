@@ -314,6 +314,9 @@ def _gates_block(inst):
             parts.append("has at least %d %s" % (count, _clause_words(rule, clause, inst, count)))
         for clause in rule.get("forbids") or []:
             parts.append("has no %s" % _clause_words(rule, clause, inst))
+        if rule.get("independent") is True:
+            parts.append("the change is made by a signed-in credential that has not written the row "
+                         "(never by its own proposer, never by root: ask another agent to review and promote it)")
         lines.append("%s %s." % (head, ", and ".join(parts)))
     lines += ["", "Gate ids in this instance: %s. These are human-owned (`human_owned:` in `instance.yaml`); "
                   "no agent may edit them." % _code_list([r["id"] for r in inst.gate_rules()])]

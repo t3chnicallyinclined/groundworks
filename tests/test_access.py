@@ -247,6 +247,112 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(access.AccessError):
             access.revoke(self.root, "seat_skeptic")      # revoking nothing is an error, not a pass
 
+    # ---- independent promotion: the defect was a lane promoting what it had read once ----------------
+
+    def independent(self, apply_access=True):
+        """A fresh database for the demo with `independent: true` on the fact confirmation rule, and
+        three credentials: two readers (same role, different identities) and a coordinator."""
+        from tests.test_gates import independent_instance
+        inst = independent_instance(self.inst)
+        type(self).n += 1
+        root = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns=self.ns, db="i%d" % self.n)
+        root.script(gates.schema_surql(inst))
+        root.script(gates.gate_surql(inst))
+        agents = {}
+        if apply_access:
+            root.script(access.access_surql(inst))
+            root.sql(UNIT_OK)
+            for agent_id, role in (("reader_1", "reader"), ("reader_2", "reader"), ("coordinator_1", "coordinator")):
+                agents[agent_id] = access.connect(access.provision(root, inst, agent_id, role))
+        return inst, root, agents
+
+    def test_a_proposer_cannot_promote_its_own_row_and_a_second_credential_can(self):
+        """The evidence is in place first, so the only thing a refusal can be about is who is writing."""
+        inst, root, agents = self.independent()
+        agents["reader_1"].sql("CREATE fact:f1 SET statement='s'")
+        agents["reader_1"].sql("RELATE fact:f1->cites->unit:u_ok")
+        for who, conn in (("its proposer", agents["reader_1"]), ("root", root)):
+            ok, message = conn.try_sql("UPDATE fact:f1 SET status='confirmed'")
+            self.assertFalse(ok, "%s promoted the row" % who)
+            self.assertEqual(gates.independence_rule_in(message), "confirmed_needs_source_grade", message)
+        self.assertEqual(root.sql("SELECT VALUE status FROM fact:f1")[0], ["proposed"])
+        ok, message = agents["reader_2"].try_sql("UPDATE fact:f1 SET status='confirmed'")
+        self.assertTrue(ok, "a second credential of the same role was refused: %s" % message)
+        row = root.sql("SELECT status, written_by FROM fact:f1")[0][0]
+        self.assertEqual(row, {"status": "confirmed", "written_by": ["agent:reader_1", "agent:reader_2"]})
+
+    def test_the_record_of_who_wrote_a_row_cannot_be_forged(self):
+        """`author` is a string the caller supplies. `written_by` is computed by the datastore on every
+        write: clearing it, or naming someone else, is discarded -- for an agent and for root."""
+        inst, root, agents = self.independent()
+        agents["reader_1"].sql("CREATE fact:f1 SET statement='s', author='coordinator_1|role=coordinator'")
+        agents["reader_1"].sql("RELATE fact:f1->cites->unit:u_ok")
+        agents["reader_1"].sql("UPDATE fact:f1 SET written_by = [agent:coordinator_1]")
+        root.sql("UPDATE fact:f1 SET written_by = []")
+        self.assertEqual(root.sql("SELECT VALUE written_by FROM fact:f1")[0], [["agent:reader_1"]])
+        ok, message = agents["reader_1"].try_sql("UPDATE fact:f1 SET status='confirmed', written_by=[]")
+        self.assertFalse(ok, "the proposer promoted its own row by clearing the record in the same write")
+        self.assertEqual(gates.independence_rule_in(message), "confirmed_needs_source_grade", message)
+
+    def test_a_row_only_root_wrote_has_no_proposer_and_no_one_may_promote_it(self):
+        """The configuration that let the real lane promote freely: everything written as root. Such
+        a row names no proposer, so no credential can show it is independent of one."""
+        inst, root, agents = self.independent()
+        root.sql("CREATE fact:f1 SET statement='s'; RELATE fact:f1->cites->unit:u_ok;", expect=2)
+        for conn in (root, agents["reader_2"], agents["coordinator_1"]):
+            ok, message = conn.try_sql("UPDATE fact:f1 SET status='confirmed'")
+            self.assertFalse(ok, "a row nobody identifiable wrote was promoted")
+            self.assertIn("written by []", message)
+        ok, message = root.try_sql("CREATE fact:f2 SET statement='s', status='confirmed'")
+        self.assertFalse(ok, "root created a row already promoted")
+        agents["reader_1"].sql("UPDATE fact:f1 SET note='read it'")          # a credential takes ownership
+        ok, message = agents["coordinator_1"].try_sql("UPDATE fact:f1 SET status='confirmed'")
+        self.assertTrue(ok, message)
+
+    def test_the_generated_probe_proves_independence_both_ways_and_leaves_nothing_behind(self):
+        inst, root, _ = self.independent()
+        report = gates.run_probes(inst, root)
+        entry = [e for e in report["rules"] if e["rule"] == "confirmed_needs_source_grade"][0]
+        self.assertEqual(report["misbehaved"], 0, entry)
+        for flag in ("reject", "wrong_evidence_reject", "self_promotion_reject", "root_promotion_reject", "accept"):
+            self.assertIs(entry[flag], True, "%s: %s" % (flag, entry))
+        self.assertEqual(report["independence_refused_ok"], 1)
+        self.assertEqual(report["independence_untested"], 0)
+        self.assertEqual(root.sql("SELECT VALUE id FROM agent WHERE record::id(id) CONTAINS 'zz_probe'")[0], [],
+                         "probe credentials left behind")
+        self.assertEqual(root.sql("SELECT VALUE id FROM fact WHERE record::id(id) CONTAINS 'zz_probe'")[0], [])
+
+    def test_the_probe_goes_red_when_independence_is_taken_out_of_the_datastore(self):
+        inst, root, _ = self.independent()
+        root.sql("REMOVE EVENT confirmed_needs_source_grade_independent ON TABLE fact;")
+        report = gates.run_probes(inst, root)
+        entry = [e for e in report["rules"] if e["rule"] == "confirmed_needs_source_grade"][0]
+        self.assertIs(entry["self_promotion_reject"], False, entry)
+        self.assertIs(entry["root_promotion_reject"], False, entry)
+        self.assertFalse(entry["behaved"])
+        self.assertGreaterEqual(report["misbehaved"], 1)
+
+    def test_without_credentials_to_sign_in_the_rule_is_reported_untested_by_name(self):
+        inst, root, _ = self.independent(apply_access=False)
+        report = gates.run_probes(inst, root)
+        entry = [e for e in report["rules"] if e["rule"] == "confirmed_needs_source_grade"][0]
+        self.assertFalse(entry["behaved"], entry)
+        self.assertIn("access is not applied to this database", entry["missing_independence_probe"])
+        self.assertEqual(report["independence_untested"], 1)
+        others = [e for e in report["rules"] if e["rule"] != "confirmed_needs_source_grade"]
+        self.assertTrue(all(e["behaved"] for e in others), "one untestable rule must not stop the others")
+
+    def test_the_writer_explains_a_refusal_as_who_is_writing_not_as_missing_evidence(self):
+        inst, root, agents = self.independent()
+        reader = write.Writer(agents["reader_1"], inst, {"agent_id": "reader_1", "role": "reader", "lens": None})
+        reader.propose("f1", "s")
+        with self.assertRaises(write.GateRefusal) as err:
+            reader.confirm("f1", ["u_ok"])        # the citation is good: only the identity is wrong
+        self.assertEqual(err.exception.rule, "confirmed_needs_source_grade")
+        self.assertIn("not its proposer", err.exception.missing)
+        other = write.Writer(agents["reader_2"], inst, {"agent_id": "reader_2", "role": "reader", "lens": None})
+        self.assertEqual(other.confirm("f1"), "fact:f1")
+
     def test_probes_catch_a_loosened_permissions_clause(self):
         """Prove the suite can fail: loosen critique CREATE to any role, the reader's critique succeeds."""
         stmt = "CREATE critique:k SET lens='lens_skeptic', head='h', verdict='survivable'"

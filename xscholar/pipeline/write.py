@@ -74,7 +74,8 @@ class Writer:
                                          valid_clause(valid_from)))
         if ok:
             return rid("fact", slug)
-        cited = self.db.sql("SELECT grade, status, record::id(id) AS unit FROM %s->cites->unit" % rid("fact", slug),
+        _raise_if_not_independent(message, rid("fact", slug))
+        cited =self.db.sql("SELECT grade, status, record::id(id) AS unit FROM %s->cites->unit" % rid("fact", slug),
                             expect=1)[0]
         good = [c for c in cited if c["grade"] in self.inst.confirming_grades() and c["status"] in self.inst.usable_statuses()]
         bad = [c for c in cited if c not in good]
@@ -157,8 +158,20 @@ class Writer:
         ok, message = self.db.try_sql("UPDATE %s SET ready=true" % target)
         if ok:
             return target
+        _raise_if_not_independent(message, target)
         problems, counts = readiness_problems(self.db, conclusion, self.inst)
         raise GateRefusal("conclusion_ready", "; ".join(problems) or message, {"counts": counts, "db": message})
+
+
+def _raise_if_not_independent(message, target):
+    """A refusal by an independence rule is about WHO is writing, not about evidence. Explaining it as
+    missing citations would send the agent to cite more and try again, which can never succeed."""
+    from xscholar import gates            # local: gates imports config, not this module
+    rule = gates.independence_rule_in(message)
+    if rule:
+        raise GateRefusal(rule, "%s may only be promoted by a signed-in credential that has not written it "
+                                "(not its proposer, not root); hand it to another agent to review and promote"
+                          % target, {"db": message})
 
 
 # The two edges whose refusal this module words by hand. Every other requires clause on readiness --

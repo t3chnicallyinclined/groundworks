@@ -429,6 +429,43 @@ class ServerTests(unittest.TestCase):
         self.assertIn("WEAKENED: rule a_rule_someone_deleted is in the baseline and gone from the config", text)
         self.assertIn("BASELINE: FAILED", text)
 
+    # ---- unique: the defect was two rows carrying an identical citation --------------------------
+
+    def test_a_unique_field_refuses_a_duplicate_and_takes_a_distinct_value(self):
+        """The demo declares `unique: {authority: [citation]}`. Raw writes first, then the generated
+        probe, which must say both halves happened and name the index that refused."""
+        conn = self.fresh("unique_raw")
+        conn.sql("CREATE authority:u1 SET citation='Ref 12', verified=false;")
+        ok, message = conn.try_sql("CREATE authority:u2 SET citation='Ref 12', verified=false;")
+        self.assertFalse(ok, "a second authority with the same citation was accepted")
+        self.assertIn("`authority_citation_unique`", message)
+        ok, message = conn.try_sql("UPDATE authority:u1 SET citation='Ref 12';")   # its own value: not a duplicate
+        self.assertTrue(ok, message)
+        ok, message = conn.try_sql("CREATE authority:u2 SET citation='Ref 13', verified=false;")
+        self.assertTrue(ok, message)
+        ok, _ = conn.try_sql("UPDATE authority:u2 SET citation='Ref 12';")
+        self.assertFalse(ok, "an update onto an existing citation was accepted")
+        conn.sql("DELETE authority:u1; DELETE authority:u2;")
+        report = gates.run_probes(self.inst, conn)
+        self.assertEqual([(u["table"], u["field"]) for u in report["unique"]], [("authority", "citation")])
+        entry = report["unique"][0]
+        self.assertTrue(entry["duplicate_reject"] and entry["distinct_accept"] and entry["behaved"], entry)
+        self.assertEqual(report["unique_misbehaved"], 0)
+        self.assertEqual(report["misbehaved"], 0, report)
+        self.assertEqual(conn.count("authority"), 0, "the unique probe left rows behind")
+
+    def test_the_unique_probe_goes_red_when_the_index_is_missing(self):
+        """Green on its own proves nothing: take the index away and the probe must say so."""
+        conn = self.fresh("unique_gone")
+        conn.sql("REMOVE INDEX authority_citation_unique ON authority;")
+        report = gates.run_probes(self.inst, conn)
+        entry = report["unique"][0]
+        self.assertIs(entry["duplicate_reject"], False, entry)
+        self.assertFalse(entry["behaved"])
+        self.assertEqual(report["unique_misbehaved"], 1)
+        rc, text = self.cli(db="unique_gone")     # the CLI re-applies the schema, so the index is back
+        self.assertEqual(rc, 0, text)
+
     def test_raw_write_is_refused_not_just_helper_calls(self):
         conn = self.fresh("raw")
         conn.sql("CREATE fact:zz_raw SET statement='s', status='proposed'")
@@ -987,6 +1024,189 @@ class StagedEvidenceTests(unittest.TestCase):
         plan = [p for p in gates.probes(cyclic) if p["rule"] == self.RULE][0]["evidence"][0]
         self.assertFalse(plan["built"], "a cycle must not be reported as built evidence")
         self.assertIn("chain", plan["reason"])
+
+
+def independent_instance(base, rule_id="confirmed_needs_source_grade"):
+    """The demo config with one rule requiring an independent promoter. Nothing else changes."""
+    data = json.loads(json.dumps(base.data))
+    for rule in data["gates"]:
+        if rule["id"] == rule_id:
+            rule["independent"] = True
+    return config.load(data)
+
+
+class UniqueDeclarationTests(unittest.TestCase):
+    """`unique:` in the config, without a database."""
+
+    def setUp(self):
+        self.inst = config.load(DEMO)
+
+    def load_with(self, unique, tables=None):
+        data = json.loads(json.dumps(self.inst.data))
+        data["unique"] = unique
+        if tables:
+            data["tables"] = tables
+        return config.load(data)
+
+    def test_a_unique_field_the_table_does_not_have_is_refused_by_name(self):
+        """An index on a field no row carries is accepted by the datastore and enforces nothing."""
+        for unique, words in (({"authority": ["citaton"]}, "unique.authority: 'citaton' is not a field of authority"),
+                              ({"event": ["summary"]}, "unique.event: 'summary' is not a field of event"),
+                              ({"cites": ["author"]}, "unique.cites: 'cites' is an edge type"),
+                              ({"nowhere": ["x"]}, "unique.nowhere: unknown table 'nowhere'")):
+            with self.subTest(unique=unique):
+                with self.assertRaises(config.ConfigError) as err:
+                    self.load_with(unique, tables={"event": {"fields": {"when": "string"}}})
+                self.assertIn(words, str(err.exception))
+        inst = self.load_with({"authority": ["citation"], "event": ["when"]},
+                              tables={"event": {"fields": {"when": "string"}}})
+        self.assertIn("DEFINE INDEX OVERWRITE event_when_unique ON event FIELDS when UNIQUE;", gates.schema_surql(inst))
+        self.assertIn("DEFINE INDEX OVERWRITE authority_citation_unique ON authority FIELDS citation UNIQUE;",
+                      gates.schema_surql(inst))
+
+    def test_the_built_in_field_list_matches_the_schema_it_validates_against(self):
+        """config.BUILT_IN_FIELDS exists so validation needs no Instance. If it drifts from the schema,
+        a real field is refused or a missing one is indexed."""
+        emitted = {}
+        for line in gates.schema_surql(self.inst).splitlines():
+            found = re.match(r"DEFINE FIELD OVERWRITE (\w+) ON (\w+) ", line)
+            if found and found.group(2) in config.BUILT_IN_NODE_TABLES:
+                emitted.setdefault(found.group(2), set()).add(found.group(1))
+        self.assertEqual({t: set(f) for t, f in config.BUILT_IN_FIELDS.items()}, emitted)
+
+    def test_unique_is_human_owned_when_declared(self):
+        data = json.loads(json.dumps(self.inst.data))
+        data["human_owned"].remove("unique")
+        with self.assertRaises(config.ConfigError) as err:
+            config.load(data)
+        self.assertIn("human_owned must include unique", str(err.exception))
+
+    def test_the_baseline_catches_a_removed_unique_field(self):
+        baseline = {"instance": self.inst.id, "spec": gates.spec(self.inst), "report": {"rules": []}}
+        self.assertEqual(baseline["spec"]["unique"], {"authority": ["citation"]})
+        data = json.loads(json.dumps(self.inst.data))
+        data.pop("unique")
+        data["human_owned"].remove("unique")
+        failures = gates.compare_baseline(baseline, None, gates.spec(config.load(data)))
+        self.assertIn("unique authority.citation is in the baseline and gone from the config: duplicates of it "
+                      "are no longer refused", failures)
+
+    def test_the_baseline_catches_a_unique_probe_that_went_quiet_or_red(self):
+        rules = [{"rule": r["id"], "reject": True, "accept": True, "wrong_evidence_reject": True}
+                 for r in self.inst.gate_rules()]
+        good = {"table": "authority", "field": "citation", "duplicate_reject": True, "distinct_accept": True}
+        baseline = {"instance": self.inst.id, "spec": gates.spec(self.inst),
+                    "report": {"rules": rules, "unique": [good]}}
+        silent = gates.compare_baseline(baseline, {"rules": rules, "unique": []}, gates.spec(self.inst))
+        self.assertIn("unique authority.citation was probed in the baseline and this run produced no probe "
+                      "result for it", silent)
+        red = gates.compare_baseline(baseline, {"rules": rules, "unique": [dict(good, duplicate_reject=False)]},
+                                     gates.spec(self.inst))
+        self.assertIn("unique authority.citation: duplicate_reject was true in the baseline, now False", red)
+
+    def test_probe_rows_of_one_table_never_collide_on_its_unique_index(self):
+        """A rule needing two evidence rows of a table with a unique field: identical template values
+        would be refused by the index, and the probe would report a setup error for the wrong reason."""
+        data = json.loads(json.dumps(self.inst.data))
+        data["unique"] = {"fact": ["statement"], "critique": ["head"]}
+        data["gates"][1]["requires"][0]["min"] = 2          # two supporting facts
+        inst = config.load(data)
+        probe = [p for p in gates.probes(inst) if p["rule"] == "root_cause_needs_support_and_attack"][0]
+        statements = [re.search(r"statement=('[^']*')", s).group(1) for s in probe["fix"] if s.startswith("CREATE fact:")]
+        self.assertEqual(len(statements), 2, probe["fix"])
+        self.assertEqual(len(set(statements)), 2, "two probe facts share a unique statement: %s" % statements)
+
+
+class IndependenceDeclarationTests(unittest.TestCase):
+    """`independent: true` on a gate rule, without a database."""
+
+    def setUp(self):
+        self.inst = config.load(DEMO)
+
+    def test_independence_needs_credentials_that_can_write_the_table(self):
+        """Root has no identity, so without `access:` nothing could ever make the change."""
+        data = json.loads(json.dumps(independent_instance(self.inst).data))
+        data.pop("access")
+        with self.assertRaises(config.ConfigError) as err:
+            config.load(data)
+        self.assertIn("gate confirmed_needs_source_grade: independent: true needs an access: section", str(err.exception))
+        data = json.loads(json.dumps(self.inst.data))
+        data["gates"][2]["independent"] = True             # authority: no demo role reads or writes it
+        with self.assertRaises(config.ConfigError) as err:
+            config.load(data)
+        self.assertIn("gate authority_verified_needs_official_text: independent: true, but no access role both "
+                      "reads and writes authority", str(err.exception))
+        data["gates"][2]["independent"] = "yes please"
+        with self.assertRaises(config.ConfigError) as err:
+            config.load(data)
+        self.assertIn("independent must be true or false", str(err.exception))
+
+    def test_independence_is_an_event_over_a_record_the_caller_cannot_write(self):
+        text = gates.gate_surql(independent_instance(self.inst))
+        self.assertIn("DEFINE FIELD OVERWRITE written_by ON fact TYPE array<record> VALUE array::union($before ?? [], "
+                      "IF $auth = NONE { [] } ELSE { [$auth] });", text)
+        event = [l for l in text.splitlines() if l.startswith("DEFINE EVENT OVERWRITE confirmed_needs_source_grade_independent")]
+        self.assertEqual(len(event), 1, text)
+        for part in ("WHEN $after.status = 'confirmed' AND ($before.status ?? NONE) != 'confirmed'",
+                     "$auth = NONE", "array::len($before.written_by ?? []) = 0", "$auth IN ($before.written_by ?? [])",
+                     "THROW 'independent promotion refused by rule confirmed_needs_source_grade:"):
+            self.assertIn(part, event[0])
+        self.assertNotIn("written_by", gates.gate_surql(self.inst), "an instance that declares nothing gets nothing")
+
+    def test_an_independence_only_rule_is_allowed_and_asserts_no_clause(self):
+        data = json.loads(json.dumps(self.inst.data))
+        data["gates"].append({"id": "noted_by_another", "table": "fact", "field": "status", "value": "inferred",
+                              "independent": True})
+        inst = config.load(data)
+        text = gates.gate_surql(inst)
+        self.assertIn("noted_by_another_independent", text)
+        self.assertNotIn("'inferred' OR", text)
+
+    def test_judge_needs_both_independence_refusals(self):
+        """A rule requiring an independent promoter whose writer or root was never refused, or was
+        refused for some other reason (recorded as False), must not report green."""
+        probe = {"constrained": False, "constraints": [], "forbids": [], "independent": True}
+        base = {"rule": "r", "reject": True, "accept": True, "wrong_evidence_reject": None}
+        self.assertTrue(gates.judge(dict(base, self_promotion_reject=True, root_promotion_reject=True), probe))
+        for flags in ({"self_promotion_reject": False, "root_promotion_reject": True},
+                      {"self_promotion_reject": True, "root_promotion_reject": False},
+                      {"self_promotion_reject": True}, {}):
+            with self.subTest(flags=flags):
+                entry = dict(base, **flags)
+                self.assertFalse(gates.judge(entry, probe), entry)
+        entry = dict(base)
+        gates.judge(entry, probe)
+        self.assertIn("did not try the promotion as the row's own writer and as root", entry["missing_independence_probe"])
+
+    def test_the_baseline_catches_independence_switched_off_or_its_probe_going_red(self):
+        inst = independent_instance(self.inst)
+        rules = [{"rule": r["id"], "reject": True, "accept": True, "wrong_evidence_reject": True,
+                  "self_promotion_reject": True, "root_promotion_reject": True} for r in inst.gate_rules()]
+        baseline = {"instance": inst.id, "spec": gates.spec(inst), "report": {"rules": rules}}
+        failures = gates.compare_baseline(baseline, None, gates.spec(self.inst))
+        self.assertIn("rule confirmed_needs_source_grade no longer requires an independent promoter: the "
+                      "credential that wrote a row may now promote it itself", failures)
+        now = [dict(r, self_promotion_reject=None) for r in rules]
+        failures = gates.compare_baseline(baseline, {"rules": now}, gates.spec(inst))
+        self.assertIn("rule confirmed_needs_source_grade: self_promotion_reject was true in the baseline, now None",
+                      failures)
+        self.assertNotIn("independent", json.dumps(gates.spec(self.inst)["rules"]),
+                         "a baseline taken before independence existed must still read the same")
+
+    def test_staged_evidence_behind_an_independent_rule_is_reported_not_built(self):
+        """V2-18 stages a gated evidence row by promoting it on the probe's own connection. Past an
+        independence rule that promotion cannot be made, so the plan must say so by name."""
+        inst = independent_instance(gated_evidence_instance(self.inst))
+        plan = [p for p in gates.probes(inst) if p["rule"] == StagedEvidenceTests.RULE][0]["evidence"][0]
+        self.assertFalse(plan["built"], plan)
+        self.assertIn("confirmed_needs_source_grade, which needs a promoter independent of the row's writers",
+                      plan["reason"])
+
+    def test_the_generated_skill_tells_the_agent_who_may_promote(self):
+        from xscholar import skills
+        text = skills._gates_block(independent_instance(self.inst))
+        self.assertIn("never by its own proposer, never by root", text)
+        self.assertNotIn("never by root", skills._gates_block(self.inst))
 
 
 if __name__ == "__main__":   # last, so running this file directly runs every class in it

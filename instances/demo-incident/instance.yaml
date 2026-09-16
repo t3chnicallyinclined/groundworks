@@ -62,6 +62,20 @@ edges:
     fields:
       read_by: string
 
+# A rule may also say `independent: true`: the change it gates may then only be made by a signed-in
+# credential that has not written the row. The datastore records who wrote each row from `$auth` (the
+# caller cannot set it), so a proposer can never promote its own row, root can never promote at all,
+# and a row only root has written has no proposer to be independent of and is refused until a
+# credential has written it. It needs `access:` below. Probed both ways: refused from the row's own
+# writer and from root, accepted from a second credential.
+#
+#   - id: confirmed_needs_source_grade
+#     ...
+#     independent: true
+#
+# Not switched on in this demo yet: every flow here that confirms a fact (the scenario in adapter.py
+# and several suites) writes and confirms under one identity or as root, and would need a second
+# credential first. That is the owner's call (gates are human-owned).
 gates:
   - id: confirmed_needs_source_grade
     table: fact
@@ -99,6 +113,14 @@ gates:
         to: [unit]
         where: "grade = 'official_text' AND status IN $usable"
         min: 1
+
+# Fields no two rows of a table may share, on a built-in or a declared node table: one unique index per
+# field in the datastore. A field the table does not have is refused by name at load time. Probed both
+# ways: a second row with the same value is refused by that field's own index, a different value is
+# accepted. The comparison is exact -- case and whitespace count -- so it stops a copied row, not a
+# differently typed one.
+unique:
+  authority: [citation]
 
 # Lenses (docs/METHOD.md section 7). A perspective or discipline lens becomes a datastore view
 # lens_<name> over label joined to its unit; its standard may be stricter than the base gates, never
@@ -159,7 +181,7 @@ verdicts:
   damaging: "A real problem that blocks readiness until it is answered on the record. Use it for anything curable by better evidence, a narrower claim or a rewrite, including not as currently written. Most surviving heads belong here."
   survivable: "Worth recording so the next reader sees it was considered, but it does not block. A weakness the conclusion can carry."
 
-human_owned: [gates, fidelity, status, evaluator, privacy, verdicts]
+human_owned: [gates, fidelity, status, evaluator, privacy, verdicts, unique]
 
 privacy:
   deny_list: "~/.xscholar/denylist.txt"

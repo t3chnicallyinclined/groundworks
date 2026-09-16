@@ -26,12 +26,12 @@ ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
             "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access",
-            "authority", "staleness", "discovery", "tables", "edges", "verdicts"}
+            "authority", "staleness", "discovery", "tables", "edges", "verdicts", "unique"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
 # optional sections that, WHEN PRESENT, are a bar the owner sets and no role may turn
-HUMAN_OWNED_IF_PRESENT = ["verdicts"]
+HUMAN_OWNED_IF_PRESENT = ["verdicts", "unique"]
 
 # ---- the graph shape ---------------------------------------------------------------------------
 #
@@ -50,6 +50,32 @@ BUILT_IN_EDGES = {
 }
 # Tables the engine owns for its own purposes; an instance may not take these names either.
 RESERVED_TABLES = ("agent",)              # xscholar/access.py AGENT_TABLE
+
+# The fields the engine's schema gives each built-in node table (xscholar/gates.py schema_surql), by
+# type. Kept here so validation can refuse a `unique:` declaration on a field a table does not have
+# without needing an Instance; tests/test_gates.py checks it against the emitted schema so the two
+# cannot drift.
+BUILT_IN_FIELDS = {
+    "unit": {"type": "string", "text": "string", "locator": "object", "status": "string", "grade": "string",
+             "hash": "string", "meta": "object"},
+    "label": {"unit": "record", "tier": "int", "dir": "string", "issues": "array", "targets": "array",
+              "role": "string", "reason": "string", "quote": "string", "grade": "string", "chunk": "string",
+              "run": "string"},
+    "fact": {"statement": "string", "status": "string", "note": "string", "tried": "string",
+             "evidence": "string", "reasoning_type": "string", "author": "string", "lens": "string",
+             "learned_at": "datetime"},
+    "conclusion": {"statement": "string", "ready": "bool", "rating": "string", "author": "string"},
+    "authority": {"citation": "string", "verified": "bool", "source_grade": "string"},
+    "critique": {"lens": "string", "head": "string", "verdict": "string", "text": "string", "author": "string",
+                 "answered": "bool"},
+    "answer": {"text": "string", "author": "string"},
+}
+
+# Independent promotion (a gate rule with `independent: true`). The datastore -- never the caller --
+# records on this field every signed-in credential (`$auth`) that has written the row, and refuses the
+# gated change from a credential already on it, from root, and on a row no credential has written.
+# Engine-owned: a declared table may not declare a field of this name.
+INDEPENDENCE_FIELD = "written_by"
 
 FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
 TABLE_KEYS = {"fields", "doc"}
@@ -401,6 +427,14 @@ class Instance:
         """The declared fields of a declared edge type; {} for a built-in (they carry none)."""
         return dict((self.declared_edges().get(edge) or {}).get("fields") or {})
 
+    def unique_fields(self):
+        """table -> [field, ...] for every `unique:` declaration; {} when the instance declares none."""
+        return {str(table): [str(f) for f in fields] for table, fields in (self.data.get("unique") or {}).items()}
+
+    def independent_rules(self):
+        """The gate rules whose change only a credential that has not written the row may make."""
+        return [rule for rule in self.gate_rules() if rule.get("independent") is True]
+
     def access_roles(self):
         """role name -> {read: [tables], write: [tables], lens_bound: bool}; {} when no access: section."""
         section = self.data.get("access") or {}
@@ -523,8 +557,13 @@ def validate(data):
             for key in ("table", "field", "value"):
                 if key not in rule:
                     problems.append("gate %s needs %s" % (rule["id"], key))
-            if not rule.get("requires") and not rule.get("forbids"):
+            independent = rule.get("independent", False)
+            if independent not in (True, False):
+                problems.append("gate %s: independent must be true or false" % rule["id"])
+            if not rule.get("requires") and not rule.get("forbids") and independent is not True:
                 problems.append("gate %s requires or forbids nothing" % rule["id"])
+            if independent is True:
+                _validate_independent(data, rule, problems)
         if len(set(ids)) != len(ids):
             problems.append("gate ids must be unique")
 
@@ -579,6 +618,8 @@ def validate(data):
                 if spec.get("lens_bound") not in (None, True, False):
                     problems.append("access role %s: lens_bound must be true or false" % name)
 
+    _validate_unique(data, problems)
+
     ev = data["evaluator"]
     if not isinstance(ev, dict) or not ev.get("regression_file"):
         problems.append("evaluator needs a regression_file: the errors this project has actually made")
@@ -588,6 +629,74 @@ def validate(data):
     if problems:
         raise ConfigError("config invalid:\n  - " + "\n  - ".join(problems))
     return data
+
+
+def _validate_independent(data, rule, problems):
+    """A rule that requires an independent promoter needs identities the datastore can tell apart.
+
+    Root has none (`$auth` is NONE for a system user, measured on 3.1.6), so an instance with no
+    `access:` section could never make the change at all, and neither could one where no role may both
+    read and write the table. Both are refused here, by name, rather than shipping a gate that refuses
+    everything or one no probe could ever exercise."""
+    where = "gate %s" % rule["id"]
+    table = str(rule.get("table"))
+    if table not in node_tables_of(data):
+        problems.append("%s: independent promotion is recorded on a node table's rows; %r is not one"
+                        % (where, table))
+        return
+    if INDEPENDENCE_FIELD in (declared_tables_of(data).get(table) or {}):
+        problems.append("%s: tables.%s declares a field %r, which the engine owns for independent promotion"
+                        % (where, table, INDEPENDENCE_FIELD))
+    access = data.get("access") if isinstance(data.get("access"), dict) else {}
+    roles = access.get("roles") if isinstance(access.get("roles"), dict) else {}
+    if not roles:
+        problems.append("%s: independent: true needs an access: section. Without record credentials every "
+                        "write comes from root, which has no identity to tell apart, so nothing could ever "
+                        "make this change" % where)
+        return
+    writers = [name for name, spec in roles.items() if isinstance(spec, dict)
+               and table in (spec.get("write") or []) and table in (spec.get("read") or [])]
+    if not writers:
+        problems.append("%s: independent: true, but no access role both reads and writes %s, so no "
+                        "credential could propose or promote it" % (where, table))
+
+
+def _validate_unique(data, problems):
+    """`unique: {table: [field, ...]}` -- one unique index per field, on a built-in or declared node table.
+
+    A field the table does not have is refused by name: an index on a field no row carries would be
+    accepted by the datastore and would enforce nothing."""
+    if "unique" not in data:
+        return
+    section = data["unique"]
+    if not isinstance(section, dict) or not section:
+        problems.append("unique must be a mapping of table -> [field, ...]")
+        return
+    declared = declared_tables_of(data)
+    edges = edge_map_of(data)
+    for table, fields in section.items():
+        table = str(table)
+        where = "unique.%s" % table
+        if table in edges:
+            problems.append("%s: %r is an edge type; unique applies to node tables" % (where, table))
+            continue
+        if table in BUILT_IN_FIELDS:
+            known = dict(BUILT_IN_FIELDS[table])
+        elif table in declared:
+            known = {name: spec["type"] for name, spec in declared[table].items()}
+        else:
+            problems.append("%s: unknown table %r; known node tables: %s"
+                            % (where, table, ", ".join(node_tables_of(data))))
+            continue
+        if not isinstance(fields, list) or not fields:
+            problems.append("%s: must be a non-empty list of field names" % where)
+            continue
+        if len(set(map(str, fields))) != len(fields):
+            problems.append("%s: lists a field twice" % where)
+        for field in fields:
+            if str(field) not in known:
+                problems.append("%s: %r is not a field of %s; its fields are %s"
+                                % (where, field, table, ", ".join(sorted(known))))
 
 
 def _validate_graph_shape(data, problems):

@@ -88,6 +88,11 @@
         "from": "authority",
         "to": "unit"
       }
+    },
+    "unique": {
+      "authority": [
+        "citation"
+      ]
     }
   },
   "report": {
@@ -226,6 +231,24 @@
     "forbidden_refused_ok": 1,
     "forbids_untested": 0,
     "requires_untested": 0,
-    "misbehaved": 0
+    "independence_refused_ok": 0,
+    "independence_untested": 0,
+    "misbehaved": 0,
+    "unique": [
+      {
+        "table": "authority",
+        "field": "citation",
+        "index": "authority_citation_unique",
+        "built": true,
+        "reason": "",
+        "duplicate_reject": true,
+        "distinct_accept": true,
+        "duplicate_error": "Database index `authority_citation_unique` already contains 'zz_probe a', with record `authority:zz_probe_unique_authority_citation_first`",
+        "distinct_error": "",
+        "setup_error": "",
+        "behaved": true
+      }
+    ],
+    "unique_misbehaved": 0
   }
 }
