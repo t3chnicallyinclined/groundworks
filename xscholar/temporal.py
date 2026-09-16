@@ -45,6 +45,11 @@ TRACKED = {
              "type": "option<string>", "event": "fact_status_history"},
     "conclusion": {"field": "ready", "history": "ready_history", "before": "ready_before", "after": "ready_after",
                    "type": "option<bool>", "event": "conclusion_ready_history"},
+    # A verdict can be downgraded now that re-stating a head replaces it (write.py critique()). That
+    # must never be a silent edit: a `fatal` head blocks readiness outright, so who softened it, when,
+    # and from what, belong on the record exactly as a fact's status changes do.
+    "critique": {"field": "verdict", "history": "verdict_history", "before": "verdict_before",
+                 "after": "verdict_after", "type": "option<string>", "event": "critique_verdict_history"},
 }
 
 # append-only: the new array must be at least as long as the old one and start with it

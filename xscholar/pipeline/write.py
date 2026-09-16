@@ -117,11 +117,29 @@ class Writer:
     # ---- workbench --------------------------------------------------------------------------
 
     def critique(self, conclusion, head, verdict, text=None, lens=None):
+        """One head of attack. Re-stating the same head under the same lens REPLACES its verdict.
+
+        This is the contract the MCP adapter has always documented, and until 2026-09-16 the code did
+        not honour it: the id came from a Keyer that increments on every repeat, so a re-statement
+        made a SECOND critique inside one session and collided on the id in a later one. Measured:
+
+            1st  critique:c1__lens_skeptic__476d2269  fatal
+            2nd  critique:c1__lens_skeptic__49a218dc  survivable   -> 2 rows, the fatal one still blocking
+            new session, same head -> DbError: Database record ... already exists
+
+        Because a `fatal` head has no `answered` escape in the readiness gate, that made every fatal
+        verdict permanent and unappealable: the documented cure ("downgraded on the record and then
+        answered") had no write path at all. The id is now derived from (conclusion, lens, head)
+        alone, and the write is an UPSERT, so the same head is the same row. The change is not silent:
+        `verdict_history` on critique is append-only and written by a datastore event
+        (xscholar/temporal.py), so a downgrade is on the record with its author and time.
+        """
         lens = lens or self.identity.get("lens") or self.identity["role"]
-        cid = "%s__%s__%s" % (conclusion, lens, self.keyer("write", "critique", conclusion, head)[-8:])
-        self.db.sql("CREATE %s SET lens=%s, head=%s, verdict=%s, text=%s, author=%s, answered=false"
+        cid = "%s__%s__%s" % (conclusion, lens, edge_ids.edge_id("critique", "head", conclusion, head)[-8:])
+        self.db.sql("UPSERT %s SET lens=%s, head=%s, verdict=%s, text=%s, author=%s, "
+                    "answered = IF answered != NONE { answered } ELSE { false }"
                     % (rid("critique", cid), q(lens), q(head), q(verdict), q(text), q(self.author)), expect=1)
-        eid = self.keyer("write", "attacks", cid, conclusion)
+        eid = edge_ids.edge_id("write", "attacks", cid, conclusion)
         self.db.sql("RELATE %s->attacks:%s->%s SET author=%s" % (rid("critique", cid), eid, rid("conclusion", conclusion), q(self.author)),
                     expect=1)
         return rid("critique", cid)
