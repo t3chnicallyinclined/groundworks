@@ -68,6 +68,8 @@ Design consequence: authority verification runs automatically only against court
 
 **Embedding models (commercial use allowed):** BAAI/bge-m3 (MIT); nomic-embed-text v1.5 and v2 (Apache-2.0); Snowflake arctic-embed-l-v2.0 (Apache-2.0); Qwen3-Embedding 0.6B/4B/8B (Apache-2.0); mxbai-embed-large-v1 (Apache-2.0); multilingual-e5-large (MIT in metadata; no LICENSE file; confirm). **Never:** jina-embeddings-v3 (CC-BY-NC-4.0).
 
+**A model's own licence is not the whole licence (added 2026-09-16, `research/MODELS_AND_TOOLING_2026-09-16.md`).** Many retrievers tagged MIT or Apache-2.0 were *trained* on **MS MARCO**, whose terms say "non-commercial research purposes only". The tag on the weights says nothing about that. Named in the review: the ColBERTv2 checkpoint, GTE-ModernColBERT, the OpenSearch sparse model, and the ms-marco cross-encoder family. **Until a lawyer answers question 8, treat a model trained on MS MARCO as not cleared for the product, whatever its tag says.** `scripts/license_check.py` reads licence files and imports, and cannot see training data, so this has to be checked by hand for every model. **Also never, non-commercial:** jina-reranker-v2, Bespoke-MiniCheck-7B, SPLADE (CC BY-NC-SA). **Avoid in the product:** Arize Phoenix (Elastic License 2.0).
+
 **Libraries:** pySHACL, Apache Jena, sentence-transformers, transformers (Apache-2.0); RDF4J (BSD-3); FAISS, LadybugDB (MIT). Keep license and NOTICE files.
 **Neo4j GDS (OpenGDS): GPLv3.** Hosted use is not "conveying"; shipping it self-hosted requires offering corresponding source (LAWYER on whether our calling code is covered). Community edition: 4 cores, 3 models.
 
@@ -108,6 +110,8 @@ Design consequence: authority verification runs automatically only against court
 5. Does our code become a GPLv3 covered work if a self-hosted edition calls Neo4j GDS?
 6. Unauthorized-practice exposure: attorney-only terms sufficient? Any path to serve self-represented litigants?
 7. Does Anthropic's Usage Policy high-risk requirement apply to a B2B tool used by attorneys, and what disclosure should the UI show?
+8. A model released under MIT or Apache-2.0 but trained on data with non-commercial terms (for example MS MARCO): may its weights be used in a commercial product, hosted or self-hosted? Does the answer change for evaluation-only use?
+9. **Data licences for test and evaluation corpora.** Section 6 classes software licences only. Where do CC BY 4.0, ODC-By and CC BY-SA sit? Specifically: may we (a) download them for private evaluation, (b) commit derived fixtures to this repo, (c) publish evaluation results, and (d) ship them in a public demo? CC BY-SA's share-alike clause is the case most likely to differ between those four.
 
 ## Sources
 SurrealDB: raw.githubusercontent.com/surrealdb/surrealdb/main/LICENSE; /v3.1.6/LICENSE; surrealdb.com/license; surrealdb.com/pricing.
