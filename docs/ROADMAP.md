@@ -11,7 +11,7 @@ The instance runs in its own private repository. This repo receives only generic
 
 | # | Task | Acceptance |
 |---|---|---|
-| B1 | Label quality measurement: independent double-labeling on samples, adjudication, agreement reported in health | Agreement rates printed on every health run. **Harness built 2026-09-15 (`xscholar/pipeline/agreement.py`, `xscholar labels agreement A B`): per-field agreement, tier within-one, Cohen's kappa for tier and direction, set overlap for issues and targets, a disagreement list and the relevance-split count for adjudication. Not yet run on a real instance: that measurement is still owed** |
+| B1 | Label quality measurement: independent double-labeling on samples, adjudication, agreement reported in health | Agreement rates printed on every health run. **Harness built 2026-09-15 (`xscholar/pipeline/agreement.py`, `xscholar labels agreement A B`): per-field agreement, tier within-one, Cohen's kappa for tier and direction, set overlap for issues and targets, a disagreement list and the relevance-split count for adjudication. First run on the demo instance (notes/2026-09-15_first_agent_run.md): agents vs stub on 63 log lines, tier kappa 0.93, direction kappa 0.88, relevance split 2 of 63. Two independent agents with human adjudication on a real instance is still owed** |
 | B2 | Status-aware skipping: unusable units get status-only labels | Cost per unit reported and lower than a full read |
 | B3 | Tiered model routing: cheap or local model for tier-0 triage, random audit | Audit agreement and cost per unit reported |
 | B4 | Content hashing and incremental relabel | Adding one document relabels only that document |
