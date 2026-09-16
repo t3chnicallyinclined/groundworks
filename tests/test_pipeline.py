@@ -99,6 +99,26 @@ class ChunkerTests(Base):
         self.assertEqual(first[0]["id"], "log_001")
 
 
+class ChunkByTests(Base):
+    def test_units_sharing_a_locator_field_stay_together(self):
+        rows = [dict(log(i, "l%d" % i), locator={"host": "h", "file": "f", "line": i, "ts": "d%d" % (i // 7)})
+                for i in range(1, 31)]  # 30 units; i // 7 gives days of 6, 7, 7, 7, 3
+        pieces = list(chunker._pieces(rows, 10, "ts"))
+        self.assertEqual([len(p) for p in pieces], [6, 7, 7, 10])      # never splits a day; fills to 10 max
+        days = [{r["locator"]["ts"] for r in p} for p in pieces]
+        self.assertTrue(all(d.isdisjoint(e) for i, d in enumerate(days) for e in days[i + 1:]))
+        self.assertEqual(sum(len(p) for p in pieces), 30)
+
+    def test_a_day_larger_than_the_size_is_split_not_dropped(self):
+        rows = [dict(log(i, "x"), locator={"host": "h", "file": "f", "line": i, "ts": "same"}) for i in range(1, 24)]
+        pieces = list(chunker._pieces(rows, 10, "ts"))
+        self.assertEqual([len(p) for p in pieces], [10, 10, 3])
+
+    def test_without_chunk_by_behaviour_is_unchanged(self):
+        rows = [log(i, "x") for i in range(1, 26)]
+        self.assertEqual([len(p) for p in chunker._pieces(rows, 10)], [10, 10, 5])
+
+
 class ValidatorTests(Base):
     def setUp(self):
         super().setUp()

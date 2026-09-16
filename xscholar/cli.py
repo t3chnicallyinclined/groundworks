@@ -4,6 +4,7 @@
     xscholar validate INSTANCE.yaml
     xscholar gates INSTANCE.yaml --emit schema|gates|probes
     xscholar gates INSTANCE.yaml --apply --url URL --ns NS --db DB
+    xscholar lens INSTANCE.yaml --emit | --apply --url URL --ns NS --db DB
     xscholar run INSTANCE_DIR [--memory PORT | --url URL --ns NS --db DB]
     xscholar labels validate SLICE.jsonl LABELS.jsonl INSTANCE.yaml
     xscholar labels agreement A.jsonl B.jsonl [--out REPORT.json]
@@ -47,6 +48,7 @@ def _test(args):
 COMMANDS = {
     "validate": lambda a: _module("xscholar.config", a),
     "gates": lambda a: _module("xscholar.gates", a),
+    "lens": lambda a: _module("xscholar.lens", a),
     "run": lambda a: subprocess.call([sys.executable, str(ROOT / "scripts" / "run_instance.py")] + a, cwd=str(ROOT)),
     "panel": lambda a: _module("xscholar.panel.panel", a),
     "labels": _labels,

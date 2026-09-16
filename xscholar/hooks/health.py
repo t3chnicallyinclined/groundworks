@@ -34,7 +34,8 @@ def check(env=None):
         return False, "WARNING xscholar: instance config unusable: %s" % str(exc).splitlines()[0]
     db = dbmod.Db(url=env.get("XSCHOLAR_DB_URL", "http://127.0.0.1:8002/sql"), ns=env.get("XSCHOLAR_NS") or inst.id,
                   db=env.get("XSCHOLAR_DB") or inst.id, user=env.get("XSCHOLAR_DB_USER", "root"),
-                  password=env.get("XSCHOLAR_DB_PASS", "root"), timeout=float(env.get("XSCHOLAR_HOOK_TIMEOUT", "3")))
+                  password=env.get("XSCHOLAR_DB_PASS", "root"), timeout=float(env.get("XSCHOLAR_HOOK_TIMEOUT", "3")),
+                  access=env.get("XSCHOLAR_DB_ACCESS"))
     try:
         health = instance_adapter.GenericAdapter(inst, db).health()
     except Exception as exc:  # any failure is reported, never swallowed into silence

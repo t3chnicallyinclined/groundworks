@@ -5,7 +5,9 @@
     python scripts/run_instance.py INSTANCE_DIR --url http://127.0.0.1:8002/sql --ns NS --db DB
 
 Steps: config -> schema and gates -> probes (both ways) -> intake -> chunk -> label -> validate
-       -> load -> the adapter's scenario through the typed write surface -> rendered view -> health.
+       -> load -> lens views and framework filings (matrix per node, row count per lens)
+       -> access (per-agent PERMISSIONS, applied as root) -> the adapter's scenario through the typed
+       write surface, each step under a provisioned agent credential, never root -> health.
 Any failed check stops the run with a non-zero exit. Outputs go to INSTANCE_DIR/out/.
 """
 import argparse
@@ -21,9 +23,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
+from xscholar import access  # noqa: E402
 from xscholar import config  # noqa: E402
 from xscholar import db as dbmod  # noqa: E402
 from xscholar import gates  # noqa: E402
+from xscholar import lens as lensmod  # noqa: E402
+from xscholar import temporal  # noqa: E402
 from xscholar.pipeline import intake  # noqa: E402
 from xscholar.pipeline import chunker  # noqa: E402
 from xscholar.pipeline import validator  # noqa: E402
@@ -86,12 +91,22 @@ def main(argv=None):
 
         conn.script(gates.schema_surql(inst))
         conn.script(gates.gate_surql(inst))
+        conn.script(temporal.temporal_surql(inst))
+        say("temporal", "valid_from/valid_to, learned_at and an append-only status_history on fact; "
+                        "learned_at and ready_history on conclusion")
         report = gates.run_probes(inst, conn)
         say("gates", "%d rule(s): %d rejected as required, %d accepted as required, %d misbehaved"
             % (len(report["rules"]), report["rejected_ok"], report["accepted_ok"], report["misbehaved"]))
         if report["misbehaved"]:
             print(json.dumps(report, indent=2))
             return 1
+
+        if inst.access_roles():
+            applied = conn.script(access.access_surql(inst))
+            say("access", "%d role(s) -> PERMISSIONS on %d table(s), applied as root (%d statements)"
+                % (len(inst.access_roles()), len(access.TABLES), len(applied)))
+        else:
+            say("access", "no access: section; every scenario step will run as root (nothing separates identities)")
 
         adapter = load_module(inst_dir / "adapter.py")
         counts = intake.write_units(adapter.Adapter(), out, inst)
@@ -141,18 +156,43 @@ def main(argv=None):
         say("load", "%d units, %d labels (grade agent), %d targets, %d bears_on edges, %d swept"
             % (counts["units"], counts["labels"], counts["targets"], counts["edges"], counts["swept"]))
 
-        writer = write.Writer(conn, inst, {"agent_id": "demo_walkthrough", "role": "reader", "lens": None})
+        lensmod.apply(conn, inst)
+        filed = lensmod.build_framework(conn, inst)
+        say("lenses", "%d lens(es) applied; %s" % (len(inst.lenses), ", ".join(
+            "%s (%s) %d row(s)" % (name, inst.lens(name).get("kind"), n) for name, n in lensmod.view_counts(conn, inst).items()) or "no views"))
+        say("framework", "%d label(s) with issues, %d filed, %d unfiled, %d falls_under edge(s), %d swept"
+            % (filed["with_issues"], filed["filed"], filed["unfiled"], filed["edges"], filed["swept"]))
+        for line in lensmod.matrix_lines(lensmod.matrix(conn, inst)):
+            print("   " + line)
+
+        identities = [("reader", "reader_1", None), ("seat", "seat_skeptic", "lens_skeptic"),
+                      ("coordinator", "coordinator_1", None)]
+        writers = {}
+        for role, agent_id, lens in identities:
+            if inst.access_roles():
+                creds = access.provision(conn, inst, agent_id, role, lens=lens)
+                agent_db = access.connect(creds)
+                agent_db.ping()
+                say("provision", "%s as %s%s -> XSCHOLAR_DB_USER=%s XSCHOLAR_DB_ACCESS=%s (signed in, not root)"
+                    % (agent_id, role, " lens " + lens if lens else "", agent_id, creds["XSCHOLAR_DB_ACCESS"]))
+            else:
+                agent_db = conn
+            writers[role] = write.Writer(agent_db, inst, {"agent_id": agent_id, "role": role, "lens": lens})
         lines = []
-        adapter.scenario(writer, lambda step, outcome: lines.append((step, outcome)))
-        print("scenario     the typed write surface, with the datastore answering:")
-        for step, outcome in lines:
-            print("   - %s\n       %s" % (step, outcome))
+        adapter.scenario(writers, lambda who, step, outcome: lines.append((who, step, outcome)))
+        print("scenario     the typed write surface, with the datastore answering; [who did it]:")
+        for who, step, outcome in lines:
+            print("   - [%s] %s\n       %s" % (who, step, outcome))
+        if any("would be a bug" in outcome for _, _, outcome in lines):
+            print("SCENARIO FAILED: a write that must be refused was accepted")
+            return 1
 
         health = {
             "units": conn.count("unit"), "labels": conn.count("label"),
             "facts": conn.sql("SELECT status, count() AS n FROM fact GROUP BY status")[0],
             "conclusions_ready": conn.sql("SELECT count() AS n FROM conclusion WHERE ready = true GROUP ALL")[0],
             "critiques_unanswered": conn.sql("SELECT count() AS n FROM critique WHERE answered = false GROUP ALL")[0],
+            "temporal": temporal.history_count(conn, "fact"),   # facts whose status has changed since learned
             "DRIFT_confirmed_without_valid_cite": conn.sql(
                 "SELECT count() AS n FROM fact WHERE status = 'confirmed' AND "
                 "count(SELECT VALUE id FROM $parent->cites->unit WHERE grade IN %s AND status IN %s) = 0 GROUP ALL"

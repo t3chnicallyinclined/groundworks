@@ -1,0 +1,14 @@
+# Keep the build context (and the image) small; matches .gitignore's spirit.
+instances/*/out/
+.git/
+.github/
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+backups/
+notes/
+research/
+.pytest_cache/
+*.egg-info/

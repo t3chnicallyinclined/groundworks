@@ -60,13 +60,36 @@ gates:
       - edge: attacks
         where: "verdict = 'damaging' AND answered = false"
 
+# Lenses (docs/METHOD.md section 7). A perspective or discipline lens becomes a datastore view
+# lens_<name> over label joined to its unit; its standard may be stricter than the base gates, never
+# looser (statuses within status.usable, grades within fidelity.confirming); its filter is over label
+# fields only. A framework lens files every labelled unit under transcribed frame nodes via the crosswalk.
 lenses:
   - name: service_owner
-    filter: "status IN $usable"
-  - name: security
-    filter: "issues CONTAINS 'config' OR issues CONTAINS 'dependency'"
-  - name: management
+    kind: perspective
+    charter: "Owns the service; wants the true cause; hurt by a wrong fix; asks: what changed, what saturated, what would have caught it"
+    standard: {status: [in_window]}
     filter: "tier >= 2"
+    backing: source
+  - name: security
+    kind: discipline
+    charter: "Thinks in trust boundaries and configuration drift; wants every config or dependency change named; hurt by a cause that hides a control gap"
+    standard: {status: [in_window], grade: [original_log]}
+    filter: "issues CONTAINS 'config' OR issues CONTAINS 'dependency'"
+    backing: prompt
+  - name: management
+    kind: perspective
+    charter: "Decides what to fund next; wants only material that survives review; hurt by noise"
+    filter: "tier >= 2"
+    backing: prompt
+  - name: incident_framework
+    kind: framework
+    charter: "Files every labelled unit under the review template's headings"
+    frame:
+      source: "Incident review template v3, section 2"
+      nodes: [trigger, propagation, detection, mitigation, prevention]
+    crosswalk: {trigger: [deploy, config], propagation: [saturation, dependency, capacity], detection: [monitoring], mitigation: [], prevention: [config, monitoring]}
+    backing: source
 
 roles:
   - skill: red-team
@@ -88,3 +111,13 @@ human_owned: [gates, fidelity, status, evaluator, privacy]
 privacy:
   deny_list: "~/.xscholar/denylist.txt"
   providers_allowed: ["the model provider the owner approved"]
+
+# Per-agent datastore credentials (xscholar/access.py): a role SELECTs only `read`, writes only `write`;
+# a lens_bound role writes lens-carrying rows only under its own lens; only loader writes labels;
+# DELETE is root-only. Gates stay in force for every role.
+access:
+  roles:
+    reader:      {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
+    seat:        {read: [unit, label, fact, conclusion, critique, answer], write: [critique, attacks, answer, answers], lens_bound: true}
+    loader:      {read: [unit, label, conclusion], write: [unit, label, bears_on, conclusion]}
+    coordinator: {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}

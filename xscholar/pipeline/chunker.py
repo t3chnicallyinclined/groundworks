@@ -18,6 +18,38 @@ class ChunkError(Exception):
     pass
 
 
+def _pieces(rows, size, chunk_by=None):
+    """Cut rows into slices of at most `size`. With `chunk_by` (a locator field), units that share a
+    value of that field stay in one slice: a slice is closed only at a value boundary, unless one
+    value alone exceeds `size`, in which case that value is split at `size` (and reported as such)."""
+    if not chunk_by:
+        for start in range(0, len(rows), size):
+            yield rows[start:start + size]
+        return
+    groups = []
+    for row in rows:
+        key = str((row.get("locator") or {}).get(chunk_by))
+        if groups and groups[-1][0] == key:
+            groups[-1][1].append(row)
+        else:
+            groups.append((key, [row]))
+    piece = []
+    for _, group in groups:
+        if len(group) > size:
+            if piece:
+                yield piece
+                piece = []
+            for start in range(0, len(group), size):
+                yield group[start:start + size]
+            continue
+        if piece and len(piece) + len(group) > size:
+            yield piece
+            piece = []
+        piece.extend(group)
+    if piece:
+        yield piece
+
+
 def chunk(units_path, out_dir, inst):
     out_dir = pathlib.Path(out_dir)
     slices_dir = out_dir / "slices"
@@ -30,14 +62,15 @@ def chunk(units_path, out_dir, inst):
     placed = 0
     for utype in inst.unit_names():
         rows = by_type.pop(utype, [])
-        size = inst.unit_type(utype)["chunk_size"]
-        for n, start in enumerate(range(0, len(rows), size)):
-            piece = rows[start:start + size]
+        spec = inst.unit_type(utype)
+        size = spec["chunk_size"]
+        for n, piece in enumerate(_pieces(rows, size, spec.get("chunk_by"))):
             cid = "%s_%04d" % (utype, n)
             with (slices_dir / (cid + ".jsonl")).open("w", encoding="utf-8") as fh:
                 for unit in piece:
                     fh.write(json.dumps(unit, ensure_ascii=False) + "\n")
-            chunks.append({"id": cid, "type": utype, "units": [u["id"] for u in piece], "count": len(piece)})
+            chunks.append({"id": cid, "type": utype, "units": [u["id"] for u in piece], "count": len(piece),
+                           "chunk_by": spec.get("chunk_by")})
             placed += len(piece)
     if by_type:
         raise ChunkError("units of unknown type: %s" % ", ".join(sorted(by_type)))

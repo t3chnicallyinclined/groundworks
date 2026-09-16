@@ -62,6 +62,22 @@ python scripts/run_instance.py instances/demo-incident --memory 8025   # a whole
 
 The demo runs a complete non-legal instance on a throwaway in-memory database: config, generated schema and gates, a reject-and-accept probe for every rule, intake, chunking, labelling (a stand-in rule labeller; real instances use agents), the verbatim validator, the loader, and a walkthrough in which the datastore refuses each premature promotion and says exactly what is missing. Outputs land in `instances/demo-incident/out/`.
 
+### Run with Docker Compose
+
+Tier 1 packaging: one box, no orchestration platform. This is deliberate -- Kubernetes is for when there are tenants (`docs/ROADMAP.md` "Beyond v0.2"), not here yet.
+
+```
+cp .env.example .env                      # edit if you want non-default credentials/ports
+docker compose up --build engine          # builds the image, starts SurrealDB, runs the demo
+docker compose --profile ops up -d backup # optional: a daily `surreal export` into ./backups
+```
+
+`docker compose up --build engine` starts `surrealdb` (waits for its healthcheck), builds the `engine` image from the repo's `Dockerfile`, and runs `scripts/run_instance.py instances/demo-incident` against it over HTTP -- the same demo as above, but on a persistent, containerized database instead of a throwaway in-memory one. Data lives in the named volume `surrealdb_data` (mounted at `/data` in the container, `rocksdb:/data/db`); the demo instance's own files live in `./instances`, bind-mounted read-write into the containers at `/instances` so its `out/` outputs land back on the host. Exports from the `backup` service land in `./backups` on the host.
+
+**SurrealDB's license ships with it.** SurrealDB is Business Source License 1.1 (`docs/LICENSING.md` s.1): shipping it self-hosted, its `LICENSE` file must stay conspicuous. `THIRD_PARTY_NOTICES.md` names it; do not strip or hide that notice from a distributed image or bundle.
+
+`scripts/compose_check.sh` validates `compose.yaml` and, where Docker is available, runs the demo and checks its output for a clean gate report and no unsupported confirmed facts.
+
 ### If you are an agent working in this repository
 
 1. Read `CLAUDE.md` first. Its rules are binding: no instance data here, verify before claiming, gates tested both ways, checks that pass by default are the enemy, the evaluator is human-owned, licensing by class.

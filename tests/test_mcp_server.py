@@ -32,7 +32,8 @@ from xscholar.present import metrics  # noqa: E402
 
 EXPECTED_TOOLS = {"unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
                   "critique_add", "critique_answer", "panel_submit", "panel_status",
-                  "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready"}
+                  "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready",
+                  "lens_view"}
 
 # ---- synthetic instances ------------------------------------------------------------------------
 
@@ -402,6 +403,12 @@ class ToolContract:
         self.assertEqual(out["status"], "invalid_argument")
 
     # -- views (engine/present) --------------------------------------------------------------------
+    def test_lens_view_without_lenses_is_invalid_argument_not_empty(self):
+        out = run_tool(self.srv, "lens_view", {"name": self.ds["lenses"][0]})
+        self.assertEqual(out["status"], "invalid_argument")
+        self.assertIn("not supported", out["error"])
+        self.assertEqual(run_tool(self.srv, "lens_view", {"name": "x", "limit": 0})["status"], "invalid_argument")
+
     def test_view_defaults_to_data_without_rendered(self):
         cite = self.ds["units"][0]["cite"]
         default = self.tool("unit_get", locator=cite)

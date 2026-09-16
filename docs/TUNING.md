@@ -119,6 +119,18 @@ Every layer has knobs. This is what each one does, where to start, how to tell w
 | Latency | keep it small (*measured: about 300 ms, roughly a third interpreter start-up*) | index the fields the hook filters before optimising anything else |
 | Silence | must never look like "nothing known" | a stopped database prints a warning |
 
+**Two silent failures measured on a second instance (2026-09-15), both of which made a hook answer nothing while looking healthy:**
+1. **A string function over a column that is NONE on some rows errors**, and the error block is then read as "no rows". The hook answered nothing for months. Guard: never wrap a nullable column in a function; filter `IS NOT NONE` first, or match an indexed column exactly.
+2. **Wrapping a column in a function prevents index use.** p95 reached 2,156 ms, past the hook's own timeout, and a timed-out hook returns silence. Fix: exact-spelling matching against an indexed column, or a FULLTEXT index with a lowercase analyzer, rather than `string::lowercase(col) CONTAINS ...`.
+
+Both failures look identical from the outside: the agent simply is not told anything. **Test a hook by planting a fact it must surface, not by checking that it runs.**
+
+**Sparse columns, not just nullable ones.** In the measured case the column's declared type was not the problem: 1,603 of 2,259 rows simply had no value, and one such row made the whole statement return an error, which the caller read as "no rows". Any sparsely populated column does this.
+
+**What the fix was worth** (same instance, 120 real tool calls, the same sample both runs): p95 fell from **2,156 ms to 277 ms**, and the hook answered on **55% of locator-bearing calls against 23% before**. Generated spellings matched against plain indexes on the filtered columns.
+
+**Measuring a hook A/B: snapshot the sample.** An A/B that re-harvests its sample from live transcripts compares different calls between runs, because the transcripts grow while you work. Snapshotting the sample to a file was the difference between a comparison that meant something and one that did not.
+
 ---
 
 ## The improvement loop

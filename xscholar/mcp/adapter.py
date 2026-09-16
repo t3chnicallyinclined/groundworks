@@ -183,6 +183,17 @@ class InstanceAdapter(abc.ABC):
         """Ask the datastore to mark a conclusion ready. GateRejected names what is missing."""
         raise InvalidArgument("conclusion_mark_ready is not supported by adapter %s" % self.name)
 
+    # ---- lenses (OPTIONAL; the generic adapter implements it from the config's `lenses:`) ---------
+
+    def lens_view(self, name, limit=50):
+        """The graph through one configured lens: rows of its datastore view (unit id, tier, direction,
+        issues, targets, locator, source text under UNTRUSTED_TEXT_KEY), never anything the lens's own
+        standard excludes, with `drift` counting rows whose unit changed since the view was built; for a
+        framework lens, its matrix (labels per frame node, usable and unusable). The lens names, kinds
+        and backing grades are listed by health under "lenses". Raise InvalidArgument for an unknown lens.
+        """
+        raise InvalidArgument("lens_view is not supported by adapter %s" % self.name)
+
     # ---- presentation (OPTIONAL; engine/present renders what these return) ---------------------
 
     def present_rows(self, tool_name, result):

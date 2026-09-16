@@ -71,51 +71,61 @@ class Adapter:
         yield {"id": "log_dup_0001", "type": "log_line", "exclude": "duplicate export of app.log lines 1-40"}
 
 
-def scenario(writer, report):
-    """The walkthrough: what an agent would do, with the gate answering each step.
+def scenario(writers, report):
+    """The walkthrough: what agents would do, with the datastore answering each step.
 
-    `report(step, outcome)` records each line for the runner. Every refusal here is the point."""
+    `writers` maps the launch identities reader, seat and coordinator to a Writer, each on its own
+    provisioned credential (or all on root when the instance has no access: section).
+    `report(who, step, outcome)` records each line for the runner. Every refusal here is the point:
+    a GateRefusal is the gate; a PermissionDenied is the datastore's per-agent permissions."""
     from xscholar.pipeline.write import GateRefusal
+    from xscholar.db import PermissionDenied
 
-    writer.propose("pool_exhausted", "The database connection pool was exhausted from 11:40",
+    reader, seat, coord = writers["reader"], writers["seat"], writers["coordinator"]
+
+    def attempt(writer, step, fn, bug="ACCEPTED (this would be a bug)"):
+        try:
+            fn()
+            report(writer.author, step, bug)
+        except GateRefusal as refusal:
+            report(writer.author, step, "REFUSED by gate: " + refusal.missing)
+        except PermissionDenied as denied:
+            report(writer.author, step, "DENIED by permissions: " + str(denied).split(":")[0])
+
+    reader.propose("pool_exhausted", "The database connection pool was exhausted from 11:40",
                    reasoning_type="direct_quote")
-    try:
-        writer.confirm("pool_exhausted")
-        report("confirm pool_exhausted with no evidence", "ACCEPTED (this would be a bug)")
-    except GateRefusal as refusal:
-        report("confirm pool_exhausted with no evidence", "REFUSED: " + refusal.missing)
-    try:
-        writer.confirm("pool_exhausted", ["log_0001"])   # true text, but out of the window
-        report("confirm with an out-of-window line", "ACCEPTED (this would be a bug)")
-    except GateRefusal as refusal:
-        report("confirm with an out-of-window line", "REFUSED: " + refusal.missing)
-    writer.confirm("pool_exhausted", ["log_0043", "met_0001"])
-    report("confirm with an in-window error line and the pool metric", "ACCEPTED")
+    attempt(reader, "confirm pool_exhausted with no evidence", lambda: reader.confirm("pool_exhausted"))
+    attempt(reader, "confirm with an out-of-window line", lambda: reader.confirm("pool_exhausted", ["log_0001"]))
+    reader.confirm("pool_exhausted", ["log_0043", "met_0001"])
+    report(reader.author, "confirm with an in-window error line and the pool metric", "ACCEPTED")
 
-    writer.propose("retries_raised", "The deploy raised retry attempts from 3 to 8", reasoning_type="direct_quote")
-    writer.confirm("retries_raised", ["chg_0001", "log_0011"])
-    report("confirm retries_raised on the change record and the deploy line", "ACCEPTED")
+    reader.propose("retries_raised", "The deploy raised retry attempts from 3 to 8", reasoning_type="direct_quote")
+    reader.confirm("retries_raised", ["chg_0001", "log_0011"])
+    report(reader.author, "confirm retries_raised on the change record and the deploy line", "ACCEPTED")
 
-    writer.rule_out("dns_failure", "DNS resolution failed during the incident",
+    reader.rule_out("dns_failure", "DNS resolution failed during the incident",
                     tried="searched every in-window line for resolver errors",
                     evidence="one 900ms cache refresh warning (log_0067); no failures; p99 query time flat (met_0002)")
-    report("rule_out dns_failure", "RECORDED as an eliminated claim (never gated)")
+    report(reader.author, "rule_out dns_failure", "RECORDED as an eliminated claim (never gated)")
 
-    writer.support("pool_exhausted", "rc_pool_exhaustion")
-    writer.support("retries_raised", "rc_pool_exhaustion")
-    try:
-        writer.mark_ready("rc_pool_exhaustion")
-        report("mark rc_pool_exhaustion ready before any attack", "ACCEPTED (this would be a bug)")
-    except GateRefusal as refusal:
-        report("mark rc_pool_exhaustion ready before any attack", "REFUSED: " + refusal.missing)
-    cid = writer.critique("rc_pool_exhaustion", "a slow query, not retry volume, could have filled the pool",
-                          "damaging", lens="lens_skeptic")
-    try:
-        writer.mark_ready("rc_pool_exhaustion")
-        report("mark ready with a damaging head unanswered", "ACCEPTED (this would be a bug)")
-    except GateRefusal as refusal:
-        report("mark ready with a damaging head unanswered", "REFUSED: " + refusal.missing)
-    writer.answer(cid, "Query p99 stayed at 41ms against a 38ms baseline (met_0002); the pool filled from "
-                       "retry volume, not slow queries.")
-    writer.mark_ready("rc_pool_exhaustion")
-    report("answer the head, then mark ready", "ACCEPTED: rc_pool_exhaustion is ready")
+    reader.support("pool_exhausted", "rc_pool_exhaustion")
+    reader.support("retries_raised", "rc_pool_exhaustion")
+    report(reader.author, "support rc_pool_exhaustion with both facts", "ACCEPTED")
+
+    attempt(reader, "critique rc_pool_exhaustion as a reader",
+            lambda: reader.critique("rc_pool_exhaustion", "a reader trying to attack", "survivable", lens="lens_skeptic"))
+    attempt(coord, "mark rc_pool_exhaustion ready before any attack", lambda: coord.mark_ready("rc_pool_exhaustion"))
+
+    attempt(seat, "critique under another seat's lens (management)",
+            lambda: seat.critique("rc_pool_exhaustion", "borrowed lens", "survivable", lens="management"))
+    attempt(seat, "confirm a fact as a seat", lambda: seat.confirm("retries_raised"))
+    cid = seat.critique("rc_pool_exhaustion", "a slow query, not retry volume, could have filled the pool", "damaging")
+    report(seat.author, "critique rc_pool_exhaustion under its own lens", "ACCEPTED: %s" % cid)
+
+    attempt(coord, "mark ready with a damaging head unanswered", lambda: coord.mark_ready("rc_pool_exhaustion"))
+    coord.answer(cid, "Query p99 stayed at 41ms against a 38ms baseline (met_0002); the pool filled from "
+                      "retry volume, not slow queries.")
+    coord.mark_ready("rc_pool_exhaustion")
+    report(coord.author, "answer the head, then mark ready", "ACCEPTED: rc_pool_exhaustion is ready")
+    attempt(coord, "delete the critique as coordinator", lambda: coord.db.sql("DELETE %s" % cid, expect=1),
+            bug="ACCEPTED (this would be a bug: deletes are root-only, through the archive)")

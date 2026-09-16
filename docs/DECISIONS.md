@@ -11,6 +11,7 @@ Matter-specific decisions live in the private instance repository, not here.
 | 2026-09-15 | Gates enforced in the datastore, proven by probes in both directions | Wrapper-only rules are conventions; raw access bypasses them |
 | 2026-09-15 | SurrealDB as system of record for small instances | ASSERT with subqueries enforces gates on raw access; built-in HNSW and BM25; proven in instance 1 |
 | 2026-09-15 | Agent labels are artifacts with an explicit grade, never conclusions | Bulk ingest never writes conclusions |
+| 2026-09-15 | Per-agent datastore credentials are SurrealDB record access (`DEFINE ACCESS ... TYPE RECORD` over an `agent` table) with PERMISSIONS reading `$auth.role` and `$auth.lens`; root stays for schema, gates, loads and deletes | A system user (`DEFINE USER ... ON DATABASE`) bypasses PERMISSIONS on 3.1.6, so only a record identity can carry row rules; a denied write answers `[]` with status OK, so the client must raise on it (rule 5) |
 | 2026-09-15 | Separate evidence axes: fidelity, status, authority | A true statement from an unusable source must be caught |
 | 2026-09-15 | Lenses are projections plus lens-keyed overlays; evidence is never edited per viewer | Many perspectives without copies; disagreement preserved |
 | 2026-09-15 | The domain's authoritative framework, transcribed from its source, is the primary lens vocabulary | Experts judge against that framework |

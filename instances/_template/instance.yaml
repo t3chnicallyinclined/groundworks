@@ -86,11 +86,33 @@ roles:
   - {skill: premortem, categories: [category_1, category_2]}
   - {skill: claim-audit, verdicts: [VERIFIED, MISMATCH, NOT_FOUND, OUTSIDE_STATUS, MISATTRIBUTED, INTERPOLATED, UNCHECKABLE]}
 
-# LENSES
+# LENSES (docs/METHOD.md section 7). kind: perspective | discipline | framework.
+# backing: prompt | source | graph | calibrated (how far to trust the lens; prompt-backed never supports promotion).
+# standard: statuses/grades this lens accepts; may be STRICTER than the base gates (status.usable,
+#   fidelity.confirming), never looser; omitted means the base. filter: over label fields only
+#   (tier, dir, issues, targets, role, chunk). A perspective/discipline lens becomes the view lens_<name>.
+# A framework lens needs frame.source (where it was transcribed from), frame.nodes (unique ids) and a
+#   crosswalk from every node to issues of the vocabulary ([] for none); it files labels under the nodes.
 lenses:
-  - {name: framework, kind: framework_filing}
-  - {name: decision_maker, filter: "status IN usable AND grade IN confirming"}
-  - {name: adversary, filter: "dir = 'against_goal'", order: "tier DESC"}
+  - name: decision_maker
+    kind: perspective
+    charter: "Who is looking, what they want, what hurts them, the questions they always ask, their blind spots"
+    standard: {status: [usable], grade: [original]}
+    filter: "tier >= 2"
+    backing: prompt
+  - name: adversary
+    kind: perspective
+    charter: "Everything against the goal, strongest first"
+    filter: "dir = 'against_goal'"
+    backing: prompt
+  - name: framework
+    kind: framework
+    charter: "Files every labelled unit under the authoritative framework in its own words"
+    frame:
+      source: "authoritative document and location (e.g. guideline section, order page)"
+      nodes: [f1, f2]
+    crosswalk: {f1: [issue_a], f2: [issue_a, issue_b]}
+    backing: source
 
 # 8. EVALUATOR. HUMAN-OWNED (entries may be added, never removed or loosened)
 evaluator:
@@ -109,3 +131,14 @@ privacy:
   providers_allowed: ["the model provider the owner approved"]
 
 human_owned: [fidelity, status, authority, gates, evaluator, privacy]
+
+# OPTIONAL: per-agent datastore credentials (xscholar/access.py). Each launch identity gets its own
+# datastore credential with these table permissions; the datastore, not the server, enforces them.
+# read: tables the role may SELECT; write: tables it may CREATE/UPDATE/RELATE; lens_bound: writes
+# lens-carrying rows only under its own lens. Only `loader` may write label. DELETE is root-only.
+access:
+  roles:
+    reader:      {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
+    seat:        {read: [unit, label, fact, conclusion, critique, answer], write: [critique, attacks, answer, answers], lens_bound: true}
+    loader:      {read: [unit, label, conclusion], write: [unit, label, bears_on, conclusion]}
+    coordinator: {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}

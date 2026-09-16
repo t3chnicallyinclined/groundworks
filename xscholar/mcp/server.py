@@ -43,7 +43,8 @@ from xscholar.present import render as present_render, features as present_featu
 
 TOOL_NAMES = ("unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
               "critique_add", "critique_answer", "panel_submit", "panel_status",
-              "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready")
+              "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready",
+              "lens_view")
 IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 MAX_LIMIT = 200
 VIEWS = ("data",) + tuple(present_render.MODES)
@@ -280,6 +281,15 @@ def build_server(adapter, provenance, panel_root=None):
                                "identity": provenance.as_dict(), "tools": list(TOOL_NAMES),
                                "panel_root": str(panel_root) if panel_root else None}}
         return call_view("health", run, adapter, view)
+
+    @server.tool(name="lens_view", annotations=read, description=(
+        "The graph through one configured lens (health lists the lens names, kinds and backing grades). Returns "
+        "the rows of that lens's datastore view: unit id, tier, direction, issues, targets, locator and the exact "
+        "source text under untrusted_source_text; never anything the lens's own standard excludes. 'drift' counts "
+        "rows whose unit changed after the view was built. For a framework lens, returns its matrix: labels per "
+        "frame node, usable and unusable. Counts are items, not weight. Unknown lens: status invalid_argument."))
+    def lens_view(name: str, limit: int = 50) -> dict:
+        return call("lens_view", lambda: adapter.lens_view(_required("name", name), _limit(limit)))
 
     @server.tool(name="critique_add", annotations=write, description=(
         "Record one critique (a single head of attack or concern) against a conclusion, with a verdict from "

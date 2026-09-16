@@ -25,10 +25,21 @@ SCALAR_NULL = {"null", "none", "~", ""}
 ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
-            "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed"}
+            "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
+
+# lenses (docs/METHOD.md section 7): kinds, backing grades, and what a lens filter may say
+LENS_KINDS = ("perspective", "discipline", "framework")
+LENS_BACKINGS = ("prompt", "source", "graph", "calibrated")   # weakest first
+LENS_KEYS = {"name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk"}
+LENS_STANDARD_KEYS = ("status", "grade")
+LENS_FILTER_FIELDS = ("tier", "dir", "issues", "targets", "role", "chunk")   # label fields only
+LENS_FILTER_WORDS = ("AND", "OR", "NOT", "IN", "CONTAINS", "CONTAINSANY", "CONTAINSALL", "CONTAINSNOT",
+                     "NONE", "true", "false")
+LENS_FILTER_TOKEN = re.compile(r"""\s*(?:('(?:[^'\\]|\\.)*')|("(?:[^"\\]|\\.)*")|(-?\d+(?:\.\d+)?)
+                                   |(>=|<=|!=|=|>|<|\(|\)|\[|\]|,)|([A-Za-z_][A-Za-z0-9_]*)|(\S))""", re.X)
 
 
 class ConfigError(Exception):
@@ -252,6 +263,26 @@ class Instance:
     def gate_rules(self):
         return list(self.data["gates"])
 
+    def access_roles(self):
+        """role name -> {read: [tables], write: [tables], lens_bound: bool}; {} when no access: section."""
+        section = self.data.get("access") or {}
+        return {name: {"read": list(spec.get("read") or []), "write": list(spec.get("write") or []),
+                       "lens_bound": bool(spec.get("lens_bound"))}
+                for name, spec in (section.get("roles") or {}).items()}
+
+    def lens(self, name):
+        for lens in self.lenses:
+            if lens["name"] == name:
+                return lens
+        raise KeyError("no lens %r in instance %s (known: %s)"
+                       % (name, self.id, ", ".join(l["name"] for l in self.lenses) or "none"))
+
+    def lens_standard(self, lens):
+        """The statuses and grades a lens accepts: its own standard, or the base sets where it names none."""
+        standard = lens.get("standard") or {}
+        return {"status": list(standard.get("status") or self.usable_statuses()),
+                "grade": list(standard.get("grade") or [])}   # [] means every grade of a unit already usable
+
     def section(self, name, default=None):
         return self.data.get(name, default)
 
@@ -362,13 +393,164 @@ def validate(data):
     if missing:
         problems.append("human_owned must include %s (CLAUDE.md rule 6)" % ", ".join(missing))
 
+    if "access" in data:   # optional: per-agent datastore roles (xscholar/access.py)
+        acc = data["access"]
+        roles = acc.get("roles") if isinstance(acc, dict) else None
+        if not isinstance(roles, dict) or not roles:
+            problems.append("access needs roles: a mapping of role name -> {read: [...], write: [...], lens_bound}")
+        else:
+            from xscholar import access as _access   # lazy: access imports config
+            for name, spec in roles.items():
+                if not ID_RE.match(str(name)):
+                    problems.append("access role %r must match [a-z0-9_]+" % name)
+                if not isinstance(spec, dict) or not isinstance(spec.get("read"), list) or not spec["read"]:
+                    problems.append("access role %s needs read: a non-empty list of tables" % name)
+                    continue
+                if "write" in spec and not isinstance(spec["write"], list):
+                    problems.append("access role %s: write must be a list of tables" % name)
+                    continue
+                unknown = sorted(set(map(str, spec["read"] + (spec.get("write") or []))) - set(_access.TABLES))
+                if unknown:
+                    problems.append("access role %s names unknown table(s) %s; known: %s"
+                                    % (name, ", ".join(unknown), ", ".join(_access.TABLES)))
+                if "label" in (spec.get("write") or []) and name != "loader":
+                    problems.append("access role %s may not write label: only the loader writes labels" % name)
+                if spec.get("lens_bound") not in (None, True, False):
+                    problems.append("access role %s: lens_bound must be true or false" % name)
+
     ev = data["evaluator"]
     if not isinstance(ev, dict) or not ev.get("regression_file"):
         problems.append("evaluator needs a regression_file: the errors this project has actually made")
 
+    _validate_lenses(data, problems)
+
     if problems:
         raise ConfigError("config invalid:\n  - " + "\n  - ".join(problems))
     return data
+
+
+def check_lens_filter(text):
+    """Return None if `text` is a filter over label fields, else the problem. No paths, no $params."""
+    if not isinstance(text, str) or not text.strip():
+        return "filter must be a non-empty string"
+    pos = 0
+    while pos < len(text):
+        m = LENS_FILTER_TOKEN.match(text, pos)
+        if not m or m.end() == pos:
+            return "filter %r: cannot read %r" % (text, text[pos:pos + 10])
+        word, stray = m.group(5), m.group(6)
+        if stray:
+            return "filter %r: character %r is not allowed" % (text, stray)
+        if word and word not in LENS_FILTER_FIELDS and word.upper() not in LENS_FILTER_WORDS \
+                and word not in ("true", "false"):
+            return ("filter %r: %r is not a label field (%s) or an operator; unit fields belong in the standard"
+                    % (text, word, ", ".join(LENS_FILTER_FIELDS)))
+        pos = m.end()
+    return None
+
+
+def _validate_lenses(data, problems):
+    """Every lens: name, kind, charter, backing; a standard never looser than the base; a filter over
+    label fields; a framework lens with a sourced frame and a crosswalk from frame nodes to issues."""
+    lenses = data.get("lenses")
+    if lenses is None:
+        return
+    if not isinstance(lenses, list):
+        problems.append("lenses must be a list")
+        return
+    status = data.get("status") if isinstance(data.get("status"), dict) else {}
+    fid = data.get("fidelity") if isinstance(data.get("fidelity"), dict) else {}
+    vocab = data.get("vocabulary") if isinstance(data.get("vocabulary"), dict) else {}
+    issues = list(vocab.get("issues") or [])
+    names = []
+    for lens in lenses:
+        if not isinstance(lens, dict) or not lens.get("name"):
+            problems.append("each lens needs a name")
+            continue
+        name = str(lens["name"])
+        names.append(name)
+        where = "lens %s" % name
+        if not ID_RE.match(name):
+            problems.append("%s: name must match [a-z0-9_]+" % where)
+        unknown = sorted(set(lens) - LENS_KEYS)
+        if unknown:
+            problems.append("%s: unknown key(s) %s; allowed: %s" % (where, ", ".join(unknown), ", ".join(sorted(LENS_KEYS))))
+        kind = lens.get("kind")
+        if kind not in LENS_KINDS:
+            problems.append("%s: kind must be one of %s (got %r)" % (where, ", ".join(LENS_KINDS), kind))
+        if not isinstance(lens.get("charter"), str) or not lens["charter"].strip():
+            problems.append("%s: charter is required (who looks, what they want, what hurts them; human-signed)" % where)
+        backing = lens.get("backing")
+        if backing is not None and backing not in LENS_BACKINGS:
+            problems.append("%s: backing must be one of %s (got %r)" % (where, ", ".join(LENS_BACKINGS), backing))
+        # standard: stricter than the base gates, never looser
+        standard = lens.get("standard")
+        if standard is not None:
+            if not isinstance(standard, dict):
+                problems.append("%s: standard must be a mapping of status and/or grade lists" % where)
+            else:
+                bad = sorted(set(standard) - set(LENS_STANDARD_KEYS))
+                if bad:
+                    problems.append("%s: standard may only name %s (got %s)" % (where, ", ".join(LENS_STANDARD_KEYS), ", ".join(bad)))
+                for key, exists, base, base_name in (("status", status.get("values") or [], status.get("usable") or [], "status.usable"),
+                                                     ("grade", fid.get("order") or [], fid.get("confirming") or [], "fidelity.confirming")):
+                    values = standard.get(key)
+                    if values is None:
+                        continue
+                    if not isinstance(values, list) or not values:
+                        problems.append("%s: standard.%s must be a non-empty list" % (where, key))
+                        continue
+                    missing = [v for v in values if v not in exists]
+                    if missing:
+                        problems.append("%s: standard.%s names %s, which does not exist" % (where, key, ", ".join(map(str, missing))))
+                    looser = [v for v in values if v in exists and v not in base]
+                    if looser:
+                        problems.append("%s: standard.%s admits %s, outside the base %s: a lens may be stricter, never looser"
+                                        % (where, key, ", ".join(map(str, looser)), base_name))
+        if lens.get("filter") is not None:
+            problem = check_lens_filter(lens["filter"])
+            if problem:
+                problems.append("%s: %s" % (where, problem))
+        # frame and crosswalk: required for a framework lens, checked whenever present
+        frame, crosswalk = lens.get("frame"), lens.get("crosswalk")
+        if kind == "framework" and (frame is None or crosswalk is None):
+            problems.append("%s: a framework lens needs frame (source, nodes) and crosswalk (node -> issues)" % where)
+        nodes = []
+        if frame is not None:
+            if not isinstance(frame, dict) or not isinstance(frame.get("source"), str) or not frame["source"].strip():
+                problems.append("%s: frame.source must say where the frame was transcribed from" % where)
+            raw_nodes = frame.get("nodes") if isinstance(frame, dict) else None
+            if not isinstance(raw_nodes, list) or not raw_nodes:
+                problems.append("%s: frame.nodes must be a non-empty list of node ids" % where)
+            else:
+                nodes = [str(n) for n in raw_nodes]
+                if len(set(nodes)) != len(nodes):
+                    problems.append("%s: frame.nodes must be unique" % where)
+                bad = [n for n in nodes if not ID_RE.match(n)]
+                if bad:
+                    problems.append("%s: frame node id(s) %s must match [a-z0-9_]+" % (where, ", ".join(bad)))
+        if crosswalk is not None:
+            if frame is None:
+                problems.append("%s: a crosswalk needs a frame to file under" % where)
+            if not isinstance(crosswalk, dict):
+                problems.append("%s: crosswalk must map frame node -> list of issues" % where)
+            else:
+                not_nodes = sorted(set(map(str, crosswalk)) - set(nodes))
+                if not_nodes and nodes:
+                    problems.append("%s: crosswalk key(s) %s are not frame nodes" % (where, ", ".join(not_nodes)))
+                uncovered = [n for n in nodes if n not in crosswalk]
+                if uncovered:
+                    problems.append("%s: crosswalk must name every frame node (missing %s; use [] for none)"
+                                    % (where, ", ".join(uncovered)))
+                for node, values in crosswalk.items():
+                    if not isinstance(values, list):
+                        problems.append("%s: crosswalk.%s must be a list of issues" % (where, node))
+                        continue
+                    bad = [v for v in values if v not in issues]
+                    if bad:
+                        problems.append("%s: crosswalk.%s names %s, not in vocabulary.issues" % (where, node, ", ".join(map(str, bad))))
+    if len(set(names)) != len(names):
+        problems.append("lens names must be unique")
 
 
 def load(source):

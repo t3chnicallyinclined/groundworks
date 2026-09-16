@@ -85,6 +85,10 @@ Each item ships with tests both ways, a non-legal synthetic proof, and a line in
 | V2-5 | **Role skills and a drift guard generated from config** (C1 remainder, C8): `.claude/skills/<role>/SKILL.md` per role from templates plus the instance vocabulary; CI fails when a seat, lens, option or category in the config is absent from a generated skill or a doc | Regenerate is idempotent; a planted mismatch fails the guard |
 | V2-6 | **Compose packaging** (tier 1): `Dockerfile`, `compose.yaml` with the SurrealDB image, health checks, an export cron, an optional GPU profile | A fresh machine runs the demo with one compose command |
 | V2-7 | **Marker wording experiment** (C20), on the first instance with its session's help | Status-upgrade catch rate reported against the 0 of 9 baseline |
+| V2-8 | **Preservation edges** as a gate input: `preserves{how}` unit -> conclusion, and a rule clause `requires preserves min 1` with a recorded exception (notes/2026-09-15_engine_gaps_from_instance_config.md) | Probe both ways: unpreserved conclusion refused; preserved accepted; a recorded exception accepted and visible |
+| V2-9 | **Authorities verified from official text:** `source` units of grade `official_text`; `authority.verified` gated on a citation to one | Probe both ways; existence of a citation never verifies |
+| V2-10 | **Day-grouped chunking** (`chunk_by: <locator field>` per unit type) | **Done 2026-09-15:** units sharing the field stay in one slice; an oversize group is split, never dropped; tested both ways |
+| V2-11 | The remaining instance-exposed gaps (output citations with verdicts, events and mentions, outcome-bearing edges, entities, two target kinds, authority rank, framework node text and locator, lens ordering, filing grade, image-only sources needing OCR) | Each with a both-ways probe as it lands |
 
 ## Beyond v0.2
 

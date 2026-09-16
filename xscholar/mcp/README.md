@@ -126,3 +126,38 @@ launch identity; every gate refusal comes back as `rejected_by_gate` with `missi
 datastore wants. A hand-written adapter (for an instance with its own schema) implements the read and
 critique methods and may leave the lifecycle methods unimplemented; the server then reports
 `invalid_argument` for them, never an empty success.
+
+### Launching with a provisioned credential instead of root
+
+When the instance has an `access:` section (`xscholar/access.py`), each agent gets its own datastore
+credential and the datastore, not this server, enforces what it may read and write. Apply the access
+rules once as root, then provision one credential per launch identity:
+
+```
+python -m xscholar.access instance.yaml --apply --url http://127.0.0.1:8002/sql --ns my_instance --db my_instance
+python -m xscholar.access instance.yaml --provision seat_skeptic seat --lens lens_skeptic --url http://127.0.0.1:8002/sql --ns my_instance --db my_instance
+```
+
+The second command prints the exact launch environment; paste it into the entry (the three `DB_*`
+lines are what changes; `XSCHOLAR_DB_ACCESS` set means "sign in as this agent, not root"):
+
+```json
+{"mcpServers": {"xscholar-seat-skeptic": {
+  "command": "python",
+  "args": ["-m", "xscholar.mcp.server"],
+  "env": {"XSCHOLAR_ADAPTER": "xscholar.mcp.instance_adapter",
+          "XSCHOLAR_INSTANCE": "/path/to/instance.yaml",
+          "XSCHOLAR_DB_URL": "http://127.0.0.1:8002/sql",
+          "XSCHOLAR_NS": "my_instance", "XSCHOLAR_DB": "my_instance",
+          "XSCHOLAR_AGENT_ID": "seat_skeptic", "XSCHOLAR_ROLE": "seat", "XSCHOLAR_LENS": "lens_skeptic",
+          "XSCHOLAR_DB_ACCESS": "agent",
+          "XSCHOLAR_DB_USER": "seat_skeptic",
+          "XSCHOLAR_DB_PASS": "<printed by --provision; never commit it>"}}}}
+```
+
+Under such a credential a write the role may not make comes back as `rejected_by_gate` with `error`
+naming the refused statement and `missing` naming the credential needed; it is never an empty success
+(SurrealDB itself answers a denied write with an empty result and status OK). Deletes are refused for
+every credential. `python -m xscholar.access instance.yaml --revoke seat_skeptic ...` deletes the agent
+record; a token already issued then reads and writes nothing, and a new signin is refused. Launching
+with `XSCHOLAR_DB_ACCESS` unset keeps the old behaviour: root, which bypasses every permission.

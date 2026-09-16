@@ -1,0 +1,16 @@
+# Backup sidecar for the `backup` compose service (profile "ops").
+#
+# Built FROM the same surrealdb image the `surrealdb` service runs, so it carries the
+# identical `surreal` binary `surreal export` needs. That upstream image
+# (surrealdb/surrealdb:v3.1.6, built on cgr.dev/chainguard/glibc-dynamic) ships no shell
+# and no coreutils -- verified against its published Dockerfile: the final stage is
+# `FROM cgr.dev/chainguard/glibc-dynamic` with `ENTRYPOINT ["/surreal"]` and nothing else
+# copied in. A loop script needs something to interpret it and something to sleep with,
+# so this adds one static, dependency-free busybox binary (musl, no libc requirement) and
+# nothing else -- not a different OS, not a package manager, not curl.
+FROM busybox:1.36-musl AS busybox
+
+FROM surrealdb/surrealdb:v3.1.6
+COPY --from=busybox /bin/busybox /bin/busybox
+COPY scripts/backup_loop.sh /backup_loop.sh
+ENTRYPOINT ["/bin/busybox", "sh", "/backup_loop.sh"]

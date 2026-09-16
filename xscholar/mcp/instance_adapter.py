@@ -19,7 +19,7 @@ import sys as _sys
 
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, gates
+from xscholar import config, gates, lens as lensmod
 from xscholar import db as dbmod
 from xscholar.mcp import adapter as contract
 from xscholar.pipeline import write
@@ -155,7 +155,20 @@ class GenericAdapter(contract.InstanceAdapter):
                 "facts_by_status": {r["status"]: r["n"] for r in facts},
                 "conclusions_ready": n("conclusion", "WHERE ready = true"), "conclusions": n("conclusion"),
                 "critiques_unanswered": n("critique", "WHERE answered = false"),
-                "DRIFT_confirmed_without_valid_cite": drift}
+                "DRIFT_confirmed_without_valid_cite": drift,
+                "lenses": lensmod.lens_list(self.inst)}
+
+    # ---- lenses -------------------------------------------------------------------------------
+
+    def lens_view(self, name, limit=50):
+        try:
+            return lensmod.lens_view(self.db, self.inst, name, limit)
+        except lensmod.LensError as exc:
+            raise contract.InvalidArgument(str(exc), missing=["lens in %s" % [l["name"] for l in self.inst.lenses]])
+        except dbmod.DbError as exc:
+            if _unreachable(exc):
+                raise contract.DbUnreachable(str(exc)) from exc
+            raise
 
     # ---- write --------------------------------------------------------------------------------
 
@@ -232,5 +245,6 @@ def create_adapter():
     inst = config.load(path)
     db = dbmod.Db(url=os.environ.get("XSCHOLAR_DB_URL", "http://127.0.0.1:8002/sql"),
                   ns=os.environ.get("XSCHOLAR_NS") or inst.id, db=os.environ.get("XSCHOLAR_DB") or inst.id,
-                  user=os.environ.get("XSCHOLAR_DB_USER", "root"), password=os.environ.get("XSCHOLAR_DB_PASS", "root"))
+                  user=os.environ.get("XSCHOLAR_DB_USER", "root"), password=os.environ.get("XSCHOLAR_DB_PASS", "root"),
+                  access=os.environ.get("XSCHOLAR_DB_ACCESS"))  # set: a provisioned agent credential, not root
     return GenericAdapter(inst, db)

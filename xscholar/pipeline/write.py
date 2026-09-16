@@ -20,6 +20,7 @@ if __package__ in (None, ""):  # run as a plain script: make the repo root impor
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
 from xscholar.pipeline.loader import rid, q  # noqa: E402
 from xscholar.patterns import edge_ids  # noqa: E402
+from xscholar.temporal import valid_clause  # noqa: E402
 
 REASONING_TYPES = ["direct_quote", "inference", "structural_analogy", "statistical", "expert_judgment"]
 IDENTITY_KEYS = ("agent_id", "role", "lens")
@@ -46,13 +47,15 @@ class Writer:
 
     # ---- claims -----------------------------------------------------------------------------
 
-    def propose(self, slug, statement, reasoning_type="inference", note=None):
+    def propose(self, slug, statement, reasoning_type="inference", note=None, valid_from=None, valid_to=None):
+        """`valid_from` / `valid_to` (datetime or ISO text): when the claim held in the source. Optional;
+        an omitted bound is left untouched on a re-write. `learned_at` is stamped by the datastore."""
         if reasoning_type not in REASONING_TYPES:
             raise ValueError("reasoning_type must be one of %s" % ", ".join(REASONING_TYPES))
         self.db.sql("UPSERT %s SET statement=%s, status = IF status != NONE { status } ELSE { 'proposed' }, "
-                    "note=%s, reasoning_type=%s, author=%s, lens=%s"
+                    "note=%s, reasoning_type=%s, author=%s, lens=%s%s"
                     % (rid("fact", slug), q(statement), q(note), q(reasoning_type), q(self.author),
-                       q(self.identity.get("lens"))), expect=1)
+                       q(self.identity.get("lens")), valid_clause(valid_from, valid_to)), expect=1)
         return rid("fact", slug)
 
     def cite(self, slug, unit_ids):
@@ -61,12 +64,14 @@ class Writer:
             self.db.sql("RELATE %s->cites:%s->%s SET author=%s" % (rid("fact", slug), eid, rid("unit", uid), q(self.author)),
                         expect=1)
 
-    def confirm(self, slug, unit_ids=(), note=None):
-        """Cite the units, then ask the datastore to confirm. Refusal comes back explained."""
+    def confirm(self, slug, unit_ids=(), note=None, valid_from=None):
+        """Cite the units, then ask the datastore to confirm. Refusal comes back explained.
+        `valid_from` (optional) records when the confirmed claim held in the source."""
         if unit_ids:
             self.cite(slug, unit_ids)
-        ok, message = self.db.try_sql("UPDATE %s SET status='confirmed'%s"
-                                      % (rid("fact", slug), ", note=%s" % q(note) if note else ""))
+        ok, message = self.db.try_sql("UPDATE %s SET status='confirmed'%s%s"
+                                      % (rid("fact", slug), ", note=%s" % q(note) if note else "",
+                                         valid_clause(valid_from)))
         if ok:
             return rid("fact", slug)
         cited = self.db.sql("SELECT grade, status, record::id(id) AS unit FROM %s->cites->unit" % rid("fact", slug),
