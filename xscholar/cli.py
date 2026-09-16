@@ -10,7 +10,9 @@
     xscholar labels agreement A.jsonl B.jsonl [--out REPORT.json]
     xscholar panel lock|anonymize|check|tally RUN_DIR [--settings FILE]
     xscholar present render ROWS.json --mode speedread --policy P.json
-    xscholar test            run every suite and the license check
+    xscholar skills generate INSTANCE.yaml OUT_DIR
+    xscholar drift INSTANCE.yaml SKILLS_DIR [DOC ...]
+    xscholar test            run every suite, the license check and the demo drift check
 """
 import pathlib
 import subprocess
@@ -39,10 +41,22 @@ def _present(args):
     return 2
 
 
+def _skills(args):
+    if args[:1] == ["generate"]:
+        return _module("xscholar.skills", args[1:])
+    print("usage: xscholar skills generate INSTANCE.yaml OUT_DIR")
+    return 2
+
+
+DEMO = ("instances/demo-incident/instance.yaml", "instances/demo-incident/skills")
+
+
 def _test(args):
     rc = subprocess.call([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"] + args,
                          cwd=str(ROOT))
-    return rc or subprocess.call([sys.executable, str(ROOT / "scripts" / "license_check.py")], cwd=str(ROOT))
+    rc = rc or subprocess.call([sys.executable, str(ROOT / "scripts" / "license_check.py")], cwd=str(ROOT))
+    # last: the generated role skills must still match the config they came from (ROADMAP C8)
+    return rc or _module("xscholar.drift", list(DEMO))
 
 
 COMMANDS = {
@@ -53,6 +67,8 @@ COMMANDS = {
     "panel": lambda a: _module("xscholar.panel.panel", a),
     "labels": _labels,
     "present": _present,
+    "skills": _skills,
+    "drift": lambda a: _module("xscholar.drift", a),
     "test": _test,
 }
 

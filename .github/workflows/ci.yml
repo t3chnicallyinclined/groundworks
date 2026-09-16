@@ -19,5 +19,7 @@ jobs:
           echo "$HOME/.surrealdb" >> "$GITHUB_PATH"
       - name: Run every suite and the license check
         run: python -m xscholar.cli test
+      - name: Role skills still match the config they came from
+        run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills
       - name: Demo instance end to end
         run: python scripts/run_instance.py instances/demo-incident --memory 8025

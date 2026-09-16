@@ -17,10 +17,11 @@ mcp = ["mcp>=1.26"]
 embed = ["torch", "sentence-transformers>=3", "numpy"]
 
 [project.scripts]
-xscholar = "engine.cli:main"
+xscholar = "xscholar.cli:main"
 
 [tool.setuptools]
 packages = ["xscholar", "xscholar.pipeline", "xscholar.present", "xscholar.panel", "xscholar.mcp", "xscholar.embed", "xscholar.patterns", "xscholar.hooks"]
 
 [tool.setuptools.package-data]
 "xscholar.patterns" = ["*.surql"]
+"xscholar" = ["skills_templates/*.md"]   # xscholar/skills.py renders these; without them `skills generate` has no templates
