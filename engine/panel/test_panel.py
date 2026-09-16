@@ -254,6 +254,26 @@ class TallyTests(PanelCase):
         self.assertEqual([m["seat"] for m in result["minority_report"]], ["seat_gamma"])
         self.assertEqual(cli("tally", str(self.dir)), 3)
 
+    def test_two_high_seats_of_three_equal_seats_reach_the_exact_two_thirds_bar(self):
+        self.write_panel(weighted_seat=None)  # rewrite the panel, then redo lock and round 1
+        shutil.rmtree(self.dir / "round1")
+        for name in ("panel.lock.json", "anon_map.json", "round1_anon.md"):
+            (self.dir / name).unlink()
+        self.ready_for_round2()
+        self.all_good()
+        result = panel.tally(self.dir)
+        self.assertEqual(result["w_total"], 3.0)
+        self.assertEqual(result["verdict"], "affirm")
+
+    def test_rounded_consensus_threshold_turns_the_same_votes_into_a_split(self):
+        self.write_panel(weighted_seat=None, thresholds={"consensus": 0.6667})
+        shutil.rmtree(self.dir / "round1")
+        for name in ("panel.lock.json", "anon_map.json", "round1_anon.md"):
+            (self.dir / name).unlink()
+        self.ready_for_round2()
+        self.all_good()
+        self.assertIsNone(panel.tally(self.dir)["verdict"])
+
     def test_tally_refuses_while_reprompts_are_owed(self):
         self.good_r2("seat_alpha")
         self.good_r2("seat_beta")

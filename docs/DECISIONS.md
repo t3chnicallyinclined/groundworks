@@ -43,4 +43,5 @@ Matter-specific decisions live in the private instance repository, not here.
 | Should `panel_io` submit and status move from `engine/mcp` into `engine/panel` (core logic outside the front door)? | Before MCP slice 2 |
 | Per-agent identity: one MCP launch identity is shared by every agent in a session until slice 2 adds per-agent datastore credentials; interim is one MCP entry per seat | MCP slice 2 (C12) |
 | Should roles restrict writes (for example a critic may not answer its own critique)? | Before panels run at scale |
+| Three equal seats reach consensus only with three seats at med or above, or two at high; 3 of 6 first panels split at 2-1 medium. Keep (escalate hesitant majorities) or allow a smaller bar for three-seat panels? Thresholds are human-owned | Owner, after more panel runs |
 | Superseded claims are shown with the same "ELIMINATED CLAIM (false)" label as ruled-out claims in instance 1; a distinct superseded label is likely needed | Instance 1 owner, with the hook |

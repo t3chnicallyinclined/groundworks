@@ -49,9 +49,12 @@ runs/<panel_id>/
  "seats": [
    {"id": "seat_opposing_counsel", "lens": "lens_opposing_counsel"},
    {"id": "seat_deferential_judge", "lens": "lens_deferential_judge"},
-   {"id": "seat_skeptic", "lens": "lens_skeptic", "aliases": ["the skeptic"]}],
- "thresholds": {"consensus": 0.6667, "agreement": 0.70, "dissent_quota": 2}}
+   {"id": "seat_skeptic", "lens": "lens_skeptic", "aliases": ["the skeptic"]}]}
 ```
+
+**Leave `thresholds` out** unless a human has decided otherwise; the defaults are exactly consensus 2/3, agreement 0.70, dissent quota 2. Do not write a rounded consensus such as `0.6667`: with three equal seats it raises the bar from 2.0 to 2.0001, so two high-confidence seats (2.0) can never reach consensus.
+
+**What consensus takes with three equal seats** (bar 2.0): three seats at any confidence of med or above, or two seats both at high confidence. Two seats at med (1.5) or high plus med (1.75) is a split, returned to the human. This is intended (a hesitant majority escalates), and it makes splits common in three-seat panels.
 
 - At least 3 seats.
 - Seat ids, lenses and aliases must be distinctive strings that never occur as ordinary words in answers; the anonymizer replaces every occurrence.

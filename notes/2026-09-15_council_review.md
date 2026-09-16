@@ -19,6 +19,51 @@ The council enforces its protocol by asking the coordinator to check itself. Tha
 ## Measured
 `test_panel.py`: each check tested both ways (reject, then accept once fixed). Result recorded in DECISIONS.md.
 
+## Measured on instance 1 (2026-09-15; reported by that instance's session, no matter content)
+
+**Setup**
+- 6 panels of 3 seats: 3 adversary panels and 3 peer-bench panels.
+- All seats used one model, with one shared evidence packet per panel.
+- Round-1 prompts barred earlier reviews of the same targets.
+- A 7th run repeated one adversary panel with round 2 unmasked.
+
+**Tallies:** 3 consensus and 3 splits. Every split was 2-1 at medium confidence: majority weight 1.5 or 1.75 against a bar of 2.0001. The templates had copied a rounded consensus threshold (0.6667) from the protocol example. That example is now fixed, and a test pins the exact 2/3 bar. The rounding did not change these outcomes.
+
+**Enforcement counts**
+
+| Condition | Owed | Notes |
+|---|---|---|
+| agreement_check | 6 | All on consensus-bound panels. All met on the first re-prompt, with 4 to 6 objection lines each |
+| missing_stance | 0 | |
+| dissent_quota | 0 | |
+| novelty_gate | 0 | |
+
+The program also refused two coordinator mistakes:
+- a panel file copied after answers existed (lock refused, 1)
+- anonymization on an incomplete round 1 (6, caused by a coordinator parsing bug)
+
+**Round 1 to round 2**
+- 0 of 18 stances changed, so no FLAW lines were needed.
+- Each panel produced 5 to 8 NEW lines.
+- Counterfactuals changed no stance, but one surfaced a new, verifiable source item that both rounds had missed.
+
+**Objection categories:** every panel used the same 4 of the 6 fixed categories. The category-level dissent quota therefore never fired, and overlap in substance was not measured.
+
+**C10, masked vs unmasked** (one adversary panel, identical round-1 answers):
+- identical stances
+- 0 changes in both runs
+- 4 categories in both
+- 7 vs 8 NEW lines
+
+No measurable effect, n=1.
+
+**Lessons**
+1. Three-seat panels at medium confidence split by design; expect splits to reach the human often.
+2. A category-level dissent quota is too coarse when categories are fixed and seats share a model. Roadmap C15 adds a substance-level check.
+3. The agreement check produced real value: a new, verifiable item, not only friction.
+4. Zero stance changes in 18 could mean stable judgment or anchoring. Seats from different model families, or seats with different evidence packets, would separate the two, within the privacy rules.
+5. Record one critique per seat for splits and consensus alike. Record nothing for measurement-only reruns, so seats are not duplicated.
+
 ## Open
 - Does anonymization change outcomes in our panels? Test: the same target run with and without masking, compare stance changes and objection diversity. Until then it is adopted on the source's cited research, which has not been read here.
 - Objection overlap is judged by category only; substance overlap needs a judge or a later embedding check.

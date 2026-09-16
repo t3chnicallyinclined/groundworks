@@ -76,6 +76,10 @@ ex:ConfirmedFactGate a sh:NodeShape ; sh:targetClass ex:Fact ;
 - `@1@` matches only when **all** query terms match; a sentence-length query returns nothing. Use `@1,OR@` for any-term matching.
 - HTTP request bodies of about 2 MB are rejected (`413 length limit exceeded`); load in batches under about 256 KB.
 - Array slice syntax `$vs[0:10]` is a parse error in 3.1.6; slice client-side or use `array::slice`.
+- **A delete guard on a node table never fires usefully:** deleting a node removes its edges before the node's DELETE event runs, so an event counting incoming citation edges sees none. Put the guard on the **edge** table instead: `DEFINE EVENT ... ON TABLE cites WHEN $event = 'DELETE' AND $before.in.status = 'confirmed' AND record::exists($before.out) = false THEN { THROW ... }`. Probed both ways in a throwaway database: a cascade delete of cited evidence is rejected and the whole transaction rolls back (node, edge and archive snapshot all remain as before); evidence cited only by a non-confirmed claim deletes; a deliberate edge delete is allowed; deleting the claim first, then the evidence, is allowed. (Measured by instance 1's session.)
+- **A cast inside `SET` is evaluated even for rows the `WHERE` excludes:** `UPDATE t SET x = <datetime> y WHERE y != NONE` fails with "Could not cast into datetime using input NONE". Use `SET x = IF y != NONE { <datetime> y } ELSE { x }`.
+- `type::is_datetime()` exists; `type::is::datetime()` is a parse error. A composite index is still used as a prefix when the query casts the second field, per EXPLAIN.
+- This is why an `REFERENCE ... ON DELETE REJECT` field, where it fits the schema, is simpler than an event guard; both need probes in both directions.
 
 ## Open (needs a live test)
 - Can a Neo4j APOC `before` trigger or Memgraph BEFORE COMMIT trigger abort a write?
