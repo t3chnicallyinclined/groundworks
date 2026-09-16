@@ -2264,6 +2264,49 @@
    "commit": "uncommitted",
    "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
    "needs_db": false
+  },
+  {
+   "id": "M319",
+   "guard": "intake refuses a unit whose locator points outside its own original",
+   "defect": "checks lane 7",
+   "file": "xscholar/pipeline/intake.py",
+   "anchor": "    except ValueError as exc:\n        raise IntakeError(\"unit %s: its locator %s does not point into its own original",
+   "replacement": "    except ValueError as exc:\n        return\n        raise IntakeError(\"unit %s: its locator %s does not point into its own original",
+   "must_fail": [
+    "tests.test_originals.LocatorInsideOriginalTests.test_a_line_past_the_last_line_or_before_the_first_is_refused_by_name",
+    "tests.test_originals.LocatorInsideOriginalTests.test_a_character_span_past_the_length_or_reversed_is_refused"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M320",
+   "guard": "intake checks the locator of every unit linked to a retrievable original",
+   "defect": "checks lane 7",
+   "file": "xscholar/pipeline/intake.py",
+   "anchor": "                _check_locator(unit, doc, span_specs.get(unit[\"type\"]), store, last, counts)",
+   "replacement": "                pass",
+   "must_fail": [
+    "tests.test_originals.LocatorInsideOriginalTests.test_a_line_past_the_last_line_or_before_the_first_is_refused_by_name"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M321",
+   "guard": "intake counts a locator it could not check as not checkable, never as checked",
+   "defect": "checks lane 7",
+   "file": "xscholar/pipeline/intake.py",
+   "anchor": "        skipped[\"binary original\"] = skipped.get(\"binary original\", 0) + 1\n",
+   "replacement": "        counts[\"locators_checked\"] += 1\n",
+   "must_fail": [
+    "tests.test_originals.LocatorInsideOriginalTests.test_what_cannot_be_checked_is_counted_by_reason_never_as_checked"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
   }
  ]
 }

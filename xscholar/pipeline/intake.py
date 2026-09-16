@@ -23,6 +23,15 @@ under two keys are stored once and listed once in documents.jsonl, with both key
 A unit whose original has no extractable text (a scan, an image) may carry empty text; a unit whose original
 is text, or that has no original, may not.
 
+Locators are checked against the original. Where the instance declares how a unit type's locator cuts a span
+out of its original (`originals.spans`), intake cuts that span out of the stored bytes, and refuses a unit
+whose locator points outside its own original: a line past the last line, a character offset past the length,
+a start after its end. Until 2026-09-16 only the validator cut spans, and only for a tier >= 2 label with a
+quote, so a locator that pointed nowhere went in unchallenged (measured: line 99 of a 2-line original, and
+character 5000 of an 89-character one, were both kept). Counted as `locators_checked`, and every unit that
+could not be checked as `locators_not_checkable` by reason (no span declared, a binary original); never as
+checked. What a span kind cannot express (a page, say) is not checked here: see `originals.SPAN_KINDS`.
+
     counts = write_units(adapter, out_dir, instance, store=None)   # store: default the instance's own
 
 No interpretation happens here. Nothing is filtered for relevance. Loud on any contract breach.
@@ -142,6 +151,33 @@ def _store_documents(adapter, inst, store, counts):
     return by_key, rows
 
 
+def _check_locator(unit, doc, spec, store, last, counts):
+    """IntakeError when the unit's locator points outside its own original; else count what was checked."""
+    from xscholar import originals, store as storemod
+    skipped = counts["locators_not_checkable"]
+    if not spec:
+        reason = "no span declared for unit type %s" % unit["type"]
+        skipped[reason] = skipped.get(reason, 0) + 1
+        return
+    if last[0] != doc["sha256"]:
+        try:
+            last[0], last[1] = doc["sha256"], store.get(doc["sha256"])
+        except storemod.StoreError as exc:
+            raise IntakeError("unit %s: its original %s cannot be read back to check the locator: %s"
+                              % (unit["id"], doc["original_name"], exc)) from exc
+    data = last[1]
+    if not originals.is_text({"media_type": "text/plain"}, data):     # the validator's own test, so both agree
+        skipped["binary original"] = skipped.get("binary original", 0) + 1
+        return
+    try:
+        originals.span_text(data, unit["locator"], spec)
+    except ValueError as exc:
+        raise IntakeError("unit %s: its locator %s does not point into its own original %s (%s): %s"
+                          % (unit["id"], json.dumps(unit["locator"], ensure_ascii=False), doc["original_name"],
+                             doc["sha256"][:12], exc)) from exc
+    counts["locators_checked"] += 1
+
+
 def write_units(adapter, out_dir, inst, store=None):
     from xscholar import originals, store as storemod
     out_dir = pathlib.Path(out_dir)
@@ -158,6 +194,8 @@ def write_units(adapter, out_dir, inst, store=None):
     by_key, rows = _store_documents(adapter, inst, store, counts)
     counts["store"] = store.describe() if store is not None else None
     seen, used = set(), set()
+    counts["locators_checked"], counts["locators_not_checkable"] = 0, {}
+    span_specs, last = originals.spans(inst), [None, None]      # last: (sha256, bytes) of the original last read
     with (out_dir / "units.jsonl").open("w", encoding="utf-8") as units_file, \
          (out_dir / "excluded.jsonl").open("w", encoding="utf-8") as excluded_file, \
          (out_dir / "without_original.jsonl").open("w", encoding="utf-8") as gap_file:
@@ -196,6 +234,7 @@ def write_units(adapter, out_dir, inst, store=None):
                     counts["without_original"].append(unit["id"])
             else:
                 counts["units_with_original"] += 1
+                _check_locator(unit, doc, span_specs.get(unit["type"]), store, last, counts)
             unit["hash"] = raw.get("hash") or unit_hash(unit)
             seen.add(unit["id"])
             units_file.write(json.dumps(unit, ensure_ascii=False) + "\n")

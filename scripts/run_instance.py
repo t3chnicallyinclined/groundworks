@@ -212,6 +212,10 @@ def main(argv=None):
                counts["units_with_original"], counts["units_without_original"],
                "; first: %s (all in %s)" % (", ".join(counts["without_original"]), out / "without_original.jsonl")
                if counts["units_without_original"] else ""))
+        say("locators", "%d unit locator(s) cut out of their own original; %d not checkable%s"
+            % (counts["locators_checked"], sum(counts["locators_not_checkable"].values()),
+               " (%s)" % "; ".join("%s: %d" % kv for kv in sorted(counts["locators_not_checkable"].items()))
+               if counts["locators_not_checkable"] else ""))
 
         chunks = chunker.chunk(out / "units.jsonl", out, inst)
         say("chunk", "%d slice(s): %s" % (len(chunks), ", ".join("%s=%d" % (c["id"], c["count"]) for c in chunks)))
