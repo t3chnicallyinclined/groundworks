@@ -21,17 +21,27 @@ Every result is an envelope: `{"status", "tool", "data"}` on success, or `{"stat
 
 | Tool | Kind | What it does | Typical statuses |
 |---|---|---|---|
-| `unit_get(locator)` | read | Every unit matching a unit id or a citation in the instance's locator scheme: exact text, usable or not, grade, labels, claims citing it, eliminated claims about it | ok, not_found, invalid_argument, db_unreachable |
-| `unit_search(query, usable_only=true, limit=20)` | read | Keyword search over located units (plain words, not a query language) | ok (possibly empty), invalid_argument, db_unreachable |
-| `claim_explain(claim_id)` | read | Status, support with grades, adverse material, critiques, and in words everything that blocks readiness | ok, not_found, db_unreachable |
-| `eliminated_claims(about=None)` | read | Claims investigated and found false, shown as `ELIMINATED CLAIM (false)`, and failed approaches | ok (possibly empty), db_unreachable |
-| `health()` | read | The instance audit, plus the server's identity and tool list | ok, db_unreachable |
+| `unit_get(locator, view="data")` | read | Every unit matching a unit id or a citation in the instance's locator scheme: exact text, usable or not, grade, labels, claims citing it, eliminated claims about it | ok, not_found, invalid_argument, db_unreachable |
+| `unit_search(query, usable_only=true, limit=20, view="data")` | read | Keyword search over located units (plain words, not a query language) | ok (possibly empty), invalid_argument, db_unreachable |
+| `claim_explain(claim_id, view="data")` | read | Status, support with grades, adverse material, critiques, and in words everything that blocks readiness | ok, not_found, db_unreachable |
+| `eliminated_claims(about=None, view="data")` | read | Claims investigated and found false, shown as `ELIMINATED CLAIM (false)`, and failed approaches | ok (possibly empty), db_unreachable |
+| `health(view="data")` | read | The instance audit, plus the server's identity and tool list | ok, db_unreachable |
 | `critique_add(target, head, verdict, lens=None, text=None)` | write | One critique against a conclusion; returns what still blocks it | ok, not_found, rejected_by_gate, invalid_argument |
 | `critique_answer(critique, answer)` | write | The answer to a critique; returns what still blocks its target | ok, not_found, invalid_argument |
 | `panel_submit(run_dir, round, seat, text)` | write | Saves a seat's answer verbatim to `round1/` or `round2/<seat>.md`; logs `submissions.jsonl` | ok, rejected_by_gate, not_found, invalid_argument |
 | `panel_status(run_dir)` | read | Phase and every re-prompt owed (from `panel.evaluate`), with the prompt text | ok, rejected_by_gate, not_found |
 
 `panel_status` after anonymization calls `panel.evaluate`, which may write `counterfactual.json` (the panel's agreement check). Nothing else in the read tools writes.
+
+## Views (reading layer)
+
+The five read tools take `view`: `data` (default) or one of the reading-layer modes `full`, `speedread`, `claims`, `uncertain_first` (`engine/present/README.md`).
+
+- The view name is checked before the core runs; an unknown name is `invalid_argument` with `missing: ["view"]`.
+- For a mode, the server passes a copy of the tool's result to the adapter's optional `present_rows(tool_name, result)`, which returns rows in the reading layer's row contract, and uses the optional `present_policy()` (or the generic policy). The envelope gains `view`, `rendered` (Markdown) and `rendered_notice`; `data` is unchanged.
+- If the adapter supplies no rows for that tool (the default for both optional methods), the call is `invalid_argument` naming the view, with no `data`.
+- A failed core call keeps its own status under any view. Malformed rows or policy from the adapter are `error` (`PresentationContractError`), never a partial rendering.
+- Write tools and panel tools take no view: a write is never followed by a presentation failure.
 
 ## Launch configuration
 
@@ -91,4 +101,4 @@ No datastore needed: fake adapters stand in. Adapter tests for an instance live 
 - **Per-agent datastore credentials and permissions:** bearer tokens per agent, record-level permissions so a seat or critic can write only its own overlay rows, and identity taken from the credential instead of launch variables.
 - **Change feeds:** notify agents when a unit, claim or conclusion they read changes status (for example a claim demoted to stale).
 
-Files: `server.py` (front door), `adapter.py` (contract), `panel_io.py` (panel submit and status), `test_server.py`. Dependency: the `mcp` Python SDK (MIT).
+Files: `server.py` (front door), `adapter.py` (contract, including the optional presentation methods), `panel_io.py` (panel submit and status), `test_server.py`. Views render through `engine/present` (standard library, loaded by path). Dependency: the `mcp` Python SDK (MIT).

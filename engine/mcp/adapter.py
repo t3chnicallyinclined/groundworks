@@ -158,3 +158,20 @@ class InstanceAdapter(abc.ABC):
     @abc.abstractmethod
     def critique_answer(self, provenance, critique, answer):
         """Record the answer to a critique. Returns {"critique", "target", "by", "blocking_now"}."""
+
+    # ---- presentation (OPTIONAL; engine/present renders what these return) ---------------------
+
+    def present_rows(self, tool_name, result):
+        """Rows for the reading layer, or None when this tool's result has no row form.
+
+        Called only after a read tool succeeded with a `view` other than "data". `result` is the dict
+        this adapter returned for `tool_name`. Return the rows document of engine/present/features.py
+        ({"title", "question", "groups", "rows": [row, ...]}) built from that result, adding nothing
+        the result does not say. Returning None makes the server answer invalid_argument for that view.
+        The default supplies no rows.
+        """
+        return None
+
+    def present_policy(self):
+        """The instance's presentation policy dict (engine/present/policy.py), or None for the generic one."""
+        return None

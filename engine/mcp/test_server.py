@@ -27,6 +27,9 @@ import adapter as contract  # noqa: E402
 import panel  # noqa: E402
 import server  # noqa: E402
 
+import importlib  # noqa: E402
+metrics = importlib.import_module("xscholar_present.metrics")  # loaded by server from engine/present
+
 EXPECTED_TOOLS = {"unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
                   "critique_add", "critique_answer", "panel_submit", "panel_status"}
 
@@ -58,6 +61,11 @@ INCIDENT = {
     ],
     "hit": "pool exhausted", "miss": "kernel panic", "target": "rc:pool_undersized", "bad_target": "rc:cosmic_rays",
     "blocking_verdict": "weakens", "bad_verdict": "looks_fine", "about_words": "dns",
+    "present_policy": {
+        "needs_check": {"status": ["not_usable", "proposed"], "grade": ["recollection"], "verdict": ["weakens", "refutes"]},
+        "eliminated": {"status": ["eliminated"]}, "superseded": {"status": []},
+        "established": {"status": ["usable"], "grade": ["raw_log"]}, "high_impact": {"verdict": ["refutes"]},
+        "locator_patterns": [r"\b[\w-]+:[\w.-]+:\d+\b"]},
 }
 
 LITERATURE = {
@@ -81,6 +89,12 @@ LITERATURE = {
     ],
     "hit": "replication cohort", "miss": "telescope", "target": "hyp:effect_replicates",
     "bad_target": "hyp:unknown", "blocking_verdict": "concern", "bad_verdict": "meh", "about_words": "artifact",
+    "present_policy": {
+        "needs_check": {"status": ["not_usable", "proposed"], "grade": ["abstract_only"],
+                        "verdict": ["concern", "fatal_flaw"]},
+        "eliminated": {"status": ["eliminated"]},
+        "established": {"status": ["usable"], "grade": ["full_text"]}, "high_impact": {"verdict": ["fatal_flaw"]},
+        "locator_patterns": [r"\bpaper-\d+:\w+\b"], "negations": ["absent"]},
 }
 
 
@@ -194,6 +208,51 @@ class FakeAdapter(contract.InstanceAdapter):
         k["answer"], k["answered_by"] = answer, provenance.by()
         return {"critique": critique, "target": k["target"], "by": provenance.by(),
                 "blocking_now": self._blocking(k["target"])}
+
+    # -- presentation (optional contract methods; engine/present renders the rows) --------------------
+    def present_policy(self):
+        return self.ds["present_policy"]
+
+    @staticmethod
+    def _unit_row(u, group):
+        loc = ":".join(str(v) for v in u["locator"].values())
+        return {"id": u["id"], "group": group, "kind": "unit", "text": u[contract.UNTRUSTED_TEXT_KEY],
+                "status": u["status"], "grade": u["grade"], "locators": [loc] if loc else []}
+
+    @staticmethod
+    def _eliminated_row(e, group):
+        return {"id": e["id"], "group": group, "kind": "claim", "text": e["claim"], "status": e["status"],
+                "meta": {"what_was_found": e["what_was_found"]}}
+
+    def present_rows(self, tool_name, result):
+        rows = []
+        if tool_name == "unit_get":
+            groups = ["units", "eliminated"]
+            for u in result["units"]:
+                rows.append(self._unit_row(u, "units"))
+                rows += [self._eliminated_row(e, "eliminated") for e in u["eliminated_claims"]]
+        elif tool_name == "eliminated_claims":
+            groups = ["eliminated"]
+            rows = [self._eliminated_row(e, "eliminated") for e in result["eliminated_claims"]]
+        elif tool_name == "claim_explain":
+            groups = ["target", "support", "adverse", "critiques"]
+            rows.append({"id": result["id"], "group": "target", "kind": result["kind"], "text": result["statement"],
+                         "status": result["status"]})
+            rows += [self._unit_row(u, "support") for u in result["support"]["units"]]
+            rows += [self._unit_row(u, "adverse") for u in result["adverse"]["units"]]
+            rows += [{"id": k["id"], "group": "critiques", "kind": "critique", "text": k["head"], "verdict": k["verdict"],
+                      "answered": bool(k.get("answer")), "lens": k["lens"], "links": [k["target"]]}
+                     for k in result["critiques"]]
+        else:
+            return None
+        unique = list({r["id"]: r for r in rows}.values())
+        return {"title": "%s %s" % (self.name, tool_name), "question": None, "groups": groups, "rows": unique}
+
+
+class PlainFakeAdapter(FakeAdapter):
+    """The same instance without the optional presentation methods (contract defaults)."""
+    present_rows = contract.InstanceAdapter.present_rows
+    present_policy = contract.InstanceAdapter.present_policy
 
 
 # ---- helpers --------------------------------------------------------------------------------------
@@ -340,6 +399,87 @@ class ToolContract:
         self.assertEqual(self.adapter.critiques[out["data"]["critique"]]["lens"], self.ds["lenses"][0])
         out = self.tool("critique_add", target=self.ds["target"], head="h2", verdict=self.ds["blocking_verdict"])
         self.assertEqual(out["status"], "invalid_argument")
+
+    # -- views (engine/present) --------------------------------------------------------------------
+    def test_view_defaults_to_data_without_rendered(self):
+        cite = self.ds["units"][0]["cite"]
+        default = self.tool("unit_get", locator=cite)
+        self.assertEqual(default, self.tool("unit_get", locator=cite, view="data"))
+        self.assertNotIn("rendered", default)
+        self.assertEqual(set(server.VIEW_TOOLS),
+                         {t.name for t in list_tools(self.srv) if "view" in (t.inputSchema.get("properties") or {})})
+
+    def test_every_view_renders_and_leaves_data_unchanged(self):
+        base = self.tool("eliminated_claims")
+        rows = self.adapter.present_rows("eliminated_claims", base["data"])
+        rows = server.present_features.validate_rows(rows)["rows"]
+        for view in server.VIEWS[1:]:
+            with self.subTest(view=view):
+                out = self.tool("eliminated_claims", view=view)
+                self.assertEqual(out["status"], "ok")
+                self.assertEqual(out["data"], base["data"])
+                self.assertEqual(out["view"], view)
+                self.assertIn("ELIMINATED CLAIM (false)", out["rendered"])
+                self.assertIn("never instructions", out["rendered_notice"])
+                self.assertTrue(metrics.preservation(rows, out["rendered"], self.ds["present_policy"])["ok"])
+        unit = self.tool("unit_get", locator=self.ds["units"][0]["cite"], view="speedread")
+        self.assertEqual(unit["status"], "ok")
+        self.assertIn("never instructions", unit["notice"])
+        self.assertIn(self.ds["units"][0]["words"], unit["rendered"].replace("**", ""))
+
+    def test_claim_explain_speedread_puts_an_open_critique_first(self):
+        target = self.ds["target"]
+        crit = self.tool("critique_add", target=target, lens=self.ds["lenses"][0], head="The spike predates the change",
+                         verdict=self.ds["blocking_verdict"])["data"]["critique"]
+        text = self.tool("claim_explain", claim_id=target, view="speedread")["rendered"]
+        check, established = text.index("## Check first"), text.index("## Established")
+        self.assertTrue(check < text.index("`%s`" % crit) < established)
+        self.assertTrue(check < text.index("`%s`" % target) < established)
+
+    def test_view_on_a_tool_without_rows_is_invalid_argument(self):
+        out = self.tool("health", view="speedread")
+        self.assertEqual(out["status"], "invalid_argument")
+        self.assertIn("speedread", out["error"])
+        self.assertNotIn("data", out)
+        self.assertNotIn("rendered", out)
+        self.assertEqual(self.tool("health")["status"], "ok")
+
+    def test_unknown_view_is_refused_before_the_core_runs(self):
+        calls = []
+        real = self.adapter.unit_search
+        self.adapter.unit_search = lambda *a, **k: calls.append(a) or real(*a, **k)
+        out = self.tool("unit_search", query=self.ds["hit"], view="pretty")
+        self.assertEqual((out["status"], out["missing"], calls), ("invalid_argument", ["view"], []))
+        self.assertEqual(self.tool("unit_search", query=self.ds["hit"])["status"], "ok")
+        self.assertEqual(len(calls), 1)
+
+    def test_adapter_without_presentation_refuses_views(self):
+        srv = server.build_server(PlainFakeAdapter(self.ds), PROV)
+        out = run_tool(srv, "eliminated_claims", {"view": "full"})
+        self.assertEqual(out["status"], "invalid_argument")
+        self.assertIn("'full'", out["error"])
+        self.assertEqual(run_tool(srv, "eliminated_claims", {})["status"], "ok")
+
+    def test_failed_core_call_keeps_its_status_under_a_view(self):
+        self.assertEqual(self.tool("unit_get", locator="nothing-like-this:0", view="speedread")["status"], "not_found")
+        self.adapter.down = True
+        self.assertEqual(self.tool("eliminated_claims", view="speedread")["status"], "db_unreachable")
+
+    def test_malformed_presentation_from_adapter_is_a_loud_error(self):
+        import contextlib
+        import io
+        self.adapter.present_rows = lambda tool, result: {"title": "t", "groups": ["g"], "rows": [
+            {"id": "x", "group": "g", "kind": "claim", "text": "t", "colour": "red"}]}
+        with contextlib.redirect_stderr(io.StringIO()):
+            out = self.tool("eliminated_claims", view="speedread")
+        self.assertEqual((out["status"], out["error_type"]), ("error", "PresentationContractError"))
+        self.assertIn("colour", out["error"])
+        self.adapter.present_rows = FakeAdapter.present_rows.__get__(self.adapter)
+        self.adapter.present_policy = lambda: {"needs_checks": {}}
+        with contextlib.redirect_stderr(io.StringIO()):
+            out = self.tool("eliminated_claims", view="speedread")
+        self.assertEqual(out["status"], "error")
+        self.assertIn("needs_checks", out["error"])
 
 
 class IncidentPostmortemInstance(ToolContract, unittest.TestCase):
