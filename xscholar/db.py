@@ -25,6 +25,14 @@ import urllib.request
 
 WRITE_RE = re.compile(r"^\s*(CREATE|UPSERT|UPDATE|RELATE|DELETE|INSERT)\b", re.I)
 
+# The engine's behaviour is measured against this series, not assumed from the documentation. Things
+# that are true of 3.1 and may not be true elsewhere: a schema re-apply silently drops a CHANGEFEED;
+# a delete carries no before-image; `DEFINE USER ... ON DATABASE` is a system user and bypasses table
+# PERMISSIONS; a denied write returns an empty result with status OK; `TYPE object FLEXIBLE` is the
+# accepted spelling. Each of those is a load-bearing assumption somewhere in this repo.
+MEASURED_AGAINST = (3, 1)
+VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
 
 class DbError(Exception):
     """A statement failed, or the server could not be reached."""
@@ -172,8 +180,46 @@ class Db:
             raise DbError("%d of %d statements failed:\n%s" % (len(failed), len(statements), detail))
         return results
 
-    def ping(self):
+    def version(self):
+        """What the server says it is, e.g. 'surrealdb-3.1.6+20260813.cfbaec4'."""
+        url = self.url[:-len("/sql")] if self.url.endswith("/sql") else self.url.rstrip("/")
+        request = urllib.request.Request(url.rstrip("/") + "/version", method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return response.read().decode("utf-8", "replace").strip()
+        except urllib.error.URLError as exc:
+            raise DbError("could not reach %s to ask its version: %s" % (url, exc))
+
+    def version_problem(self):
+        """None if this server is one the engine's behaviour was measured against, else why not.
+
+        This is what the pinned container image was really for. A version is a fact the server will
+        tell you; a container is a way of hoping it never changes.
+        """
+        text = self.version()
+        found = VERSION_RE.search(text)
+        if not found:
+            return "the server at %s reports its version as %r, which does not contain one" % (self.url, text)
+        series = (int(found.group(1)), int(found.group(2)))
+        if series[0] != MEASURED_AGAINST[0]:
+            return ("this engine's behaviour is measured against SurrealDB %d.%d; the server at %s is %s. "
+                    "A different major series may differ in ways this repo relies on (changefeeds, "
+                    "before-images on delete, how a denied write is reported). Point it at %d.x or "
+                    "re-measure first." % (MEASURED_AGAINST[0], MEASURED_AGAINST[1], self.url, text,
+                                           MEASURED_AGAINST[0]))
+        if series[1] != MEASURED_AGAINST[1]:
+            return ("NOTE: measured against SurrealDB %d.%d, talking to %s. Same major series, so this "
+                    "is a warning, not a refusal." % (MEASURED_AGAINST[0], MEASURED_AGAINST[1], text))
+        return None
+
+    def ping(self, check_version=True):
         self.sql("RETURN 1", expect=1)
+        if check_version:
+            problem = self.version_problem()
+            if problem and problem.startswith("NOTE:"):
+                print(problem)
+            elif problem:
+                raise DbError(problem)
         return True
 
     def count(self, table):

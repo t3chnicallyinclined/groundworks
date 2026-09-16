@@ -35,5 +35,54 @@ class UnreachableTests(unittest.TestCase):
         self.assertIn("cannot reach", str(err.exception))
 
 
-if __name__ == "__main__":
+
+class VersionTests(unittest.TestCase):
+    """The version check that replaced the pinned container image.
+
+    A container was a way of hoping the database never changes. A version is a fact the server will
+    tell you, and this engine's behaviour is measured against 3.1, not assumed from documentation.
+    No server needed here: `version()` is stubbed, which is the point -- the decision is pure.
+    """
+
+    def at(self, reported):
+        conn = dbmod.Db(url="http://127.0.0.1:9/sql")
+        conn.version = lambda: reported
+        return conn
+
+    def test_the_measured_series_is_accepted(self):
+        self.assertIsNone(self.at("surrealdb-3.1.6+20260813.cfbaec4").version_problem())
+
+    def test_another_major_series_is_refused_by_name(self):
+        problem = self.at("surrealdb-4.0.0").version_problem()
+        self.assertIsNotNone(problem)
+        self.assertFalse(problem.startswith("NOTE:"), "a different major series is a refusal, not a note")
+        for expected in ("4.0.0", "changefeeds", "re-measure"):
+            self.assertIn(expected, problem)
+
+    def test_another_minor_in_the_same_series_warns_rather_than_refusing(self):
+        problem = self.at("surrealdb-3.4.0").version_problem()
+        self.assertTrue(problem.startswith("NOTE:"), problem)
+        self.assertIn("3.4.0", problem)
+
+    def test_a_server_that_reports_no_version_is_a_problem_not_a_pass(self):
+        problem = self.at("who knows").version_problem()
+        self.assertIsNotNone(problem, "an unparseable version must never read as 'fine'")
+        self.assertIn("does not contain one", problem)
+
+    def test_ping_raises_on_a_wrong_major_and_can_be_asked_not_to_check(self):
+        conn = self.at("surrealdb-4.0.0")
+        conn.sql = lambda *a, **k: [[1]]
+        with self.assertRaises(dbmod.DbError):
+            conn.ping()
+        self.assertTrue(conn.ping(check_version=False), "the check must be skippable for offline use")
+
+    def test_the_version_url_is_derived_from_the_sql_url(self):
+        asked = []
+        conn = dbmod.Db(url="http://127.0.0.1:8002/sql")
+        conn.version = lambda: asked.append(conn.url) or "surrealdb-3.1.6"
+        conn.version_problem()
+        self.assertEqual(asked, ["http://127.0.0.1:8002/sql"])
+
+
+if __name__ == "__main__":   # last, so running this file directly runs every class in it
     unittest.main()

@@ -62,21 +62,29 @@ python scripts/run_instance.py instances/demo-incident --memory 8025   # a whole
 
 The demo runs a complete non-legal instance on a throwaway in-memory database: config, generated schema and gates, a reject-and-accept probe for every rule, intake, chunking, labelling (a stand-in rule labeller; real instances use agents), the verbatim validator, the loader, and a walkthrough in which the datastore refuses each premature promotion and says exactly what is missing. Outputs land in `instances/demo-incident/out/`.
 
-### Run with Docker Compose
+### What you need, and nothing else
 
-Tier 1 packaging: one box, no orchestration platform. This is deliberate -- Kubernetes is for when there are tenants (`docs/ROADMAP.md` "Beyond v0.2"), not here yet.
+Two things. The engine's `dependencies` are `[]` -- Python standard library only.
+
+| | |
+|---|---|
+| Python | 3.11 or newer |
+| SurrealDB | **3.1.x** ([install](https://surrealdb.com/install)), or set `XSCHOLAR_SURREAL` to the binary |
+
+**There is no container, and that is deliberate.** There were a `Dockerfile` and a `compose.yaml` here until 2026-09-16, and they had never once been run. This repo's standing rule is that a path nobody has executed is not a working path, however good it looks in a README, so they were deleted rather than left as decoration. One binary and one command is the whole deployment story; if you later need a container for distribution, write it against a real deployment and measure it. The files are in git history.
+
+**The version is checked, not hoped for.** Pinning a database version was the one real thing the image did, and a version is a fact the server will tell you: `Db.ping()` asks `/version` and refuses a different major series by name, because this engine's behaviour is *measured* against 3.1 -- a schema re-apply silently drops a `CHANGEFEED`, a delete carries no before-image, `DEFINE USER ... ON DATABASE` bypasses table `PERMISSIONS`, and a denied write comes back as an empty result with status OK. Each of those is load-bearing somewhere in this repo. A different 3.x minor is a printed warning, not a refusal.
+
+**Running against a database you keep.** The demo uses `--memory` for a throwaway. For a persistent one, start SurrealDB yourself and point the runner at it:
 
 ```
-cp .env.example .env                      # edit if you want non-default credentials/ports
-docker compose up --build engine          # builds the image, starts SurrealDB, runs the demo
-docker compose --profile ops up -d backup # optional: a daily `surreal export` into ./backups
+surreal start --bind 127.0.0.1:8002 --user root --pass root rocksdb:/path/to/data
+python scripts/run_instance.py instances/demo-incident --url http://127.0.0.1:8002/sql
 ```
 
-`docker compose up --build engine` starts `surrealdb` (waits for its healthcheck), builds the `engine` image from the repo's `Dockerfile`, and runs `scripts/run_instance.py instances/demo-incident` against it over HTTP -- the same demo as above, but on a persistent, containerized database instead of a throwaway in-memory one. Data lives in the named volume `surrealdb_data` (mounted at `/data` in the container, `rocksdb:/data/db`); the demo instance's own files live in `./instances`, bind-mounted read-write into the containers at `/instances` so its `out/` outputs land back on the host. Exports from the `backup` service land in `./backups` on the host.
+Back it up with `surreal export` on whatever scheduler your machine already has (cron, systemd timer, Task Scheduler). That is one line, it runs on the host, and it fails visibly.
 
-**SurrealDB's license ships with it.** SurrealDB is Business Source License 1.1 (`docs/LICENSING.md` s.1): shipping it self-hosted, its `LICENSE` file must stay conspicuous. `THIRD_PARTY_NOTICES.md` names it; do not strip or hide that notice from a distributed image or bundle.
-
-`scripts/compose_check.sh` validates `compose.yaml` and, where Docker is available, runs the demo and checks its output for a clean gate report and no unsupported confirmed facts.
+**SurrealDB's license.** SurrealDB is Business Source License 1.1 (`docs/LICENSING.md` s.1). You install it yourself, so this repo distributes none of it -- but if you ever bundle or redistribute it, its `LICENSE` must stay conspicuous and `THIRD_PARTY_NOTICES.md` names it.
 
 ### If you are an agent working in this repository
 
