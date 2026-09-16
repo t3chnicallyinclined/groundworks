@@ -4,6 +4,8 @@ listed and kappa-corrected; mismatched coverage is refused.
 
     python -m unittest discover -s tests -p "test_agreement.py" -v
 """
+import contextlib
+import io
 import json
 import pathlib
 import shutil
@@ -59,7 +61,9 @@ class AgreementTests(unittest.TestCase):
         self.assertLess(r["fields"]["tier"]["kappa"], 1.0)
 
     def test_kappa_is_chance_corrected(self):
-        self.assertEqual(agreement.kappa([("a", "a")] * 10), 1.0)
+        # One value across the whole sample is NOT perfect agreement: chance agreement is already
+        # 1.0, so kappa is undefined. See test_kappa_is_undefined_on_a_degenerate_sample_not_perfect.
+        self.assertIsNone(agreement.kappa([("a", "a")] * 10))
         # both labellers say "a" 50% of the time independently: observed 0.5, expected 0.5 -> kappa 0
         pairs = [("a", "a"), ("a", "b"), ("b", "a"), ("b", "b")] * 5
         self.assertEqual(agreement.kappa(pairs), 0.0)
@@ -68,6 +72,32 @@ class AgreementTests(unittest.TestCase):
     def test_different_coverage_is_refused(self):
         with self.assertRaises(agreement.AgreementError):
             agreement.compare(self.write("a.jsonl", BASE), self.write("b.jsonl", BASE[:4]))
+
+    def test_kappa_is_undefined_on_a_degenerate_sample_not_perfect(self):
+        """20 units all on one tier measured nothing; kappa 1.0 said it measured it perfectly."""
+        self.assertIsNone(agreement.kappa([(0, 0)] * 20))
+        self.assertIn("only one value", agreement.kappa_undefined([(0, 0)] * 20))
+        self.assertIsNone(agreement.kappa([(0, 0)]))            # and at n = 1
+        self.assertEqual(agreement.kappa_undefined([("a", "a"), ("a", "b"), ("b", "a"), ("b", "b")]), "")
+
+        flat = [{"id": "u%d" % i, "tier": 0, "dir": None, "issues": [], "targets": [], "role": "note"}
+                for i in range(20)]
+        r = agreement.compare(self.write("a.jsonl", flat), self.write("b.jsonl", flat))
+        self.assertEqual(r["fields"]["tier"]["exact"], 1.0)     # the flattering number
+        self.assertIsNone(r["fields"]["tier"]["kappa"])         # the one that disagrees with it
+        self.assertEqual(r["fields"]["tier"]["distinct_values"], 1)
+        self.assertIn("tier", r["kappa_undefined"])
+        self.assertIn("dir", r["kappa_undefined"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(agreement.main([str(self.dir / "a.jsonl"), str(self.dir / "b.jsonl")]), 0)
+        self.assertIn("KAPPA NOT MEASURED for tier", out.getvalue())
+        # a sample with real variation still reports a number, and the legitimate flow is unchanged
+        mixed = [dict(l, tier=i % 3) for i, l in enumerate(flat)]
+        r2 = agreement.compare(self.write("c.jsonl", mixed), self.write("d.jsonl", mixed))
+        self.assertEqual(r2["fields"]["tier"]["kappa"], 1.0)
+        self.assertEqual(r2["fields"]["tier"]["kappa_undefined"], "")
+        self.assertNotIn("tier", r2["kappa_undefined"])
 
 
 if __name__ == "__main__":

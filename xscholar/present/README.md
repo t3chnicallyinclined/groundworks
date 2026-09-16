@@ -116,7 +116,7 @@ Newlines inside values render as `<br>`; table cells backslash-escape `|` and `\
 | `plant.py TRUTH OUT --seed S --per-type K` | Seeded, deterministic errors: `status_upgrade`, `locator_shift`, `negation_drop`, `verdict_soften`, `number_change`. Targets alternate between rows that will render as established (the hard case) and rows that will not; `lands_in` records which. One error per row at most. Title prefix `[SEEDED TEST COPY] `, `seeded_test_copy: true`, and a manifest carrying the same banner. A shortfall is recorded and exits 1 |
 | `lookup.py TRUTH LOG ROW_ID --budget N` | Prints the true row and logs it; exit 3 once N lookups are used; exit 4 for an unknown id (does not use budget); refuses a seeded copy as truth |
 | `score.py MANIFEST FINDINGS [--log LOG]` | Caught (row and field match), missed, false alarms, wrong-field, duplicates, recall and precision, lookups used; split by mutation type and by `lands_in` |
-| `metrics.py ROWS [--manifest M]` | Chars and lines, **scan chars and scan lines**, preservation (must be 100%), the first line of each check-first, planted and rule-fail row **measured over the scan layer**, visible within 10, 20, 40 lines, how many planted rows landed in the spot-check sample, `rule_check` counts with the rows each rule flagged, and (with a manifest) `planted_rule_flagged` by mutation type; exit 1 if any mode fails preservation |
+| `metrics.py ROWS [--manifest M]` | Chars and lines, **scan chars and scan lines**, preservation (must be 100% over a non-empty scope; `null` and `ok: false` over an empty one), the first line of each check-first, planted and rule-fail row **measured over the scan layer**, visible within 10, 20, 40 lines, how many planted rows landed in the spot-check sample, `rule_check` counts with the rows each rule flagged, and (with a manifest) `planted_rule_flagged` by mutation type; exit 1 if any mode fails preservation or could not run a check, 2 if the document holds no rows |
 | `demo_synthetic.py [--out DIR]` | Full vs speedread for the synthetic incident and the bigger design review, with a planted copy, metrics and a scan-layer-vs-full report |
 
 ### What preservation checks
@@ -129,6 +129,20 @@ In a two-layer mode those five are counted over the **Details layer alone**. Cou
 - `scan_leads` — every row that has its own scan line shows a lead that is a verbatim prefix of its text, so emphasis cannot quietly eat a `not`.
 
 The claims view is checked over claim and conclusion rows (its header names the rows it leaves out).
+
+Every result names the state of all seven checks, so a check can never simply stop being generated:
+`checks.ran`, `checks.not_applicable` (a one-layer mode has no scan layer) and `checks.not_run`.
+Anything in `not_run` forces `ok` false. Two ways a check lands there:
+
+- **0 rows in scope.** `pct` is `null`, not 100: 100% of nothing is indistinguishable from a renderer
+  that dropped every row. `compare()` refuses a document with no rows at all (exit 2), the way
+  `intake.py` refuses a corpus of 0 units.
+- **A two-layer mode with no `## Details:` heading.** The scan-layer checks have nothing to split, so
+  they fail rather than quietly disappearing from the report.
+
+`plant.py` refuses to write a `[SEEDED TEST COPY]` with nothing planted in it (an empty `--types`, or
+a type list no row can carry): exit 2, no files written, because an evaluation run against an
+unseeded copy measures nothing while looking clean.
 
 ### Protocol: does speedread help a reviewer catch errors?
 

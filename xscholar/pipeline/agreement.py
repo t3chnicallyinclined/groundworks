@@ -11,6 +11,10 @@ disagreements adjudicated by a human against the source. This module computes it
 Per field: exact agreement; for tier also "within one"; for set fields (issues, targets) mean
 Jaccard overlap; Cohen's kappa for tier and direction (chance-corrected: 1.0 perfect, 0 chance,
 below 0 worse than chance). Every disagreement is listed with both values so it can be adjudicated.
+
+Kappa is None, never 1.0, on a degenerate sample -- one label value across every unit, where chance
+agreement is already 1.0. The report then carries `kappa_undefined` naming the field and the reason,
+so "20 units, exact 1.00" cannot be read as perfect agreement when nothing was measured.
 Standard library only.
 """
 import argparse
@@ -31,7 +35,13 @@ class AgreementError(Exception):
 
 
 def kappa(pairs):
-    """Cohen's kappa for a list of (a, b) category pairs. None when undefined."""
+    """Cohen's kappa for a list of (a, b) category pairs. None when undefined.
+
+    Undefined means chance agreement is already 1.0: one label value covers the whole sample, so
+    two labellers who never looked at anything would agree just as often. Returning 1.0 there
+    reports a sample that measured nothing as perfect agreement; use kappa_undefined() for the
+    reason to print beside it.
+    """
     n = len(pairs)
     if n == 0:
         return None
@@ -41,8 +51,23 @@ def kappa(pairs):
     pb = {c: sum(1 for _, b in pairs if str(b) == c) / n for c in cats}
     expected = sum(pa[c] * pb[c] for c in cats)
     if expected >= 1.0:
-        return 1.0 if observed >= 1.0 else 0.0
+        return None
     return round((observed - expected) / (1.0 - expected), 4)
+
+
+def kappa_undefined(pairs):
+    """Why kappa is None for these pairs, or "" when it is defined."""
+    if not pairs:
+        return "no pairs to compare"
+    values = sorted({str(a) for a, _ in pairs} | {str(b) for _, b in pairs})
+    if len(values) <= 1:
+        return ("only one value (%s) occurs across all %d unit(s): chance agreement is already 1.0, "
+                "so kappa is undefined and the exact-agreement figure measures nothing"
+                % (values[0] if values else "none", len(pairs)))
+    if kappa(pairs) is None:
+        return ("chance agreement over these %d unit(s) is already 1.0 (values %s), so kappa is "
+                "undefined" % (len(pairs), ", ".join(values)))
+    return ""
 
 
 def jaccard(a, b):
@@ -73,6 +98,8 @@ def compare(path_a, path_b):
             entry["within_one"] = round(sum(1 for x, y in pairs if isinstance(x, int) and isinstance(y, int) and abs(x - y) <= 1) / n, 4)
         if field in ("tier", "dir"):
             entry["kappa"] = kappa(pairs)
+            entry["distinct_values"] = len({str(x) for x, _ in pairs} | {str(y) for _, y in pairs})
+            entry["kappa_undefined"] = kappa_undefined(pairs)
         fields[field] = entry
         for i, (x, y) in zip(ids, pairs):
             if x != y:
@@ -86,7 +113,11 @@ def compare(path_a, path_b):
     # the disagreements that matter most: one labeller saw load-bearing material, the other did not
     salient = [d for d in disagreements if d["field"] == "tier" and (
         (isinstance(d["a"], int) and d["a"] >= 2) != (isinstance(d["b"], int) and d["b"] >= 2))]
+    # the count that disagrees with a high exact-agreement figure: fields where kappa could not be
+    # computed at all, because one label value covered the whole sample
+    degenerate = {f: fields[f]["kappa_undefined"] for f in ("tier", "dir") if fields[f]["kappa_undefined"]}
     return {"units": n, "fields": fields, "disagreements": disagreements,
+            "kappa_undefined": degenerate,
             "units_with_any_disagreement": len({d["unit"] for d in disagreements}),
             "relevance_split": {"count": len(salient), "share": round(len(salient) / n, 4),
                                 "meaning": "one labeller rated the unit relevant (tier 2+) and the other did not"},
@@ -113,6 +144,8 @@ def main(argv=None):
              f["dir"]["exact"], f["dir"]["kappa"], f["issues"]["mean_jaccard"], f["targets"]["mean_jaccard"], f["role"]["exact"]))
     print("relevance split (one saw tier 2+, the other did not): %d of %d units; %d unit(s) to adjudicate"
           % (report["relevance_split"]["count"], report["units"], len(report["adjudicate"])))
+    for field, why in sorted(report["kappa_undefined"].items()):
+        print("KAPPA NOT MEASURED for %s: %s" % (field, why))
     return 0
 
 

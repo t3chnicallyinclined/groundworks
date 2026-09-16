@@ -24,6 +24,12 @@ checks then cover the scan layer:
               they are exempt from this one -- scan_ids still requires them to be named.
 The claims view is checked over claim and conclusion rows (its header names the rows it leaves out).
 
+Every result names the state of all seven checks: `checks.ran`, `checks.not_applicable` (a one-layer
+rendering has no scan layer) and `checks.not_run`. A check in `not_run` forces `ok` false, because a
+check that stops being generated is indistinguishable from one that passed. Two ways that happens:
+a scope with 0 rows (100% of nothing is not preservation), and a TWO_LAYER mode whose rendering has
+no `## Details:` heading (the scan-layer checks have nothing to split).
+
 The inline rule re-check is reported too: rule_check counts pass, fail and not_checked over every
 row and names the rows each rule flagged; every mode reports the first scan line of each rule-fail
 row and how many are visible within K lines; and with a manifest, planted_rule_flagged says how many
@@ -118,14 +124,40 @@ def preservation(rows, rendered, policy=None, mode=None):
         "locators": collections.Counter({loc: out.count(loc) for loc in expected["locators"]}),
         "texts": collections.Counter({t: out.count(t) for t in expected["texts"]}),
     }
-    result, total_exp, total_found = {}, 0, 0
+    checks = {"declared": list(CATEGORIES) + list(SCAN_CHECKS), "ran": [],
+              "not_applicable": {}, "not_run": {}}
+    result, total_exp, total_found = {"scope_rows": len(rows), "checks": checks}, 0, 0
     for c in CATEGORIES:
         result[c] = _tally(expected[c], found[c])
         total_exp += result[c]["expected"]
         total_found += result[c]["found"]
-    result["pct"] = round(100.0 * total_found / total_exp, 3) if total_exp else 100.0
-    result["ok"] = all(not result[c]["missing"] for c in CATEGORIES)
-    if details_text is not None:
+        checks["ran"].append(c)
+    result["expected_total"], result["found_total"] = total_exp, total_found
+    if total_exp:
+        result["pct"] = round(100.0 * total_found / total_exp, 3)
+        result["ok"] = all(not result[c]["missing"] for c in CATEGORIES)
+    else:
+        # Nothing was expected, so nothing was checked. 100% of zero is not a preservation result:
+        # it is indistinguishable from a renderer that dropped every row in scope.
+        result["pct"] = None
+        result["ok"] = False
+        for c in CATEGORIES:
+            checks["ran"].remove(c)
+            checks["not_run"][c] = ("0 rows in scope: preservation over 0 expected occurrences "
+                                    "measures nothing and is not a pass")
+    # The scan-layer checks must never simply stop being generated: say which state they are in.
+    two_layer = (mode in render.TWO_LAYER) if mode is not None else (details_text is not None)
+    if details_text is None:
+        why = ("the rendering has no %r heading, so there is no scan layer to check separately"
+               % render.DETAILS_PREFIX)
+        for name in SCAN_CHECKS:
+            if two_layer:
+                checks["not_run"][name] = ("mode %r is two-layer but %s" % (mode, why))
+            else:
+                checks["not_applicable"][name] = why
+        if two_layer:
+            result["ok"] = False
+    else:
         scan = normalize(scan_text)
         ids = collections.Counter({row["id"]: 1 for row in rows})
         result["scan_ids"] = _tally(ids, collections.Counter(
@@ -140,6 +172,7 @@ def preservation(rows, rendered, policy=None, mode=None):
             if text.strip():
                 leads[text] += 1
         result["scan_leads"] = _tally(leads, collections.Counter({t: scan.count(t) for t in leads}))
+        checks["ran"] += list(SCAN_CHECKS)
         result["ok"] = result["ok"] and all(not result[c]["missing"] for c in SCAN_CHECKS)
     return result
 
@@ -161,6 +194,9 @@ def _within(positions, k):
 def compare(doc, policy=None, manifest=None, modes=render.MODES, ks=KS):
     pol = policy_mod.load(policy)
     doc = features.validate_rows(doc)
+    if not doc["rows"]:
+        raise ValueError("this rows document holds 0 rows; an empty document is a failure, not a "
+                         "result -- there is nothing for preservation to measure")
     plan = features.classify(doc, pol)
     check_ids = list(plan["check_first"])
     planted_ids = [e["row_id"] for e in (manifest or {}).get("entries", [])]
@@ -209,6 +245,12 @@ def compare(doc, policy=None, manifest=None, modes=render.MODES, ks=KS):
                                for k in ks},
         }
     result["all_preserved"] = all(m["preservation"]["ok"] for m in result["modes"].values())
+    # the count that disagrees with all_preserved: checks that never ran, named, per mode
+    result["preservation_not_run"] = {mode: sorted(m["preservation"]["checks"]["not_run"])
+                                      for mode, m in result["modes"].items()
+                                      if m["preservation"]["checks"]["not_run"]}
+    result["modes_with_no_rows_in_scope"] = [mode for mode, m in result["modes"].items()
+                                             if m["scope_rows"] == 0]
     return result
 
 
@@ -227,6 +269,8 @@ def main(argv=None):
         print("metrics NOT EXECUTED: %s" % exc, file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, ensure_ascii=False))
+    for mode, names in sorted(result["preservation_not_run"].items()):
+        print("CHECK NOT RUN in mode %s: %s" % (mode, ", ".join(names)), file=sys.stderr)
     if not result["all_preserved"]:
         print("PRESERVATION FAILED", file=sys.stderr)
         return 1

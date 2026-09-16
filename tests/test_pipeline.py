@@ -3,6 +3,8 @@
 
     python -m unittest discover -s engine/pipeline -v
 """
+import contextlib
+import io
 import json
 import pathlib
 import shutil
@@ -173,6 +175,26 @@ class ValidatorTests(Base):
         bad = json.loads(json.dumps(self.good))
         bad[0]["tier"] = 7
         self.assertEqual(self.run_check(bad)["errors"][0]["field"], "tier")
+
+    def test_an_empty_slice_is_a_failure_not_a_pass(self):
+        """Every rule is a loop over the slice, so 0 units satisfies all of them without running any."""
+        empty_slice = self.dir / "empty.jsonl"
+        empty_slice.write_text("", encoding="utf-8")
+        labels_path = self.write([])
+        report = validator.validate(empty_slice, labels_path, self.inst)
+        self.assertFalse(report["ok"], "PASS: 0 units, 0 labels, 0 errors is a green run over nothing")
+        self.assertEqual((report["units"], report["labels"], report["checks_run"]), (0, 0, 0))
+        self.assertEqual([e["field"] for e in report["errors"]], ["slice"])
+        self.assertIn("0 units", report["errors"][0]["error"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = validator.main([str(empty_slice), str(labels_path), str(DEMO)])
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL: 0 units", out.getvalue())
+        # the populated slice is unaffected: the real flow still passes
+        good = self.run_check(self.good)
+        self.assertTrue(good["ok"], good["errors"])
+        self.assertEqual(good["checks_run"], good["units"])
 
 
 if __name__ == "__main__":

@@ -21,7 +21,14 @@ Delivery contract (read this before writing a handler)
   * IN ORDER PER TABLE. A handler that raises stops that table at the failing entry; later entries
     for that table wait, other tables proceed. The error is counted and named in the run report.
   * FIRST RUN. With no state the worker starts from the current end of each feed (nothing replayed)
-    unless `replay_from_start=True`.
+    unless `replay_from_start=True`. A first run is therefore INDISTINGUISHABLE from a quiet resume
+    by the entry count alone, so every pass reports `state_file.existed`, `tables_resumed`,
+    `tables_fresh` and `entries_skipped_by_fresh_start` -- the entries already in the feed that this
+    fresh start will never deliver. A wrong `--state` path shows up as `existed: false`.
+  * NO CHANGEFEED IS AN ERROR, NOT A QUIET PASS. `SHOW CHANGES` on a table without a changefeed
+    returns [] rather than failing, so the worker would report a clean `0 entries, 0 errors` forever
+    while re-checks and archiving had stopped. Every pass reads the table definitions first and
+    names any watched table whose CHANGEFEED is gone (re-applying the schema drops it) as an error.
 
 What SurrealDB 3.1.6 puts in the feed (measured 2026-09-15, `research/DATABASE_FEATURES_2026-09-15.md`)
   * `SHOW CHANGES FOR TABLE t SINCE <int> LIMIT n` returns entries `{versionstamp, changes: [...]}`;
@@ -223,13 +230,14 @@ def parse_entry(table, entry, images=None):
 def _load_state(path):
     path = pathlib.Path(path)
     if not path.exists():
-        return {"versionstamps": {}, "images": {}}
+        return {"versionstamps": {}, "images": {}, "_loaded_from_disk": False}
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except ValueError as exc:
         raise QueueError("state file %s is not JSON (%s); refusing to guess a versionstamp" % (path, exc))
     state.setdefault("versionstamps", {})
     state.setdefault("images", {})
+    state["_loaded_from_disk"] = True
     return state
 
 
@@ -261,6 +269,9 @@ class Worker(object):
         self.replay_from_start = bool(replay_from_start)
         self.image_cache_tables = tuple(image_cache_tables)
         self.state = _load_state(self.state_path)
+        # Whether this worker resumed or started fresh is a fact about the run, not a guess: a
+        # missing or wrong --state path otherwise reports exactly what a quiet resume reports.
+        self.state_loaded_from_disk = bool(self.state.pop("_loaded_from_disk", False))
         # Test-only knob that BREAKS the delivery guarantee: advance the versionstamp before dispatch.
         # tests/test_queue.py flips it to prove the guarantee is load-bearing. Never set it in service.
         self._advance_before_dispatch = False
@@ -273,14 +284,30 @@ class Worker(object):
 
     def feed_end(self, table):
         """The last versionstamp currently in the table's feed (0 if empty). Pages the whole feed."""
-        last = 0
+        return self.feed_end_and_length(table)[0]
+
+    def feed_end_and_length(self, table):
+        """(last versionstamp, entries in the feed). The second number is what a fresh start skips."""
+        last, entries = 0, 0
         while True:
             page = self.show(table, last + 1, self.batch)
             if not page:
-                return last
+                return last, entries
             last = int(page[-1]["versionstamp"])
+            entries += len(page)
             if len(page) < self.batch:
-                return last
+                return last, entries
+
+    def missing_changefeeds(self):
+        """Watched tables that have no CHANGEFEED, so SHOW CHANGES returns [] forever.
+
+        `SHOW CHANGES` on a table without a changefeed is not an error on 3.1.6: it returns an empty
+        result, exactly like a feed with nothing new. Re-applying the schema silently drops the
+        changefeed (see the module docstring), so "0 entries, 0 errors" every pass is the expected
+        symptom of a broken deployment, not of a quiet one. Read the definitions instead.
+        """
+        defined = self.db.sql("INFO FOR DB", expect=1)[0].get("tables") or {}
+        return [t for t in self.tables if "CHANGEFEED" not in (defined.get(t) or "")]
 
     def versionstamp(self, table):
         return self.state["versionstamps"].get(table)
@@ -304,13 +331,41 @@ class Worker(object):
     # -- one pass --
 
     def run_once(self):
-        counts = {"entries": 0, "changes": 0, "handled": 0, "unhandled": 0, "errors": [], "per_table": {}}
+        counts = {"entries": 0, "changes": 0, "handled": 0, "unhandled": 0, "errors": [], "per_table": {},
+                  "changefeeds_missing": [], "tables_resumed": [], "tables_fresh": [],
+                  "tables_replayed": [], "entries_skipped_by_fresh_start": 0,
+                  "state_file": {"path": self.state_path, "existed": self.state_loaded_from_disk}}
+        # A watched table with no changefeed can never deliver anything: its empty SHOW CHANGES is
+        # indistinguishable from "nothing new". Name it, count it as an error, and do not read it.
+        counts["changefeeds_missing"] = self.missing_changefeeds()
+        for table in counts["changefeeds_missing"]:
+            counts["errors"].append({"table": table, "versionstamp": 0,
+                                     "error": "QueueError: table %s has no CHANGEFEED, so SHOW CHANGES "
+                                              "returns nothing forever; re-apply changefeed_surql() "
+                                              "(a schema re-apply drops it)" % table})
+            counts["per_table"][table] = {"entries": 0, "changes": 0, "handled": 0, "from": None,
+                                          "to": None, "changefeed": "MISSING", "start": "not read"}
         for table in self.tables:
+            if table in counts["changefeeds_missing"]:
+                continue
             since = self.versionstamp(table)
+            start, skipped = "resumed", 0
             if since is None:
-                since = 0 if self.replay_from_start else self.feed_end(table)
+                # No stored versionstamp. Without the count of entries being jumped over, a fresh
+                # start that drops everything written while the worker was down reports exactly what
+                # a quiet resume reports: 0 entries, 0 errors.
+                end, ahead = self.feed_end_and_length(table)
+                since = 0 if self.replay_from_start else end
+                start = "replay from start" if self.replay_from_start else "fresh"
+                skipped = 0 if self.replay_from_start else ahead
+                (counts["tables_replayed"] if self.replay_from_start else counts["tables_fresh"]).append(table)
+                counts["entries_skipped_by_fresh_start"] += skipped
                 self._set_versionstamp(table, since)
-            per = counts["per_table"][table] = {"entries": 0, "changes": 0, "handled": 0, "from": since, "to": since}
+            else:
+                counts["tables_resumed"].append(table)
+            per = counts["per_table"][table] = {"entries": 0, "changes": 0, "handled": 0, "from": since,
+                                                "to": since, "changefeed": "present", "start": start,
+                                                "skipped_by_fresh_start": skipped}
             stopped = False
             while not stopped:
                 page = self.show(table, since + 1, self.batch)
@@ -359,7 +414,10 @@ def run_forever(worker, interval_s=5.0, max_passes=None, log=print):
     while max_passes is None or passes < max_passes:
         counts = worker.run_once()
         passes += 1
-        if counts["entries"] or counts["errors"]:
+        # A fresh start and a missing changefeed both report 0 entries and 0 errors, so neither may
+        # depend on entries being non-zero to be seen.
+        if (counts["entries"] or counts["errors"] or counts["tables_fresh"]
+                or counts["tables_replayed"] or counts["changefeeds_missing"]):
             log(report_line(counts))
         if max_passes is not None and passes >= max_passes:
             break
@@ -371,8 +429,26 @@ def run_forever(worker, interval_s=5.0, max_passes=None, log=print):
 
 
 def report_line(counts):
+    """The pass, with the counts that disagree with "0 entries, 0 errors" on the same face.
+
+    A clean pass and a worker that read nothing produce the same first line, so the state file, the
+    resumed/fresh split, the entries a fresh start skipped and any table with no changefeed are
+    always printed -- not only when they are interesting.
+    """
     line = "QUEUE: %d entries, %d changes, %d handler calls, %d unhandled, %d errors" % (
         counts["entries"], counts["changes"], counts["handled"], counts["unhandled"], len(counts["errors"]))
+    state = counts.get("state_file") or {}
+    line += "\n  state %s (%s); %d table(s) resumed, %d started fresh, %d replayed from the start" % (
+        state.get("path"), "loaded" if state.get("existed") else "NOT FOUND -- nothing resumed",
+        len(counts.get("tables_resumed") or []), len(counts.get("tables_fresh") or []),
+        len(counts.get("tables_replayed") or []))
+    if counts.get("tables_fresh"):
+        line += ("\n  FIRST RUN for %s: jumped to the end of the feed; %d entry(ies) already in the "
+                 "feed will never be delivered" % (", ".join(counts["tables_fresh"]),
+                                                   counts.get("entries_skipped_by_fresh_start", 0)))
+    if counts.get("changefeeds_missing"):
+        line += ("\n  NO CHANGEFEED on %s: these tables were not read at all"
+                 % ", ".join(counts["changefeeds_missing"]))
     for err in counts["errors"]:
         line += "\n  ERROR %s @%d: %s" % (err["table"], err["versionstamp"], err["error"][:300])
     return line

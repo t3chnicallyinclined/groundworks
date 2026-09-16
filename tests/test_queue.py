@@ -349,12 +349,25 @@ class ServerTests(unittest.TestCase):
         conn.sql("CREATE fact:f1 SET statement='old', status='proposed'")
         conn.sql("DELETE fact:f1")
         skip = self.worker(conn, "replay_skip")
-        self.assertEqual(skip.run_once()["changes"], 0)
+        skipped = skip.run_once()
+        self.assertEqual(skipped["changes"], 0)
+        # the run that threw history away names itself as such
+        self.assertIn("fact", skipped["tables_fresh"])
+        self.assertEqual(skipped["tables_replayed"], [])
+        self.assertGreater(skipped["entries_skipped_by_fresh_start"], 0)
+        self.assertIn("FIRST RUN for", queue.report_line(skipped))
         replay = self.worker(conn, "replay_all", replay_from_start=True)
         counts = replay.run_once()
         self.assertEqual(counts["per_table"]["fact"]["changes"], 2)
         self.assertEqual(conn.count("archive"), 1)
         self.assertEqual(conn.sql("SELECT VALUE snapshot.statement FROM archive")[0], ["old"])
+        # a replay threw nothing away, so it must NOT be reported as a first run that did
+        self.assertEqual(counts["tables_fresh"], [])
+        self.assertEqual(sorted(counts["tables_replayed"]), sorted(queue.TABLES))
+        self.assertEqual(counts["entries_skipped_by_fresh_start"], 0)
+        line = queue.report_line(counts)
+        self.assertNotIn("FIRST RUN for", line)
+        self.assertIn("5 replayed from the start", line)
 
     # -- failure handling --
 
@@ -426,11 +439,99 @@ class ServerTests(unittest.TestCase):
         conn = self.fresh("forever")
         w = self.worker(conn, "forever")
         lines = []
+        # Two passes over an idle feed. The FIRST one is a fresh start and says so; the second is a
+        # genuinely quiet resume and says nothing.
         self.assertEqual(queue.run_forever(w, interval_s=0.01, max_passes=2, log=lines.append), 2)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("FIRST RUN for", lines[0])
+        del lines[:]
         conn.sql("CREATE fact:f1 SET statement='s', status='proposed'")
         queue.run_forever(w, interval_s=0.01, max_passes=1, log=lines.append)
         self.assertEqual(len(lines), 1)
         self.assertTrue(lines[0].startswith("QUEUE: 1 entries, 1 changes"), lines[0])
+        self.assertNotIn("FIRST RUN", lines[0])
+
+    # -- a pass that read nothing is not a clean pass --
+
+    def test_a_watched_table_with_no_changefeed_is_an_error_not_a_quiet_pass(self):
+        """SHOW CHANGES on a table with no changefeed returns [], exactly like "nothing new"."""
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db="nofeed")
+        conn.script(gates.schema_surql(self.inst))
+        conn.script(gates.gate_surql(self.inst))          # note: changefeed_surql deliberately NOT applied
+        self.unit(conn, "u1")
+        self.confirmed_fact(conn, "f1", "u1")
+        self.assertEqual(conn.sql("SHOW CHANGES FOR TABLE unit SINCE 1 LIMIT 10", expect=1)[0], [])
+        w = self.worker(conn, "nofeed")
+        self.assertEqual(sorted(w.missing_changefeeds()), sorted(queue.TABLES))
+        counts = w.run_once()
+        self.assertEqual(counts["entries"], 0)
+        self.assertEqual(sorted(counts["changefeeds_missing"]), sorted(queue.TABLES))
+        self.assertEqual(len(counts["errors"]), len(queue.TABLES))
+        self.assertIn("no CHANGEFEED", counts["errors"][0]["error"])
+        line = queue.report_line(counts)
+        self.assertIn("NO CHANGEFEED on", line)
+        # a table with no feed is never given a versionstamp that would hide the gap later
+        self.assertEqual(w.state["versionstamps"], {})
+
+        # the other way: restore the changefeed and the same worker reports a real pass
+        conn.script(queue.changefeed_surql(self.inst))
+        w2 = self.worker(conn, "nofeed")
+        self.assertEqual(w2.missing_changefeeds(), [])
+        w2.run_once()
+        conn.sql("UPDATE unit:u1 SET grade='agent_summary'")
+        good = w2.run_once()
+        self.assertEqual(good["changefeeds_missing"], [])
+        self.assertEqual(good["errors"], [])
+        self.assertEqual(self.status(conn, "f1"), "stale")
+
+    def test_a_fresh_start_is_never_reported_as_a_clean_resume(self):
+        conn = self.fresh("freshstart")
+        self.unit(conn, "u1")
+        self.confirmed_fact(conn, "f1", "u1")
+        conn.sql("UPDATE unit:u1 SET grade='agent_summary'")   # happened while nobody was listening
+        path = self.state_path("freshstart")
+        if path.exists():
+            path.unlink()
+        w = self.worker(conn, "freshstart")
+        counts = w.run_once()
+        self.assertEqual(counts["entries"], 0)                 # nothing delivered, as documented
+        self.assertFalse(counts["state_file"]["existed"])
+        self.assertEqual(sorted(counts["tables_fresh"]), sorted(queue.TABLES))
+        self.assertEqual(counts["tables_resumed"], [])
+        self.assertGreater(counts["entries_skipped_by_fresh_start"], 0)
+        self.assertEqual(self.status(conn, "f1"), "confirmed")  # the change really was skipped
+        line = queue.report_line(counts)
+        self.assertIn("NOT FOUND", line)
+        self.assertIn("FIRST RUN for", line)
+        self.assertIn("will never be delivered", line)
+
+        # a real resume over the same feed says something different
+        conn.sql("UPDATE unit:u1 SET grade='original_log'")
+        again = self.worker(conn, "freshstart").run_once()
+        self.assertTrue(again["state_file"]["existed"])
+        self.assertEqual(again["tables_fresh"], [])
+        self.assertEqual(sorted(again["tables_resumed"]), sorted(queue.TABLES))
+        self.assertEqual(again["entries_skipped_by_fresh_start"], 0)
+        resumed_line = queue.report_line(again)
+        self.assertIn("5 table(s) resumed", resumed_line)
+        self.assertNotIn("FIRST RUN", resumed_line)
+
+    def test_run_forever_never_stays_silent_about_a_pass_that_read_nothing(self):
+        """0 entries and 0 errors is exactly what a fresh start reports, so it must still be logged."""
+        conn = self.fresh("silent")
+        self.unit(conn, "u1")
+        path = self.state_path("silent")
+        if path.exists():
+            path.unlink()
+        lines = []
+        queue.run_forever(self.worker(conn, "silent"), interval_s=0.01, max_passes=1, log=lines.append)
+        self.assertEqual(len(lines), 1, "a first run that threw history away logged nothing")
+        self.assertIn("FIRST RUN for", lines[0])
+        self.assertTrue(lines[0].startswith("QUEUE: 0 entries"), lines[0])
+        # and a genuinely quiet resume still says nothing
+        quiet = []
+        queue.run_forever(self.worker(conn, "silent"), interval_s=0.01, max_passes=1, log=quiet.append)
+        self.assertEqual(quiet, [])
 
 
 if __name__ == "__main__":

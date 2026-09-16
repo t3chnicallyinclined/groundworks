@@ -7,6 +7,10 @@ Rules (docs/MODULES.md labels contract):
   tier rules  tier >= 2 requires reason, dir, at least one issue and a quote
   verbatim    the quote appears word for word in that unit's text (whitespace collapsed)
 
+Every rule above is a loop over the slice, so a slice of 0 units satisfies all of them without
+running any. An empty slice is therefore reported as an error, not a PASS (the same call intake.py
+makes about a corpus of 0 units), and the PASS/FAIL line carries the unit count next to it.
+
     report = validate(slice_path, labels_path, instance)
     python validator.py SLICE.jsonl LABELS.jsonl INSTANCE.yaml     # exit 1 when not ok
 Standard library only.
@@ -72,7 +76,14 @@ def validate(slice_path, labels_path, inst):
     for uid in units:
         if uid not in seen:
             errors.append({"unit": uid, "field": "id", "error": "unit has no label"})
-    return {"ok": not errors, "units": len(units), "labels": len(labels), "errors": errors}
+    if not units:
+        # intake.py already refuses a corpus of 0 units for the same reason: every check above is
+        # a loop over `units` or `labels`, so an empty slice passes all of them without running any.
+        errors.append({"unit": None, "field": "slice",
+                       "error": "this slice holds 0 units; an empty slice is a failure, not a result "
+                                "-- every check below is a loop that ran zero times"})
+    return {"ok": not errors, "units": len(units), "labels": len(labels), "errors": errors,
+            "checks_run": 0 if not units else len(units)}
 
 
 def main(argv=None):

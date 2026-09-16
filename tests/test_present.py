@@ -1135,5 +1135,107 @@ class RuleCheck(unittest.TestCase):
         self.assertEqual(len(policy.load(str(tmp / "p.json")).rules), len(self.RULES))
 
 
+class NothingIsNotAPass(unittest.TestCase):
+    """metrics and plant: a figure over nothing, and checks that stop being generated.
+
+    Both are the gate-probe defect in another place -- green that cannot be told from work done.
+    """
+
+    def test_preservation_over_zero_rows_in_scope_is_not_a_pass(self):
+        doc, pol = synthetic.incident()
+        doc = copy.deepcopy(doc)
+        doc["rows"] = [r for r in doc["rows"] if r["kind"] not in render.CLAIM_KINDS]
+        self.assertTrue(doc["rows"])                       # the document itself is not empty
+        result = metrics.compare(doc, pol)
+        claims = result["modes"]["claims"]
+        self.assertEqual(claims["scope_rows"], 0)
+        pres = claims["preservation"]
+        self.assertIsNone(pres["pct"], "100% of nothing is not a preservation result")
+        self.assertFalse(pres["ok"])
+        self.assertEqual(pres["expected_total"], 0)
+        # the count that disagrees with a green run: every category is named as not run
+        self.assertEqual(sorted(pres["checks"]["not_run"]), sorted(metrics.CATEGORIES))
+        self.assertEqual(pres["checks"]["ran"], [])
+        self.assertFalse(result["all_preserved"])
+        self.assertEqual(result["modes_with_no_rows_in_scope"], ["claims"])
+        self.assertEqual(sorted(result["preservation_not_run"]["claims"]), sorted(metrics.CATEGORIES))
+        # and the command says so rather than exiting 0
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "rows.json").write_text(json.dumps(doc), encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = metrics.main([str(tmp / "rows.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("CHECK NOT RUN in mode claims", err.getvalue())
+
+    def test_a_document_with_no_rows_is_refused_outright(self):
+        doc, pol = synthetic.incident()
+        doc = dict(copy.deepcopy(doc), rows=[])
+        with self.assertRaises(ValueError) as caught:
+            metrics.compare(doc, pol)
+        self.assertIn("0 rows", str(caught.exception))
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "rows.json").write_text(json.dumps(doc), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(metrics.main([str(tmp / "rows.json")]), 2)
+
+    def test_the_scan_checks_can_never_just_stop_being_generated(self):
+        """A two-layer rendering with no Details heading must fail, not shed two of seven checks."""
+        doc, pol = synthetic.review()
+        for mode in render.TWO_LAYER:
+            rows = scope_rows(doc, mode)
+            text = render.render(doc, mode, pol)
+            intact = metrics.preservation(rows, text, pol, mode)
+            with self.subTest(mode=mode, rendering="intact"):
+                self.assertTrue(intact["ok"])
+                for name in metrics.SCAN_CHECKS:
+                    self.assertIn(name, intact["checks"]["ran"])
+                    self.assertIn(name, intact)
+            # the mutation a reader cannot see: the Details heading goes missing
+            headless = "\n".join(l for l in text.split("\n") if not l.startswith(render.DETAILS_PREFIX))
+            res = metrics.preservation(rows, headless, pol, mode)
+            with self.subTest(mode=mode, rendering="no Details heading"):
+                self.assertFalse(res["ok"], "two of seven checks vanished and the report stayed green")
+                self.assertEqual(sorted(res["checks"]["not_run"]), sorted(metrics.SCAN_CHECKS))
+                for name in metrics.SCAN_CHECKS:
+                    self.assertIn("two-layer", res["checks"]["not_run"][name])
+                    self.assertNotIn(name, res)
+        # a genuine one-layer mode says "not applicable" and stays green
+        one = metrics.preservation(scope_rows(doc, "full"), render.render(doc, "full", pol), pol, "full")
+        self.assertTrue(one["ok"])
+        self.assertEqual(sorted(one["checks"]["not_applicable"]), sorted(metrics.SCAN_CHECKS))
+        self.assertEqual(one["checks"]["not_run"], {})
+
+    def test_plant_refuses_to_write_a_seeded_copy_with_no_seeds_in_it(self):
+        doc, pol = synthetic.incident()
+        with self.assertRaises(ValueError) as caught:
+            plant.plant(doc, pol, types=[])
+        self.assertIn("no mutation types requested", str(caught.exception))
+        # a non-empty type list that no row in this document can carry is the same failure
+        bare = copy.deepcopy(doc)
+        for row in bare["rows"]:
+            row["verdict"], row["answered"] = None, None
+        with self.assertRaises(ValueError) as caught:
+            plant.plant(bare, pol, types=["verdict_soften"])
+        self.assertIn("planted 0 errors", str(caught.exception))
+        # and the command writes NOTHING: an evaluation run cannot be pointed at an unseeded copy
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "rows.json").write_text(json.dumps(doc), encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = plant.main([str(tmp / "rows.json"), str(tmp / "out"), "--types", ""])
+        self.assertEqual(code, 2)
+        self.assertIn("plant NOT EXECUTED", err.getvalue())
+        self.assertFalse((tmp / "out").exists())
+        # the ordinary run is untouched: it still plants, still writes, still flags its shortfall
+        with contextlib.redirect_stdout(io.StringIO()):
+            plant.main([str(tmp / "rows.json"), str(tmp / "ok"), "--per-type", "1"])
+        self.assertTrue((tmp / "ok" / "manifest.json").exists())
+        self.assertTrue(json.loads((tmp / "ok" / "manifest.json").read_text(encoding="utf-8"))["planted_total"])
+
+
 if __name__ == "__main__":
     unittest.main()

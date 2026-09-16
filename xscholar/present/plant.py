@@ -14,6 +14,9 @@ Targets alternate between rows that will render as established (the hard case: n
 and rows that will not (check first, eliminated or superseded); lands_in records where the planted
 row renders. A row is never planted twice. The same rows, policy and seed give the same output.
 When a type has fewer applicable rows than asked, the shortfall is recorded (and the command exits 1).
+Planting NOTHING is refused outright -- an empty `--types` list, or a type list no row can carry.
+A `[SEEDED TEST COPY]` with no seeds in it makes any evaluation run against it look clean while
+measuring nothing, so no file is written and the command exits 2.
 
 The planted copy is unmistakable: its title is prefixed "[SEEDED TEST COPY] ", it carries
 "seeded_test_copy": true (every renderer then prints the banner line), and the manifest carries
@@ -139,6 +142,9 @@ def plant(doc, policy=None, seed=0, per_type=2, types=TYPES):
     unknown = [t for t in types if t not in TYPES]
     if unknown:
         raise ValueError("unknown mutation type(s): %s; types: %s" % (", ".join(unknown), ", ".join(TYPES)))
+    if not list(types):
+        raise ValueError("no mutation types requested; a seeded test copy with nothing planted in it "
+                         "measures nothing, so it is a failure, not a result. types: %s" % ", ".join(TYPES))
     rng = random.Random(seed)
     work = copy.deepcopy(truth)
     rows, question = work["rows"], work["question"]
@@ -168,6 +174,10 @@ def plant(doc, policy=None, seed=0, per_type=2, types=TYPES):
             entry["lands_in"] = _lands(features.row_features(rows[i], pol, question)["bucket"])
             used.add(rows[i]["id"])
             entries.append(entry)
+    if not entries:
+        raise ValueError("planted 0 errors into %d row(s) with types %s: no row in this document can "
+                         "carry any of them. An evaluation run against a copy with nothing planted "
+                         "measures nothing; shortfall %s" % (len(rows), ", ".join(types), shortfall))
     work["title"] = TITLE_PREFIX + work["title"]
     work["seeded_test_copy"] = True
     counts = {}
