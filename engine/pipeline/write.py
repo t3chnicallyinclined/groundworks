@@ -118,8 +118,9 @@ class Writer:
         counts = self.db.sql(
             "RETURN {supports: count(SELECT VALUE id FROM %s<-supports<-fact), "
             "attacks: count(SELECT VALUE id FROM %s<-attacks<-critique), "
-            "fatal: count(SELECT VALUE id FROM %s<-attacks<-critique WHERE verdict = 'fatal')}"
-            % (target, target, target), expect=1)[0]
+            "fatal: count(SELECT VALUE id FROM %s<-attacks<-critique WHERE verdict = 'fatal'), "
+            "damaging_open: count(SELECT VALUE id FROM %s<-attacks<-critique WHERE verdict = 'damaging' AND answered = false)}"
+            % (target, target, target, target), expect=1)[0]
         problems = []
         if counts["supports"] < 1:
             problems.append("no supporting fact linked (use support(fact, conclusion))")
@@ -127,5 +128,7 @@ class Writer:
             problems.append("never attacked (run a red team or panel first)")
         if counts["fatal"]:
             problems.append("%d fatal attack(s) standing (answer or narrow the conclusion)" % counts["fatal"])
+        if counts["damaging_open"]:
+            problems.append("%d damaging head(s) unanswered (answer them first)" % counts["damaging_open"])
         raise GateRefusal("root_cause_needs_support_and_attack", "; ".join(problems) or message,
                           {"counts": counts, "db": message})

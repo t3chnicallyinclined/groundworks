@@ -10,3 +10,5 @@ kb_data/
 *.pdf
 __pycache__/
 .venv/
+
+instances/*/out/

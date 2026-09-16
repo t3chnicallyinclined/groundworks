@@ -49,6 +49,16 @@ This repository contains **no client or matter data**, ever:
 | `.claude/agents/scholar-architect.md` | The expert agent for designing and building the system |
 | `CLAUDE.md` | Rules for any session working in this repo |
 
+## Try it (five minutes, nothing to download but SurrealDB)
+
+```
+python scripts/run_instance.py instances/demo-incident --memory 8025
+```
+
+That runs a complete non-legal instance on a throwaway in-memory database: config, generated schema and gates, a reject-and-accept probe per rule, intake, chunking, labelling (a stand-in rule labeller; real instances use agents), the verbatim validator, the loader, and a walkthrough where the datastore refuses each premature promotion and says exactly what is missing. Outputs land in `instances/demo-incident/out/`.
+
+To map your own domain: copy `instances/demo-incident/`, answer the eight questions in `instance.yaml`, write an adapter that yields units with exact locators, and run the same command.
+
 ## Using the expert
 
 Open this repo in Claude Code and ask for the `scholar-architect` agent, for example:

@@ -57,6 +57,8 @@ gates:
     forbids:
       - edge: attacks
         where: "verdict = 'fatal'"
+      - edge: attacks
+        where: "verdict = 'damaging' AND answered = false"
 
 lenses:
   - name: service_owner
