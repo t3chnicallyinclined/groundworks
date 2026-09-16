@@ -105,13 +105,45 @@ class LockTests(PanelCase):
                     {"seats": SEATS[:2] + [{"id": "seat_gamma", "lens": "lens_test"}]},
                     {"thresholds": {"agreement": 1.0}},
                     {"weighted_seat": "seat_nobody"},
-                    {"options": ["affirm", "abstain"]}):
+                    {"options": ["affirm", "abstain"]},
+                    {"confidence_weights": {"med": 1.2}},
+                    {"confidence_weights": {"high": 0.5, "med": 0.9}},
+                    {"confidence_weights": {"unsure": 0.3}}):
             self.write_panel(**bad)
             with self.assertRaises(panel.PanelError) as err:
                 panel.lock(self.dir)
             self.assertEqual(err.exception.code, 2, bad)
         self.write_panel()
         panel.lock(self.dir)
+
+
+class SettingsTests(PanelCase):
+    def settings(self, data):
+        path = self.dir / "owner_settings.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_owner_settings_are_copied_in_at_lock(self):
+        path = self.settings({"thresholds": {"consensus": 0.6}, "confidence_weights": {"med": 0.8}, "notes": "x"})
+        panel.lock(self.dir, path)
+        cfg, _ = panel.verify(self.dir)
+        self.assertEqual(cfg["thresholds"]["consensus"], 0.6)
+        self.assertEqual(cfg["confidence"]["med"], 0.8)
+
+    def test_panel_that_disagrees_with_owner_settings_is_refused_and_not_locked(self):
+        self.write_panel(thresholds={"consensus": 0.6667})
+        path = self.settings({"thresholds": {"consensus": 0.6666666666666666}})
+        with self.assertRaises(panel.PanelError) as err:
+            panel.lock(self.dir, path)
+        self.assertEqual(err.exception.code, 1)
+        self.assertFalse((self.dir / "panel.lock.json").exists())
+        self.write_panel()
+        panel.lock(self.dir, path)
+
+    def test_missing_settings_file_is_not_executed(self):
+        with self.assertRaises(panel.PanelError) as err:
+            panel.lock(self.dir, self.dir / "nope.json")
+        self.assertEqual(err.exception.code, 2)
 
 
 class AnonymizeTests(PanelCase):
@@ -254,25 +286,37 @@ class TallyTests(PanelCase):
         self.assertEqual([m["seat"] for m in result["minority_report"]], ["seat_gamma"])
         self.assertEqual(cli("tally", str(self.dir)), 3)
 
-    def test_two_high_seats_of_three_equal_seats_reach_the_exact_two_thirds_bar(self):
-        self.write_panel(weighted_seat=None)  # rewrite the panel, then redo lock and round 1
+    def relock(self, **overrides):
+        """Rewrite the panel, then redo lock, round 1 and anonymization, with good round-2 answers."""
+        self.write_panel(**overrides)
         shutil.rmtree(self.dir / "round1")
         for name in ("panel.lock.json", "anon_map.json", "round1_anon.md"):
             (self.dir / name).unlink()
         self.ready_for_round2()
         self.all_good()
+
+    def test_two_high_seats_of_three_equal_seats_reach_the_exact_two_thirds_bar(self):
+        self.relock(weighted_seat=None)
         result = panel.tally(self.dir)
         self.assertEqual(result["w_total"], 3.0)
         self.assertEqual(result["verdict"], "affirm")
 
     def test_rounded_consensus_threshold_turns_the_same_votes_into_a_split(self):
-        self.write_panel(weighted_seat=None, thresholds={"consensus": 0.6667})
-        shutil.rmtree(self.dir / "round1")
-        for name in ("panel.lock.json", "anon_map.json", "round1_anon.md"):
-            (self.dir / name).unlink()
-        self.ready_for_round2()
-        self.all_good()
+        self.relock(weighted_seat=None, thresholds={"consensus": 0.6667})
         self.assertIsNone(panel.tally(self.dir)["verdict"])
+
+    def test_two_medium_seats_carry_only_when_the_owner_raises_the_medium_weight(self):
+        self.relock(weighted_seat=None)
+        self.good_r2("seat_alpha", conf="med")
+        self.good_r2("seat_beta", conf="med")
+        self.assertIsNone(panel.tally(self.dir)["verdict"])  # 1.5 of 3.0 is exactly half: no bar above 0.5 admits it
+        self.relock(weighted_seat=None, thresholds={"consensus": 0.55}, confidence_weights={"med": 0.85})
+        self.good_r2("seat_alpha", conf="med")
+        self.good_r2("seat_beta", conf="med")
+        result = panel.tally(self.dir)
+        self.assertAlmostEqual(result["weights"]["affirm"], 1.7)
+        self.assertEqual(result["verdict"], "affirm")
+        self.assertEqual(result["confidence_weights"]["med"], 0.85)
 
     def test_tally_refuses_while_reprompts_are_owed(self):
         self.good_r2("seat_alpha")

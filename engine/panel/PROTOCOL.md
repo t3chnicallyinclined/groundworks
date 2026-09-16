@@ -54,6 +54,23 @@ runs/<panel_id>/
 
 **Leave `thresholds` out** unless a human has decided otherwise; the defaults are exactly consensus 2/3, agreement 0.70, dissent quota 2. Do not write a rounded consensus such as `0.6667`: with three equal seats it raises the bar from 2.0 to 2.0001, so two high-confidence seats (2.0) can never reach consensus.
 
+**Owner settings.** Thresholds and confidence weights are human-owned. Keep them in a per-instance settings file that only the owner edits, and lock with `panel.py lock RUN_DIR --settings FILE`: the program copies `thresholds` and `confidence_weights` into panel.json before hashing, and refuses to lock a panel.json that already carries different values. A settings change applies only to panels locked after it.
+
+**Confidence weights** default to high 1.0, med 0.75, low 0.5 and may be set as `confidence_weights` with `0 < low <= med <= high <= 1`. The consensus bar stays strictly above 0.5 so at most one option can win.
+
+**Measured on three equal seats** (instance 1, synthetic panels, 2026-09-15):
+
+| Majority | Consensus bar | Weight vs bar | Result |
+|---|---|---|---|
+| 2 high | exact 2/3 | 2.0 vs 2.0 | consensus |
+| 2 high | rounded 0.6667 | 2.0 vs 2.0001 | **split** (the rounding bug) |
+| high + med | 2/3 | 1.75 vs 2.0 | split |
+| high + med | 0.58 | 1.75 vs 1.74 | consensus |
+| 2 med | any allowed bar (> 0.5) | 1.5 vs > 1.5 | **always split** with default weights |
+| 2 med, med weight 0.85 | 0.55 | 1.7 vs 1.65 | consensus |
+
+To let a two-medium majority carry on three seats, the owner raises the medium weight; lowering the bar alone cannot do it.
+
 **What consensus takes with three equal seats** (bar 2.0): three seats at any confidence of med or above, or two seats both at high confidence. Two seats at med (1.5) or high plus med (1.75) is a split, returned to the human. This is intended (a hesitant majority escalates), and it makes splits common in three-seat panels.
 
 - At least 3 seats.

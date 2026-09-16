@@ -122,24 +122,65 @@ def load_panel(run):
         errors.append("thresholds.agreement must be at least 0.5 and below 1 (1 would switch the check off)")
     if not isinstance(th["dissent_quota"], int) or not 1 <= th["dissent_quota"] <= len(seats):
         errors.append("thresholds.dissent_quota must be an integer from 1 to the number of seats")
+    weights = dict(CONFIDENCE)
+    weights.update(cfg.get("confidence_weights") or {})
+    if (set(weights) != set(CONFIDENCE)
+            or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in weights.values())
+            or not 0 < weights["low"] <= weights["med"] <= weights["high"] <= 1):
+        errors.append("confidence_weights must set only high, med, low with 0 < low <= med <= high <= 1")
     if errors:
         raise PanelError(2, "panel.json invalid: " + "; ".join(errors))
     cfg["options"] = options
     cfg["thresholds"] = th
     cfg["categories"] = [str(c).strip().lower() for c in cfg.get("objection_categories") or []]
     cfg["ids"] = ids
+    cfg["confidence"] = weights
     return cfg
 
 
-def lock(run):
-    """Freeze the panel (seats, lenses, options, weighted seat, thresholds) before any answer exists."""
-    load_panel(run)
+SETTINGS_KEYS = ("thresholds", "confidence_weights")
+
+
+def apply_settings(run, settings_path):
+    """Copy the owner's settings (thresholds, confidence_weights) into panel.json; refuse a panel that disagrees."""
+    settings_path = pathlib.Path(settings_path)
+    if not settings_path.exists():
+        raise PanelError(2, "settings file not found: %s" % settings_path)
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise PanelError(2, "settings file is not valid JSON: %s" % exc)
+    path = run / "panel.json"
+    if not path.exists():
+        raise PanelError(2, "no panel.json in %s" % run)
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise PanelError(2, "panel.json is not valid JSON: %s" % exc)
+    changed = False
+    for key in SETTINGS_KEYS:
+        if key not in settings:
+            continue
+        if key in cfg and cfg[key] != settings[key]:
+            raise PanelError(1, "panel.json %s differs from the owner's settings file; remove it from panel.json" % key)
+        if key not in cfg:
+            cfg[key] = settings[key]
+            changed = True
+    if changed:
+        path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def lock(run, settings=None):
+    """Freeze the panel (seats, lenses, options, weighted seat, thresholds, weights) before any answer exists."""
     lock_path = run / "panel.lock.json"
     if lock_path.exists():
         raise PanelError(1, "already locked; a locked panel is never re-locked (start a new run directory)")
     round1 = run / "round1"
     if round1.exists() and any(round1.iterdir()):
         raise PanelError(1, "round1/ already has answers; lock the panel before any answer exists")
+    if settings is not None:
+        apply_settings(run, settings)
+    load_panel(run)
     digest = sha_file(run / "panel.json")
     lock_path.write_text(json.dumps({"sha256": digest, "locked_at": now()}, indent=2), encoding="utf-8")
     return digest
@@ -288,7 +329,7 @@ def agreement_owed(run, cfg, r2):
             chosen = saved["seats"]
     if chosen is None:
         majority = sorted((sid for sid in cfg["ids"] if stances[sid]["option"] == top),
-                          key=lambda sid: (CONFIDENCE[stances[sid]["confidence"]], len(r2[sid]["objections"]), sid))
+                          key=lambda sid: (cfg["confidence"][stances[sid]["confidence"]], len(r2[sid]["objections"]), sid))
         chosen = majority[:2]
         chosen_path.write_text(json.dumps({"option": top, "seats": chosen, "chosen_at": now()}, indent=2),
                                encoding="utf-8")
@@ -383,7 +424,7 @@ def tally(run):
         stance = answer["stance"]
         if stance["option"] == "abstain":
             continue
-        weights[stance["option"]] += base[sid] * CONFIDENCE[stance["confidence"]]
+        weights[stance["option"]] += base[sid] * cfg["confidence"][stance["confidence"]]
         backers[stance["option"]].append({"seat": sid, "base": base[sid], "confidence": stance["confidence"]})
     bar = cfg["thresholds"]["consensus"] * w_total
     passing = [o for o in cfg["options"] if weights[o] + 1e-9 >= bar]
@@ -394,6 +435,7 @@ def tally(run):
               "result": "consensus" if verdict else "split", "verdict": verdict,
               "w_total": w_total, "bar": round(bar, 4), "weights": dict((o, round(w, 4)) for o, w in weights.items()),
               "backers": backers, "weighted_seat": cfg.get("weighted_seat"), "minority_report": minority,
+              "thresholds": cfg["thresholds"], "confidence_weights": cfg["confidence"],
               "enforcement": enforcement_counts(run), "tallied_at": now()}
     (run / "tally.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     with (run / "verdicts.jsonl").open("w", encoding="utf-8") as fh:
@@ -416,11 +458,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Deliberation panel protocol checker (see PROTOCOL.md).")
     parser.add_argument("command", choices=["lock", "anonymize", "check", "tally"])
     parser.add_argument("run_dir")
+    parser.add_argument("--settings", help="lock only: owner settings file (thresholds, confidence_weights) to copy in")
     args = parser.parse_args(argv)
     run = pathlib.Path(args.run_dir)
     try:
         if args.command == "lock":
-            print("LOCKED %s sha256=%s" % (run, lock(run)))
+            print("LOCKED %s sha256=%s" % (run, lock(run, args.settings)))
             return 0
         if args.command == "anonymize":
             print("ANONYMIZED %d round-1 answers -> %s" % (anonymize(run), run / "round1_anon.md"))
