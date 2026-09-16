@@ -164,7 +164,7 @@ unseeded copy measures nothing while looking clean.
 ## Tests
 
 ```
-python -m unittest discover -s xscholar/present -v
+python -m unittest discover -s tests -p "test_present.py" -v   # the tests live in tests/, not here
 ```
 
 ## Limits
