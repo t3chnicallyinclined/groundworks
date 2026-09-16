@@ -63,7 +63,8 @@ jobs:
           fi
 
       - name: Role skills still match the config they came from
-        run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills
+        # the docs arm (check c) needs a doc to read: without one it checks nothing and still exits 0
+        run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills instances/demo-incident/README.md instances/demo-incident/skills/red-team/SKILL.md
 
       - name: Gates are no weaker than the committed baseline
         run: |

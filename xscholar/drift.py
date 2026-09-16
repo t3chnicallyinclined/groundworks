@@ -7,14 +7,19 @@ Three checks, each naming the file and the item that drifted (ROADMAP C8):
                  appears in the generated skill that uses it
   (b) freshness  every generated file still hashes to what a fresh generation produces: a hand edit
                  breaks its own `content-sha256` line, a config change makes the file stale
-  (c) docs       in any doc passed, every `lens_<name>` and `seat_<name>` mentioned exists in the config
+  (c) docs       in any doc passed, every `lens_<name>` and `seat_<name>` mentioned exists in the config.
+                 A doc that mentions none checked nothing, so it is drift, not a pass. The engine's own
+                 identifiers that share the prefix (`lens_view`, the read tool; `lens_bound`, an access key)
+                 are not lens mentions.
 
     check(inst_path, skills_dir, docs=()) -> Report      Report.ok is False when anything drifted
     python -m xscholar.drift INSTANCE.yaml SKILLS_DIR [DOC ...]
 
 Exit 0 clean, 1 drift, 2 could not run (NOT EXECUTED). Docs are opt-in per invocation: a doc that
 carries worked examples from another instance (`xscholar/panel/PROTOCOL.md`) would fail check (c) by
-design, so pass only docs that describe THIS instance.
+design, so pass only docs that describe THIS instance. `xscholar test` and CI pass the demo's README and
+its generated skill. Until 2026-09-16 they passed none, so check (c) had never run outside its unit tests,
+and its first real run failed the engine's own generated skill on `lens_view` (the read tool's name).
 
 Standard library only.
 """
@@ -29,6 +34,8 @@ from xscholar import config, skills  # noqa: E402
 
 DOC_MENTION = re.compile(r"\b(lens|seat)_([a-z0-9_]+)\b")
 DOC_EXT = {".md", ".txt"}
+# Engine identifiers that begin like a lens or seat mention and are not one: an instance cannot rename them.
+ENGINE_NAMES = {"lens_view": "the lens read tool", "lens_bound": "an access role key"}
 
 
 def names(item, text):
@@ -47,7 +54,7 @@ class Report:
         self.instance = str(instance)
         self.skills_dir = str(skills_dir)
         self.rows = []
-        self.checked = {"skills": 0, "items": 0, "docs": 0}
+        self.checked = {"skills": 0, "items": 0, "docs": 0, "doc_mentions": 0}
 
     def add(self, path, item, why):
         self.rows.append({"file": str(path), "item": str(item), "why": why})
@@ -61,9 +68,9 @@ class Report:
 
     def lines(self):
         out = ["DRIFT %s: %s -- %s" % (r["file"], r["item"], r["why"]) for r in self.rows]
-        out.append("drift check %s: %d skill file(s), %d config item(s), %d doc(s), %d drift(s)"
-                   % ("clean" if self.ok else "FAILED", self.checked["skills"], self.checked["items"],
-                      self.checked["docs"], len(self.rows)))
+        out.append("drift check %s: %d skill file(s), %d config item(s), %d doc(s) naming %d lens/seat mention(s), "
+                   "%d drift(s)" % ("clean" if self.ok else "FAILED", self.checked["skills"], self.checked["items"],
+                                    self.checked["docs"], self.checked["doc_mentions"], len(self.rows)))
         return out
 
     def __str__(self):
@@ -170,7 +177,14 @@ def check(inst_path, skills_dir, docs=()):
             report.add(doc, "doc", "not a prose doc (%s); pass .md or .txt" % (doc.suffix or "no suffix"))
             continue
         text = doc.read_text(encoding="utf-8", errors="replace")
-        for kind, name in sorted(set(DOC_MENTION.findall(text))):
+        mentions = sorted({(kind, name) for kind, name in DOC_MENTION.findall(text)
+                           if "%s_%s" % (kind, name) not in ENGINE_NAMES or name in known})
+        if not mentions:
+            report.add(doc, "doc", "names no lens_<name> or seat_<name>, so check (c) checked nothing in it; "
+                                   "pass a doc that describes this instance's lenses and seats")
+            continue
+        report.checked["doc_mentions"] += len(mentions)
+        for kind, name in mentions:
             if name not in known:
                 report.add(doc, "%s_%s" % (kind, name),
                            "named in this doc, but instance %s defines no lens %r; lenses: %s"
