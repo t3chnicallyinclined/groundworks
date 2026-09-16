@@ -67,6 +67,7 @@ def main(argv=None):
     parser.add_argument("--url", default=None)
     parser.add_argument("--ns")
     parser.add_argument("--db")
+    parser.add_argument("--labels", help="use these already-written label files (for example from agents) instead of the stub")
     args = parser.parse_args(argv)
     inst_dir = pathlib.Path(args.instance_dir)
     inst = config.load(inst_dir / "instance.yaml")
@@ -100,28 +101,37 @@ def main(argv=None):
         chunks = chunker.chunk(out / "units.jsonl", out, inst)
         say("chunk", "%d slice(s): %s" % (len(chunks), ", ".join("%s=%d" % (c["id"], c["count"]) for c in chunks)))
 
-        labeler_path = inst_dir / "labeler_stub.py"
-        if not labeler_path.exists():
-            print("no labeler: agents label real instances; the demo needs labeler_stub.py")
-            return 1
-        labeler = load_module(labeler_path)
-        labels_dir = out / "labels"
-        labels_dir.mkdir(exist_ok=True)
+        if args.labels:
+            labels_dir = pathlib.Path(args.labels)
+            source = "labels supplied from %s" % labels_dir
+        else:
+            labeler_path = inst_dir / "labeler_stub.py"
+            if not labeler_path.exists():
+                print("no labels: pass --labels DIR with agent-written labels, or provide labeler_stub.py for a demo")
+                return 1
+            labeler = load_module(labeler_path)
+            labels_dir = out / "labels"
+            labels_dir.mkdir(exist_ok=True)
+            source = "stand-in labeler, not agents"
         failures = 0
         tiers = {}
         for chunk in chunks:
             slice_path = out / "slices" / (chunk["id"] + ".jsonl")
-            labels = [labeler.label(u) for u in intake.read_units(slice_path)]
             labels_path = labels_dir / (chunk["id"] + ".jsonl")
-            labels_path.write_text("".join(json.dumps(l) + "\n" for l in labels), encoding="utf-8")
+            if not args.labels:
+                labels = [labeler.label(u) for u in intake.read_units(slice_path)]
+                labels_path.write_text("".join(json.dumps(l) + "\n" for l in labels), encoding="utf-8")
+            if not labels_path.exists():
+                print("   missing labels for %s at %s" % (chunk["id"], labels_path))
+                return 1
+            labels = intake.read_units(labels_path)
             rep = validator.validate(slice_path, labels_path, inst)
             failures += len(rep["errors"])
             for l in labels:
                 tiers[l["tier"]] = tiers.get(l["tier"], 0) + 1
             for err in rep["errors"]:
                 print("   validator: %s %s %s" % (err["unit"], err["field"], err["error"]))
-        say("label", "%d labels by tier %s (stand-in labeler, not agents)"
-            % (sum(tiers.values()), dict(sorted(tiers.items()))))
+        say("label", "%d labels by tier %s (%s)" % (sum(tiers.values()), dict(sorted(tiers.items())), source))
         say("validate", "%s" % ("PASS: every unit once, vocabulary ok, quotes verbatim" if not failures
                                  else "FAIL: %d error(s)" % failures))
         if failures:
