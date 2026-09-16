@@ -30,8 +30,8 @@ The instance runs in its own private repository. This repo receives only generic
 
 | # | Task | Acceptance |
 |---|---|---|
-| C1 | Instance config file: the eight answers in one file | Schema, validator vocabulary and role skills generated from it |
-| C2 | Generic modules: intake, chunker, validator, loader, gate library, lens builder, hooks, eval harness | A toy instance builds from config with no engine edits |
+| C1 | Instance config file: the eight answers in one file | Schema, validator vocabulary and role skills generated from it. **Done 2026-09-15 for schema, gates, probes and validator vocabulary (`xscholar/config.py`, `xscholar/gates.py`); role skills from config are still open** |
+| C2 | Generic modules: intake, chunker, validator, loader, gate library, lens builder, hooks, eval harness | A toy instance builds from config with no engine edits. **Done 2026-09-15 except the lens builder: `instances/demo-incident` runs end to end from its config (`scripts/run_instance.py`), with hooks and the agreement harness; lens views are still the case instance's Python** |
 | C3 | Matter-identifier scan in CI | Build fails if an engine file contains an identifier from any private instance's deny-list |
 | C4 | Public demo instance (appeals: a public record from a published decision) | End-to-end run with zero client data |
 | C5 | Methods brain: pipeline over `research/READING_LIST.md` | Method claims stored with verbatim quotes and source rank; adoption requires primary source plus reproduction |
