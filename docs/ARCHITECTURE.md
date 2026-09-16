@@ -53,6 +53,41 @@ Read with: `METHOD.md` (why), `MODULES.md` (module and file contracts), `TUNING.
 
 ---
 
+## 2b. Who is at the gate, and what separates what
+
+**Nobody is at the gate.** The gate is a rule in the datastore. Experts propose; the rule disposes. No agent, lens or person can wave a claim through, and the rule checks the evidence at the moment of writing, on raw access too.
+
+**Where domain knowledge enters**
+
+| Step | Domain expert needed? | What they do |
+|---|---|---|
+| Design the instance | **yes** | choose the unit, the locator scheme, the status axis, and the vocabulary, transcribed from an authoritative source rather than invented |
+| Intake | no | code: text, locator, hash, status, grade; no interpretation |
+| Read and label | **yes, embodied** | agents read with that domain's guide and vocabulary; labels are agent-grade notes |
+| Promote a claim | no | the datastore rule decides |
+| Lenses and panels | **yes, several** | different experts judge the same graph; their disagreement is kept |
+| Calibrate | **yes, human** | an expert reviews a sample, which is what moves a lens beyond persona |
+
+**One set of gate rules per instance, differing by claim type, not by expert.** A fact needs a source-grade citation; an authority needs official text; a conclusion needs support and a surviving attack. A lens may hold itself to a **stricter** standard for its own view, never a looser one. If two experts want different standards for the same claim type, that is one unresolved decision for the instance owner, not two gates.
+
+**Separate by instance, never by expert.** Splitting experts into their own stores would destroy the reason the graph exists: contradictions must collide where they can be seen.
+
+| What must stay apart | Mechanism |
+|---|---|
+| Different goals, corpora, clients | **separate instance = separate namespace/database** |
+| Different perspectives | **lenses**: views plus lens-keyed overlay rows |
+| Different quality of knowing | **grades**: source-grade vs agent report |
+| Who said it | **provenance** on every row: agent, lens, reasoning type |
+| Who may read or write | **credentials and permissions** |
+| Different vocabularies | **the validator**: labels must use the instance's approved vocabulary |
+| Search indexes and mirrors | a **derived** store that is never authoritative |
+
+**Rule of thumb: one instance, one graph.** One goal, one corpus, one set of rules.
+
+**When two domains genuinely meet,** keep two instances and add a **bridge** with its own gate: both sides quoted, assumptions matched, novelty checked, a test run. Never merge the graphs.
+
+**The mixing risk is real, and namespaces are not its guard.** It is held off by the approved vocabulary, the status axis, the grades, and eliminated claims kept visible so they cannot creep back in.
+
 ## 3. What an instance supplies, and what is generated
 
 | You supply | Example |

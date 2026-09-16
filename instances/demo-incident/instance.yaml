@@ -1,0 +1,88 @@
+# Demo instance: an incident postmortem. Synthetic data, no real service, no personal data.
+# Purpose: a complete, runnable, NON-LEGAL instance that proves the engine is domain-free.
+
+instance:
+  id: demo_incident
+  goal: "Establish the root cause of the checkout outage, provable from the incident record"
+  holder: "the service team"
+  off_limits: ["customer personal data", "speculation about individuals"]
+
+units:
+  - name: log_line
+    locator_fields: [host, file, line, ts]
+    chunk_size: 200
+  - name: change
+    locator_fields: [repo, commit, ts]
+    chunk_size: 50
+  - name: metric_point
+    locator_fields: [series, ts]
+    chunk_size: 200
+
+fidelity:
+  order: [original_log, exported_metric, agent_summary, recollection]
+  confirming: [original_log, exported_metric]
+  agent_grades: [agent_summary]
+
+status:
+  values: [in_window, out_of_window, redacted]
+  usable: [in_window]
+
+vocabulary:
+  tiers: [0, 1, 2, 3]
+  directions: [for_goal, against_goal, mixed, neutral]
+  issues: [saturation, dependency, deploy, config, monitoring, capacity]
+  targets: [rc_pool_exhaustion, rc_bad_deploy, rc_upstream_timeout]
+  roles: [error, warning, metric, change, note]
+
+gates:
+  - id: confirmed_needs_source_grade
+    table: fact
+    field: status
+    value: confirmed
+    requires:
+      - edge: cites
+        to: [unit]
+        where: "grade IN $confirming AND status IN $usable"
+        min: 1
+  - id: root_cause_needs_support_and_attack
+    table: conclusion
+    field: ready
+    value: true
+    requires:
+      - edge: supports
+        to: [fact]
+        min: 1
+      - edge: attacks
+        min: 1
+    forbids:
+      - edge: attacks
+        where: "verdict = 'fatal'"
+
+lenses:
+  - name: service_owner
+    filter: "status IN $usable"
+  - name: security
+    filter: "issues CONTAINS 'config' OR issues CONTAINS 'dependency'"
+  - name: management
+    filter: "tier >= 2"
+
+roles:
+  - skill: red-team
+    lenses: [service_owner, security, management]
+    panel:
+      options: [survives, damaged, fatal]
+      objection_categories: [evidence, timeline, alternative_cause, blast_radius, prevention, monitoring]
+      weighted_seat: null
+
+evaluator:
+  regression_file: evals/known_errors.json
+  gate_probes: generated
+  label_agreement:
+    sample_chunks: 2
+    adjudicate: true
+
+human_owned: [gates, fidelity, status, evaluator, privacy]
+
+privacy:
+  deny_list: "~/.xscholar/denylist.txt"
+  providers_allowed: ["the model provider the owner approved"]
