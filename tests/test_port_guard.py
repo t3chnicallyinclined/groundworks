@@ -173,13 +173,16 @@ class PortGuardTests(unittest.TestCase):
     def test_no_suite_uses_a_port_that_belongs_to_something_else(self):
         """8001-8003 are live databases and killing or writing into one has cost real data; 8025 is
         the README demo port and 8040 is CI's baseline port. The suites own 8023-8034."""
+        # 8023-8039: the original 8023-8034 filled up (11 suites), so it was widened. The stand-in
+        # servers this file starts are reserved inside that window so no suite is handed one.
         reserved = {8001: "a live database", 8002: "a live database", 8003: "a live database",
-                    8025: "the README demo port", 8040: "CI's gate-baseline port"}
+                    8025: "the README demo port", 8040: "CI's gate-baseline port",
+                    STRANGER: "this file's stand-in stranger server", DOOMED: "this file's doomed-server port"}
         for port, users in self.suite_ports().items():
             with self.subTest(port=port):
                 self.assertNotIn(port, reserved, "%s uses %d, which is %s"
                                  % (users[0], port, reserved.get(port)))
-                self.assertTrue(8023 <= port <= 8034, "%s uses %d, outside the suites' range 8023-8034"
+                self.assertTrue(8023 <= port <= 8039, "%s uses %d, outside the suites' range 8023-8039"
                                 % (users[0], port))
 
     def test_no_test_names_a_live_database_anywhere(self):
