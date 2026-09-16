@@ -49,9 +49,18 @@ def load_module(path):
 def start_memory(port):
     if not SURREAL:
         raise SystemExit("NOT EXECUTED: " + surreal_bin.MISSING)
+    # Check the port BEFORE starting. Without this, our own `surreal start` fails to bind, the health
+    # poll below succeeds against whatever is already there, and the whole demo runs -- and reports
+    # success -- against a stranger's database, leaving their server running at the end. Measured:
+    # another session held 8025, the port this script's own README example uses.
+    if surreal_bin.port_in_use(port):
+        raise SystemExit(surreal_bin.occupied(port))
     proc = subprocess.Popen([str(SURREAL), "start", "--bind", "127.0.0.1:%d" % port, "--user", "root",
                              "--pass", "root", "memory"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(80):
+        if proc.poll() is not None:
+            raise SystemExit("NOT EXECUTED: throwaway SurrealDB on %d exited at once (exit %s); "
+                             "something else may hold the port" % (port, proc.returncode))
         try:
             urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=1)
             return proc

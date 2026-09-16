@@ -33,6 +33,8 @@ def port_in_use(port, host="127.0.0.1"):
 
 
 def occupied(port):
-    """The message to skip with. Never reuse the server that is already there."""
-    return ("NOT EXECUTED: port %d is already in use; this suite starts its own throwaway server and "
-            "will not borrow another one. Stop that process by PID (never by name) and re-run." % port)
+    """The message to refuse with. Never reuse the server that is already there: its rows, its schema
+    and its gates are not the ones under test, and a pass against it means nothing."""
+    return ("NOT EXECUTED: port %d is already in use. This starts its own throwaway server and will not "
+            "borrow another one. Stop that process by PID (never by name) or choose another port, then "
+            "re-run." % port)
