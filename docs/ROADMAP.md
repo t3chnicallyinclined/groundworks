@@ -18,6 +18,13 @@ The instance runs in its own private repository. This repo receives only generic
 | B5 | Local embeddings plus HNSW and BM25 hybrid search | Returns located units; no text leaves the machine |
 | B6 | Cost and time accounting per stage | Every run records tokens, minutes, units |
 | B7 | Session-start health hook (silence must not look like "nothing known") | A stopped database produces a warning |
+| B8 | SurrealDB at 3.1.6 or later in every instance (security and index-build fixes) | **Done in instance 1, 2026-09-15:** all probe suites identical before and after; backups kept |
+| B9 | Indexes on every field hooks, lenses and health filter; COUNT indexes for health | Hook round trip measured before and after (instance 1 baseline about 300 ms) |
+| B10 | Evidence protected from deletion while cited (`REFERENCE ... ON DELETE REJECT` or `THEN` to archive) | Probe: deleting cited evidence rejected; uncited evidence deletable |
+| B11 | Change feed as the durable work queue (staleness re-checks, archive, audit, panel re-prompts); LIVE SELECT only to wake workers | A worker stopped and restarted resumes from its stored versionstamp with nothing missed |
+| B12 | Bitemporal columns on claims (valid time in the source vs time learned) | "What did the graph say on date X" answered by query and checked against an export from that date |
+| B13 | Embedding bake-off per instance against a fixed retrieval evaluator (`engine/embed`) | Metrics with intervals for keyword, each model, and hybrid; a model is adopted only if it clears the keyword baseline. **First run, instance 1, 2026-09-15: BM25 won; no model adopted** (DECISIONS) |
+| B14 | Paraphrase evaluation for vectors: queries that do not reuse source wording (human-written or model-paraphrased with a check that no 5-word run is shared), plus the eliminated-claim warning task (does a reworded claim retrieve its eliminated twin?) | Same metrics and intervals; vectors adopted for a task only where they clear keyword search on it |
 
 ## Track C: Extract the engine
 
@@ -28,6 +35,15 @@ The instance runs in its own private repository. This repo receives only generic
 | C3 | Matter-identifier scan in CI | Build fails if an engine file contains an identifier from any private instance's deny-list |
 | C4 | Public demo instance (appeals: a public record from a published decision) | End-to-end run with zero client data |
 | C5 | Methods brain: pipeline over `research/READING_LIST.md` | Method claims stored with verbatim quotes and source rank; adoption requires primary source plus reproduction |
+| C6 | Distinct reasoning method per panel seat (from Council of High Intelligence, `notes/2026-09-15_council_review.md`) | Each seat's lens declares a reasoning method; `lock` fails when two seats share one |
+| C7 | Lens charters carry "sees" and "misses" and name a counterweight lens | Validator fails a charter missing either field, or a counterweight that is not reciprocal |
+| C8 | Drift guard between `instance.yaml`, generated skills and prose docs (roster-validator pattern) | CI fails when a seat, lens, option or category in one is absent from another |
+| C9 | Enforcement counts in every stage's report (validator repairs, gate rejections, re-prompts), as the panel already does | Every run report prints its enforcement counts next to its pass count |
+| C10 | Measure whether panel anonymization changes outcomes | Same targets run masked and unmasked; stance changes and objection diversity reported |
+| C11 | MCP server slice 1: generic server over the typed core with an instance adapter; read, critique and panel tools; provenance stamped by the server; no raw query, delete or schema tools (`engine/mcp`) | Tool tests pass against a legal and a non-legal synthetic adapter; the first instance registers its adapter |
+| C12 | MCP slice 2: hybrid search and eliminated-claim similarity in the datastore, per-agent bearer credentials with permissions (seat isolation makes blind rounds enforceable), change-feed notifications | A seat credential cannot read other seats' round-1 answers before anonymization (probe both ways) |
+| C13 | SHACL shapes as the portable, declarative copy of each instance's gates; exports validated as a drift check | Every gate has a shape; a planted drift between shape and datastore gate is reported |
+| C14 | Provenance export in PROV-O and nanopublication form | Every derived row exports with author, lens, reasoning type and derivation |
 
 ## Track D: Pilots
 

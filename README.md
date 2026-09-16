@@ -31,6 +31,12 @@ This repository contains **no client or matter data**, ever:
 | `docs/MODULES.md` | Engine modules, file contracts (units, labels, vocabulary, gate rules), modularity rules |
 | `instances/` | 19 domain specs mapping the method (eight answers, evidence model, gates with probes, roles, lenses, evaluator, walkthrough, usage, synthetic worked example, pitfalls, module reuse) plus a template and `instance.yaml` schema |
 | `.claude/skills/design-instance/` | The skill that maps the method onto a new domain |
+| `engine/panel/` | Panel module: several lenses judge one target under a program-checked protocol (`PROTOCOL.md`, `panel.py`, tests, `NOTICE.md`) |
+| `.claude/skills/panel/` | The skill that runs a panel |
+| `engine/mcp/` | MCP front door: domain-free tools over an instance adapter, status envelope, launch-stamped provenance, no raw query or delete tools |
+| `engine/embed/` | Local embeddings and a retrieval bake-off (keyword, dense, hybrid) with confidence intervals; models adopted only if they beat keyword search |
+| `docs/LICENSING.md`, `THIRD_PARTY_NOTICES.md`, `scripts/license_check.py` | Licensing policy, notices, and the commit-time license check |
+| `engine/patterns/` | Proven datastore patterns: truth maintenance, archive bin, stable edge ids |
 | `scripts/privacy_scan.py` | Deny-list scan (list kept outside the repo); runs as a pre-commit hook; fails closed |
 | `docs/ROADMAP.md` | Tracks for the engine, pilots and product, with acceptance tests |
 | `docs/DECISIONS.md` | Method-level decisions and open questions |

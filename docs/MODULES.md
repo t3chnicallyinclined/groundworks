@@ -23,7 +23,7 @@
                [write surface] ----+  |                                             |
                (propose/confirm/rule_out/attempt/critique/answer/cite)              |
                                    |                                                |
-         [lens builder] -----------+---- [hooks] ---- [roles/skills]                |
+         [lens builder] -----------+---- [hooks] ---- [roles/skills + panel]        |
                                    |                                                |
       optional: [staleness]  [discovery]                                           |
                                    |                                                |
@@ -47,6 +47,8 @@
 | **lens builder** | Framework nodes (verbatim from the authoritative source), crosswalk filings, views, matrices | labels, framework, crosswalk | `consideration` nodes, `falls_under` edges, views | framework text and location; crosswalk | yes |
 | **hooks** | Inject known facts, dead ends, authority status when a tool call names a locator; carry state across compaction | tool-call JSON, graph | additional context | locator regexes | yes |
 | **roles** | Skills for adversarial, judging, auditing roles; write critiques and verdicts back | graph, role templates | critiques, attacks, answers, citation verdicts | role list and domain wording | yes (four skills) |
+| **mcp front door** | Typed MCP tools over the instance's write surface, audits and panel (`unit_get`, `unit_search`, `claim_explain`, `eliminated_claims`, `health`, `critique_add`, `critique_answer`, `panel_submit`, `panel_status`); status envelope (`ok`, `not_found`, `db_unreachable`, `rejected_by_gate`, `invalid_argument`, `error`); source text only under `untrusted_source_text`; provenance stamped from launch identity; no raw query, delete or schema tools | tool calls | envelopes | an adapter module (`create_adapter`) implementing `engine/mcp/adapter.py` | built (slice 1, `engine/mcp/`); tested against two non-legal fake instances and instance 1's adapter |
+| **panel** | Several lenses judge one target: lock, blind round, anonymize, cross-examination, program checks (stance line, verbatim flaw on a changed stance, novelty, dissent quota, agreement counterfactuals), weighted tally, split to human | `panel.json`, round answers | `tally.json`, `verdicts.jsonl` (below), `enforcement.jsonl` | seats, options and objection categories per role (`roles[].panel`) | built, unit-tested (`engine/panel/`); not yet run on an instance |
 | **evaluator** | Regression suite from past errors; gate probes; label-agreement sampler; judged panel; outcome metric | frozen files (human-owned) | scores, pass/fail | regression entries, panel prompts, outcome definition | partly (regression + probes) |
 | **improvement loop** | One change at a time, evaluator, keep/discard, log | evaluator, a changeable artifact | kept change + attempt log | which artifacts are inside the fence | designed |
 | **staleness** (optional) | For mutable corpora: span hashes, auto-demote facts when cited spans change, queue re-reads | diffs, graph | fact status changes, re-read queue | span hashing method | designed |
@@ -95,6 +97,17 @@ Tier 2-3 require `reason`, `dir`, at least one issue, and a `quote` found verbat
       min: 1
 ```
 The gate library turns each rule into an ASSERT, plus two probes: the write is **rejected** without the required edge, and **accepted** once it exists.
+
+### `verdicts.jsonl`: one panel seat's verdict per line
+```json
+{"panel_id": "red_team_point_2", "target": "conclusion:point_2",
+ "seat": "seat_deferential_judge", "lens": "lens_deferential_judge",
+ "stance": "damaged", "confidence": "med", "dealbreaker": false,
+ "objections": [{"category": "standard_of_review", "text": "The finding rests on credibility, reviewed with deference."}],
+ "new": ["..."], "flaws": [], "counterfactual_objections": [],
+ "grade": "agent", "panel_sha256": "...", "answer_sha256": "..."}
+```
+The write surface records each row as a lens-keyed critique of `target`. Protocol and full layout: `engine/panel/PROTOCOL.md`.
 
 ## Rules for keeping it modular
 

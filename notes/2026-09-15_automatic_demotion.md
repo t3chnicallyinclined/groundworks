@@ -117,6 +117,13 @@ fact:derived_only <- demoted, cause fact:base
 **Lessons**
 - Test cleanups that delete throwaway rows now trigger demotion reviews and archive snapshots, so every test suite must also clean its review and archive rows, **reviews first, then archive** (deleting a review is itself archived).
 - A test helper using `UPDATE` on a record that was never created silently does nothing. Create first.
+- Test suites that delete review rows while a legal hold applies leave one archived row per run (observed in instance 1 on 2026-09-15: the legal-hold artifact count rose by one per full probe run). Cleanups must account for holds, or the archive grows with test residue.
+
+**Confirmed independently on a second graph (the SUPERGUN reverse-engineering graph, measured by that project's session, 2026-09-15):**
+- A computed effective status that re-applies the promotion rule on every read agreed with stored status for all 1,096 findings (0 mismatches).
+- A truth-maintenance event probe in a throwaway database on 3.1.4 passed 21 of 21 checks.
+- **An event that writes a status value outside the field's ASSERT enum rejects the whole triggering write**, not only the event's own update. Add every value an event can write (for example `stale`) to the enum before installing the event.
+- **Delete-then-re-RELATE deduplication demoted 4 of 4 confirmed rows**, while an explicit edge id updated the edge in place. Same conclusion as the stable edge id pattern above, from a second codebase.
 
 ## Next steps
 1. Add `stale` to the status vocabulary in the gate (a human-owned change).

@@ -77,8 +77,12 @@ gates:
 
 # 7. ROLES (skills, generated from templates with this vocabulary)
 roles:
-  - {skill: red-team, lenses: [adversary_1, adversary_2, skeptic]}
-  - {skill: cold-bench, lenses: [decision_maker_a, decision_maker_b, decision_maker_c]}
+  # panel: options each seat must choose from, objection categories, and the weighted seat (or null).
+  # Thresholds default to consensus 2/3, agreement 0.70, dissent_quota 2 and are human-owned. See engine/panel/PROTOCOL.md.
+  - {skill: red-team, lenses: [adversary_1, adversary_2, skeptic],
+     panel: {options: [survives, damaged, fatal], objection_categories: [category_1, category_2], weighted_seat: null}}
+  - {skill: cold-bench, lenses: [decision_maker_a, decision_maker_b, decision_maker_c],
+     panel: {options: [outcome_1, outcome_2, outcome_3], objection_categories: [category_1, category_2], weighted_seat: null}}
   - {skill: premortem, categories: [category_1, category_2]}
   - {skill: claim-audit, verdicts: [VERIFIED, MISMATCH, NOT_FOUND, OUTSIDE_STATUS, MISATTRIBUTED, INTERPOLATED, UNCHECKABLE]}
 

@@ -57,6 +57,7 @@ Descriptive term: an **evidence-gated knowledge graph** built by **exhaustive, v
 ```
  L6  Instruments   hooks (inject known facts/dead ends at tool time; carry state across compaction)
                    skills (roles: red team, cold bench, premortem, claim audit, ...)
+                   panels (several lenses judge one target under a program-checked protocol; engine/panel)
                    evals  (regression suite of past errors; gate probe tests; health reports)
  L5  Lenses        computed views + lens-keyed edges (filing under an expert framework, per-reader views)
  L4  Workbench     critiques + attacks{verdict}, answers, events + mentions{stance}, output citations{verdict}
@@ -120,6 +121,23 @@ Change these answers and the machinery serves a new domain.
 - *Decision-maker lens:* only usable material, no agent-grade notes.
 - *Client or lay lens:* plain-language cards and what blocks each conclusion.
 - *Discipline lens* (research): statistician, domain expert, translator between vocabularies, skeptic.
+
+**Anatomy of a lens** (added 2026-09-15). Six parts; a lens is complete when each has passed its check.
+
+| Part | What it is | Made by | Check |
+|---|---|---|---|
+| **Charter** | Who is looking, what they want, what hurts them, the questions they always ask, their known blind spots | A human | Signed off |
+| **Frame** | The categories this expert sorts by, transcribed from an authoritative source with location | Transcribed, human-approved | Every category resolves to exact source text |
+| **Standard** | What this lens accepts as proof. May be stricter than the base gates, never looser | A human | Probe: it rejects everything the base gates reject |
+| **Crosswalk** | Graph items filed under the Frame, each with a reason and a verbatim quote | Agents | Validator: coverage, vocabulary, quote |
+| **Overlay** | The lens's own judgments (critiques, verdicts, readings) as rows keyed to the lens; never edits | Role agents, a panel, or a human expert | Every row names its lens and cites items |
+| **View** | The saved query that shows the graph through the lens | Built from the other five | Probe: returns nothing the Standard excludes |
+
+**Two kinds.** A *perspective lens* has the same knowledge with different interests and standards (opposing party, decision-maker, client); its Frame comes from the matter itself. A *discipline lens* brings a field's way of thinking; its Frame comes from an authoritative document, or from a **reference graph** (another instance that read that field) when it must supply outside knowledge.
+
+**Backing grade** (how far to trust a lens): *prompt-backed* (a role with no source; agent grade, never supports promotion) < *source-backed* (Frame transcribed from a source) < *graph-backed* (draws on a reference graph) < *calibrated* (agreement with a human expert or an independent pass measured on a sample).
+
+**Panels.** When several lenses judge one target, they sit as a panel under `engine/panel/PROTOCOL.md`: a blind round, then anonymized cross-examination; a changed stance must quote the seat's own earlier words; the panel is locked before any answer; one stance line per seat, never inferred; dissent quota, novelty and agreement checks; a confidence-weighted tally with splits returned to the human. A program enforces all of it. The result is Overlay at agent grade; gates still decide.
 
 **Rule.** Lens filings derived by crosswalk are agent-grade filings, not proof; counts are items, not weight.
 
@@ -243,9 +261,10 @@ Needs a corpus too large to read by hand, a goal, and a high cost of confident e
 ## 14. Borrowed material and licensing policy
 
 - Own projects (Forgily Book Scholar, SUPERGUN re_kb): code and methods reused.
-- MIT and Apache-2.0 skills: adapted with NOTICE and LICENSE files stating changes.
-- AGPL and unlicensed skills: read for ideas; nothing copied.
-- Curated lists under non-commercial or no-derivatives terms: not copied; per-item licenses govern.
+- **Policy (adopted 2026-09-15):** the class table in `docs/LICENSING.md` section 6. Permissive: use and adapt with notices. Weak copyleft: unmodified dependencies only. Strong copyleft and source-available: after review, or with a commercial license. Non-commercial, no-derivatives or unlicensed: ideas only.
+- Every dependency, model and adapted item is listed in `THIRD_PARTY_NOTICES.md`; `scripts/license_check.py` fails a commit that adds an unlisted import or a banned model.
+- Licensing does not constrain optimization. Where a feature needs a commercial license, the license is bought before that feature ships.
+- Data sources are licensed too: automated verification only against sources whose terms allow it (`docs/LICENSING.md` section 3).
 - Ideas (not text) from any source may inform design; attribution is still recorded in the architecture document.
 
 ## 15. Self-improvement, inside a fence
