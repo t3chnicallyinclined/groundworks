@@ -1,110 +1,99 @@
-# instance.yaml -- the eight answers, machine-readable.
-# Copy this folder to instances/<name>/ and fill it in with the design-instance skill.
-# Lines marked HUMAN-OWNED may not be changed by the improvement loop.
+# instance.yaml -- the eight answers, machine-readable. THIS FILE LOADS: `python -m xscholar.config
+# instances/_template/instance.yaml` validates it, and the same shape generates the schema, the
+# datastore gates, a reject-and-accept probe per rule, the label validator's vocabulary and the lens views.
+#
+# Copy this folder to instances/<name>/, fill it in (the design-instance skill interviews you), and run
+#   python scripts/run_instance.py instances/<name> --memory 8025
+# Sections marked HUMAN-OWNED may never be changed by the improvement loop (CLAUDE.md rule 6).
 
-name: example-instance
-version: 0.1.0
-
-# 1. GOAL: what we are trying to establish, and for whom ("direction" is relative to this holder)
-goal:
-  statement: "Establish whether <X> from <corpus>."
+# 1. GOAL: what we are trying to establish, and for whom ("direction" is relative to this holder).
+instance:
+  id: example_instance                      # [a-z0-9_]+
+  goal: "Establish whether <X>, provable from <corpus>."
   holder: "the party or team the directions are relative to"
-  success: "what a finished deliverable looks like"
   off_limits: ["things never argued, claimed or done"]
 
-# 2. UNITS: smallest citable things, with how each is located
+# 2. UNITS: the smallest citable things, and the locator fields a program must be able to resolve.
 units:
-  - type: page_line
-    locator: "{source} p.{page}:{line}"
-    id_pattern: "tl_{n}"
+  - name: page_line
+    locator_fields: [source, page, line]
     chunk_size: 220
-  - type: document_page
-    locator: "{doc_id} p.{page}"
-    id_pattern: "pg_{n}"
+  - name: document_page
+    locator_fields: [doc_id, page]
     chunk_size: 45
+  # chunk_by: <locator field> keeps units sharing that value in one slice (e.g. whole days of messages).
 
-# 3. FIDELITY LADDER (strongest first). HUMAN-OWNED
+# 3. FIDELITY LADDER, strongest first. HUMAN-OWNED.
+#    confirming: the grades that may establish a claim. agent_grades: model output, which never may.
 fidelity:
-  grades: [original, text_extract, secondary, agent, recollection]
+  order: [original, text_extract, agent, recollection]
   confirming: [original, text_extract]
-  filing_grade: [original]
+  agent_grades: [agent]
 
-# 4. STATUS AXIS: may the unit be used at all? HUMAN-OWNED
+# 4. STATUS AXIS: may the unit be used at all? HUMAN-OWNED.
+#    "usable" cannot be every status: "true but unusable" must stay expressible.
 status:
   values: [usable, restricted, unusable]
   usable: [usable]
-  resolver: "adapter name that decides status per unit"
 
-# optional: AUTHORITY AXIS for sources that bind or merely inform. HUMAN-OWNED
-authority:
-  ranks: [binding, persuasive, supporting, pointer]
-  verified_requires: official_text
-
-# 5. VOCABULARY
+# 5. VOCABULARY: the expert's own categories. tiers ascend from 0 (noise).
 vocabulary:
-  framework:
-    source: "authoritative document and location (e.g. guideline section, order page)"
-    transcribed_from: "page image / official text"
-    items:
-      - {code: f1, text: "verbatim item 1"}
-      - {code: f2, text: "verbatim item 2"}
-  issues: [issue_a, issue_b]
-  crosswalk: {issue_a: [f1], issue_b: [f1, f2]}
-  targets_file: targets.json         # e.g. findings, claims, requirements
-  conclusions_file: conclusions.json # e.g. arguments, hypotheses, root causes
   tiers: [0, 1, 2, 3]
   directions: [for_goal, against_goal, mixed, neutral]
+  issues: [issue_a, issue_b]
+  targets: [conclusion_1, conclusion_2]     # what a label may bear on
+  roles: [role_a, role_b]
 
-# 6. GATES. HUMAN-OWNED
+# 6. GATES: what the datastore refuses. HUMAN-OWNED.
+#    $confirming and $usable expand from the two sections above. Every rule gets both probes.
 gates:
-  - id: confirmed_needs_primary
+  - id: confirmed_needs_source_grade
     table: fact
     field: status
     value: confirmed
     requires:
-      - {edge: cites, to: [unit, passage], where: "grade IN confirming AND status IN usable", min: 1}
+      - edge: cites
+        to: [unit]
+        where: "grade IN $confirming AND status IN $usable"
+        min: 1
   - id: conclusion_ready
     table: conclusion
     field: ready
     value: true
     requires:
-      - {edge: supports, from: [unit, passage], where: "grade IN confirming AND status IN usable", min: 1}
-      - {edge: undercuts, min: 1}
-      - {edge: attacks, min: 1}
+      - edge: supports
+        to: [fact]
+        min: 1
+      - edge: attacks
+        min: 1
     forbids:
-      - {edge: attacks, where: "verdict = 'fatal'"}
-      - {edge: attacks, where: "verdict = 'damaging' AND in.answer = NONE"}
-
-# 7. ROLES (skills, generated from templates with this vocabulary)
-roles:
-  # panel: options each seat must choose from, objection categories, and the weighted seat (or null).
-  # Thresholds default to consensus 2/3, agreement 0.70, dissent_quota 2 and are human-owned. See engine/panel/PROTOCOL.md.
-  - {skill: red-team, lenses: [adversary_1, adversary_2, skeptic],
-     panel: {options: [survives, damaged, fatal], objection_categories: [category_1, category_2], weighted_seat: null}}
-  - {skill: cold-bench, lenses: [decision_maker_a, decision_maker_b, decision_maker_c],
-     panel: {options: [outcome_1, outcome_2, outcome_3], objection_categories: [category_1, category_2], weighted_seat: null}}
-  - {skill: premortem, categories: [category_1, category_2]}
-  - {skill: claim-audit, verdicts: [VERIFIED, MISMATCH, NOT_FOUND, OUTSIDE_STATUS, MISATTRIBUTED, INTERPOLATED, UNCHECKABLE]}
+      - edge: attacks
+        where: "verdict = 'fatal'"
+      - edge: attacks
+        where: "verdict = 'damaging' AND answered = false"
 
 # LENSES (docs/METHOD.md section 7). kind: perspective | discipline | framework.
-# backing: prompt | source | graph | calibrated (how far to trust the lens; prompt-backed never supports promotion).
-# standard: statuses/grades this lens accepts; may be STRICTER than the base gates (status.usable,
-#   fidelity.confirming), never looser; omitted means the base. filter: over label fields only
-#   (tier, dir, issues, targets, role, chunk). A perspective/discipline lens becomes the view lens_<name>.
-# A framework lens needs frame.source (where it was transcribed from), frame.nodes (unique ids) and a
-#   crosswalk from every node to issues of the vocabulary ([] for none); it files labels under the nodes.
+# backing: prompt | source | graph | calibrated -- how far to trust it. A charter nobody signed stays
+#   prompt-backed: claiming more with signed: false is refused.
+# standard: may be STRICTER than the base gates (status.usable, fidelity.confirming), never looser.
+# filter / order: over label fields only (tier, dir, issues, targets, role, chunk).
+# A framework lens needs frame.source (where it was transcribed from), frame.nodes, and a crosswalk
+#   from every node to issues of the vocabulary ([] for none).
 lenses:
   - name: decision_maker
     kind: perspective
     charter: "Who is looking, what they want, what hurts them, the questions they always ask, their blind spots"
-    standard: {status: [usable], grade: [original]}
+    standard: {status: [usable]}
     filter: "tier >= 2"
     backing: prompt
+    signed: false
   - name: adversary
     kind: perspective
     charter: "Everything against the goal, strongest first"
     filter: "dir = 'against_goal'"
+    order: "tier DESC"
     backing: prompt
+    signed: false
   - name: framework
     kind: framework
     charter: "Files every labelled unit under the authoritative framework in its own words"
@@ -112,33 +101,45 @@ lenses:
       source: "authoritative document and location (e.g. guideline section, order page)"
       nodes: [f1, f2]
     crosswalk: {f1: [issue_a], f2: [issue_a, issue_b]}
-    backing: source
+    backing: prompt
+    signed: false
 
-# 8. EVALUATOR. HUMAN-OWNED (entries may be added, never removed or loosened)
+# 7. ROLES: skills generated from templates with this vocabulary.
+#    panel: the options each seat must choose from, the objection categories, and the weighted seat
+#    (or null). Thresholds default to consensus 2/3, agreement 0.70, dissent_quota 2, and are
+#    human-owned; keep them in a settings file and lock with --settings (xscholar/panel/PROTOCOL.md).
+roles:
+  - skill: red-team
+    lenses: [adversary, decision_maker]
+    panel:
+      options: [survives, damaged, fatal]
+      objection_categories: [category_1, category_2]
+      weighted_seat: null
+  - skill: cold-bench
+    lenses: [decision_maker]
+    panel:
+      options: [outcome_1, outcome_2, outcome_3]
+      objection_categories: [category_1, category_2]
+      weighted_seat: null
+
+# 8. EVALUATOR. HUMAN-OWNED (entries may be added, never removed or loosened).
 evaluator:
   regression_file: evals/known_errors.json
   gate_probes: generated
   label_agreement: {sample_chunks: 2, adjudicate: true}
-  judged_panel: {prompts: evals/panel/, hidden_from_writer: true}
-  outcome_metric: "a real-world outcome if one exists (time split, later decision), else none"
 
-# OPTIONAL MODULES
-staleness: {enabled: false}
-discovery: {enabled: false}
-
-privacy:
-  deny_list: "~/.xscholar/denylist.txt"   # outside the repo
-  providers_allowed: ["the model provider the owner approved"]
-
-human_owned: [fidelity, status, authority, gates, evaluator, privacy]
-
-# OPTIONAL: per-agent datastore credentials (xscholar/access.py). Each launch identity gets its own
-# datastore credential with these table permissions; the datastore, not the server, enforces them.
-# read: tables the role may SELECT; write: tables it may CREATE/UPDATE/RELATE; lens_bound: writes
-# lens-carrying rows only under its own lens. Only `loader` may write label. DELETE is root-only.
+# OPTIONAL: per-agent datastore credentials (xscholar/access.py). The datastore, not the server,
+# enforces these: read = tables the role may SELECT, write = tables it may CREATE/UPDATE/RELATE,
+# lens_bound = writes lens-carrying rows only under its own lens. Only loader writes label. DELETE is root-only.
 access:
   roles:
     reader:      {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
     seat:        {read: [unit, label, fact, conclusion, critique, answer], write: [critique, attacks, answer, answers], lens_bound: true}
     loader:      {read: [unit, label, conclusion], write: [unit, label, bears_on, conclusion]}
     coordinator: {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}
+
+privacy:
+  deny_list: "~/.xscholar/denylist.txt"     # outside the repo; the scan fails closed without it
+  providers_allowed: ["the model provider the owner approved"]
+
+human_owned: [gates, fidelity, status, evaluator, privacy]

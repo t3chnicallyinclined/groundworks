@@ -55,7 +55,7 @@ class ConfigTests(unittest.TestCase):
     def test_demo_lenses_load_with_kinds_and_backing(self):
         inst = config.load(DEMO)
         self.assertEqual([l["kind"] for l in inst.lenses], ["perspective", "discipline", "perspective", "framework"])
-        self.assertEqual(inst.lens("service_owner")["backing"], "source")
+        self.assertEqual(inst.lens("service_owner")["backing"], "prompt")   # charter unsigned: cannot claim more
         self.assertEqual(inst.lens_standard(inst.lens("service_owner")), {"status": ["in_window"], "grade": []})
         self.assertEqual(inst.lens_standard(inst.lens("management")), {"status": ["in_window"], "grade": []})  # base
         with self.assertRaises(KeyError):
@@ -93,6 +93,15 @@ class ConfigTests(unittest.TestCase):
         data = demo_data()
         del data["lenses"][3]["frame"]
         self.refused(data, "framework lens needs frame")
+
+    def test_an_unsigned_charter_cannot_claim_more_than_prompt_backed(self):
+        data = demo_data()
+        data["lenses"][0]["backing"] = "source"          # signed is false in the demo config
+        self.refused(data, "signed is not true")
+        data["lenses"][0]["signed"] = True               # a human signed it: now the claim is allowed
+        config.load(data)
+        data["lenses"][0]["signed"] = "yes"
+        self.refused(data, "signed must be true or false")
 
     def test_kind_backing_charter_filter_and_names_are_checked(self):
         data = demo_data()
@@ -299,7 +308,7 @@ class EnvelopeTests(ServerCase):
         health = server.call("health", ad.health)
         self.assertEqual([l["name"] for l in health["data"]["lenses"]],
                          ["service_owner", "security", "management", "incident_framework"])
-        self.assertEqual(health["data"]["lenses"][3], {"name": "incident_framework", "kind": "framework", "backing": "source"})
+        self.assertEqual(health["data"]["lenses"][3], {"name": "incident_framework", "kind": "framework", "backing": "prompt"})
         down = instance_adapter.create_adapter_for(self.inst, dbmod.Db(url="http://127.0.0.1:9/sql", ns="x", db="y", timeout=2))
         self.assertEqual(server.call("lens_view", lambda: down.lens_view("service_owner"))["status"], "db_unreachable")
 

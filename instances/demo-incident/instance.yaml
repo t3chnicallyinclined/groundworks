@@ -70,7 +70,8 @@ lenses:
     charter: "Owns the service; wants the true cause; hurt by a wrong fix; asks: what changed, what saturated, what would have caught it"
     standard: {status: [in_window]}
     filter: "tier >= 2"
-    backing: source
+    backing: prompt
+    signed: false        # no human has signed this charter, so it stays prompt-backed
   - name: security
     kind: discipline
     charter: "Thinks in trust boundaries and configuration drift; wants every config or dependency change named; hurt by a cause that hides a control gap"
@@ -89,7 +90,8 @@ lenses:
       source: "Incident review template v3, section 2"
       nodes: [trigger, propagation, detection, mitigation, prevention]
     crosswalk: {trigger: [deploy, config], propagation: [saturation, dependency, capacity], detection: [monitoring], mitigation: [], prevention: [config, monitoring]}
-    backing: source
+    backing: prompt
+    signed: false        # no human has signed this charter, so it stays prompt-backed
 
 roles:
   - skill: red-team

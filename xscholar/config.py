@@ -25,7 +25,8 @@ SCALAR_NULL = {"null", "none", "~", ""}
 ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
-            "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access"}
+            "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access",
+            "authority", "staleness", "discovery"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
@@ -33,7 +34,7 @@ MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
 # lenses (docs/METHOD.md section 7): kinds, backing grades, and what a lens filter may say
 LENS_KINDS = ("perspective", "discipline", "framework")
 LENS_BACKINGS = ("prompt", "source", "graph", "calibrated")   # weakest first
-LENS_KEYS = {"name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk"}
+LENS_KEYS = {"name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk", "signed", "order"}
 LENS_STANDARD_KEYS = ("status", "grade")
 LENS_FILTER_FIELDS = ("tier", "dir", "issues", "targets", "role", "chunk")   # label fields only
 LENS_FILTER_WORDS = ("AND", "OR", "NOT", "IN", "CONTAINS", "CONTAINSANY", "CONTAINSALL", "CONTAINSNOT",
@@ -483,6 +484,15 @@ def _validate_lenses(data, problems):
         backing = lens.get("backing")
         if backing is not None and backing not in LENS_BACKINGS:
             problems.append("%s: backing must be one of %s (got %r)" % (where, ", ".join(LENS_BACKINGS), backing))
+        signed = lens.get("signed")
+        if signed is not None and not isinstance(signed, bool):
+            problems.append("%s: signed must be true or false (a human signed this charter, or did not)" % where)
+        # A charter nobody has signed is a draft: the lens cannot claim to be better than prompt-backed.
+        if signed is not True and backing in ("source", "graph", "calibrated"):
+            problems.append("%s: backing %r claims more than prompt-backed, but signed is not true; "
+                            "sign the charter or set backing: prompt" % (where, backing))
+        if lens.get("order") is not None and not isinstance(lens["order"], str):
+            problems.append("%s: order must be a string (an ORDER BY over label fields)" % where)
         # standard: stricter than the base gates, never looser
         standard = lens.get("standard")
         if standard is not None:
