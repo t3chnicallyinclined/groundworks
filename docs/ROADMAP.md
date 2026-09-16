@@ -17,7 +17,7 @@ The instance runs in its own private repository. This repo receives only generic
 | B4 | Content hashing and incremental relabel | Adding one document relabels only that document |
 | B5 | Local embeddings plus HNSW and BM25 hybrid search | Returns located units; no text leaves the machine |
 | B6 | Cost and time accounting per stage | Every run records tokens, minutes, units |
-| B7 | Session-start health hook (silence must not look like "nothing known") | A stopped database produces a warning |
+| B7 | Session-start health hook (silence must not look like "nothing known") | A stopped database produces a warning. **Done 2026-09-15 (`xscholar/hooks/health.py`, tested): a stopped database, a missing instance and an unusable config each print a WARNING line; a healthy graph prints its counts and drift.** The generic pre-tool lookup hook (`xscholar/hooks/lookup.py`) explains unit and claim ids named in a tool call and flags an eliminated claim about to be repeated |
 | B8 | SurrealDB at 3.1.6 or later in every instance (security and index-build fixes) | **Done in instance 1, 2026-09-15:** all probe suites identical before and after; backups kept |
 | B9 | Indexes on every field hooks, lenses and health filter; COUNT indexes for health | Hook round trip measured before and after (instance 1 baseline about 300 ms) |
 | B10 | Evidence protected from deletion while cited (`REFERENCE ... ON DELETE REJECT` or `THEN` to archive) | Probe: deleting cited evidence rejected; uncited evidence deletable |

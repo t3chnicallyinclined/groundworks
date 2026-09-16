@@ -20,7 +20,7 @@ embed = ["torch", "sentence-transformers>=3", "numpy"]
 xscholar = "engine.cli:main"
 
 [tool.setuptools]
-packages = ["xscholar", "xscholar.pipeline", "xscholar.present", "xscholar.panel", "xscholar.mcp", "xscholar.embed", "xscholar.patterns"]
+packages = ["xscholar", "xscholar.pipeline", "xscholar.present", "xscholar.panel", "xscholar.mcp", "xscholar.embed", "xscholar.patterns", "xscholar.hooks"]
 
 [tool.setuptools.package-data]
 "xscholar.patterns" = ["*.surql"]

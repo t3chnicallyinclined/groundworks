@@ -86,7 +86,8 @@ Read `docs/METHOD.md` section 1 (one paragraph) and section 12 (which domains fi
 | `xscholar/pipeline/` | intake, chunker, validator, loader, and the typed write surface |
 | `xscholar/panel/` | Several lenses judge one target under a program-checked protocol |
 | `xscholar/present/` | Renderings for human verification, with the inline rule re-check |
-| `xscholar/mcp/` | The MCP front door agents use |
+| `xscholar/mcp/` | The MCP front door agents use; `instance_adapter.py` gives any `instance.yaml` all tools with no adapter code |
+| `xscholar/hooks/` | Session-start health warning and the pre-tool lookup that speaks before a mistake is made |
 | `xscholar/embed/` | Local embeddings and the retrieval bake-off |
 | `xscholar/patterns/` | Proven datastore patterns |
 | `tests/` | Every suite; `python -m xscholar.cli test` runs them all |
