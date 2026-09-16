@@ -4,6 +4,8 @@
 Reads the tool call JSON on stdin. If the call names a unit id, a claim id, or words that match an
 eliminated claim, it returns what the graph already knows: the unit's status and grade, its labels,
 and any ELIMINATED CLAIM that the text is about to repeat. Advisory only; never blocks; always exit 0.
+No output means the graph was consulted and holds nothing relevant; a hook that could not consult it
+(no XSCHOLAR_INSTANCE, input that is not a JSON object, a database that does not answer) says so.
 
 Claude Code settings example:
     {"hooks": {"PreToolUse": [{"matcher": "Bash|Edit|Write|Grep|Read", "hooks": [{"type": "command",
@@ -82,24 +84,38 @@ def lookup(text, adapter, unit_id_re=None):
     return text_out[:MAX_CHARS]
 
 
-def main():
+NOT_RUN = "WARNING xscholar lookup hook did NOT consult the graph for this tool call: %s"
+
+
+def context_for(stdin_text, env):
+    """What the hook tells the agent. Empty ONLY when the graph was consulted and knows nothing relevant.
+
+    A hook that could not look is never silent: before 2026-09-16, XSCHOLAR_INSTANCE unset or a payload
+    that was not JSON returned 0 with no output at all -- exactly what "nothing relevant found" looks like,
+    so the one message meant to arrive at the moment of error was switched off invisibly (health.py already
+    warned in the same case; this hook did not)."""
     try:
-        payload = json.load(sys.stdin)
-    except ValueError:
-        return 0
-    env = os.environ
+        payload = json.loads(stdin_text)
+    except ValueError as exc:
+        return NOT_RUN % ("the hook input was not JSON (%s)" % str(exc)[:80])
+    if not isinstance(payload, dict):
+        return NOT_RUN % ("the hook input was JSON %s, not an object with tool_input" % type(payload).__name__)
     path = env.get("XSCHOLAR_INSTANCE")
     if not path:
-        return 0
+        return NOT_RUN % "XSCHOLAR_INSTANCE is not set, so no instance graph is attached to this session"
     try:
         inst = config.load(path)
         db = dbmod.Db(url=env.get("XSCHOLAR_DB_URL", "http://127.0.0.1:8002/sql"), ns=env.get("XSCHOLAR_NS") or inst.id,
                       db=env.get("XSCHOLAR_DB") or inst.id, timeout=float(env.get("XSCHOLAR_HOOK_TIMEOUT", "2.5")))
         adapter = instance_adapter.GenericAdapter(inst, db)
         text = _text_of(payload.get("tool_input"))
-        context = lookup(text, adapter, env.get("XSCHOLAR_UNIT_ID_RE") or None)
+        return lookup(text, adapter, env.get("XSCHOLAR_UNIT_ID_RE") or None)
     except Exception as exc:  # advisory: a broken hook must not block the session, but must not be silent
-        context = "xscholar lookup hook could not run (%s): the graph may be off" % str(exc)[:100]
+        return "xscholar lookup hook could not run (%s): the graph may be off" % str(exc)[:100]
+
+
+def main():
+    context = context_for(sys.stdin.read(), os.environ)
     if context:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": context}}))
     return 0
