@@ -6,6 +6,7 @@
     xscholar gates INSTANCE.yaml --apply --url URL --ns NS --db DB
     xscholar run INSTANCE_DIR [--memory PORT | --url URL --ns NS --db DB]
     xscholar labels validate SLICE.jsonl LABELS.jsonl INSTANCE.yaml
+    xscholar labels agreement A.jsonl B.jsonl [--out REPORT.json]
     xscholar panel lock|anonymize|check|tally RUN_DIR [--settings FILE]
     xscholar present render ROWS.json --mode speedread --policy P.json
     xscholar test            run every suite and the license check
@@ -24,7 +25,9 @@ def _module(name, args):
 def _labels(args):
     if args[:1] == ["validate"]:
         return _module("xscholar.pipeline.validator", args[1:])
-    print("usage: xscholar labels validate SLICE LABELS INSTANCE")
+    if args[:1] == ["agreement"]:
+        return _module("xscholar.pipeline.agreement", args[1:])
+    print("usage: xscholar labels validate SLICE LABELS INSTANCE | xscholar labels agreement A.jsonl B.jsonl [--out R.json]")
     return 2
 
 
