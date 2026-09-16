@@ -248,9 +248,78 @@ def probes(inst):
             cleanup.append("DELETE %s WHERE record::id(id) CONTAINS 'zz_probe_%s';" % (tab, rule["id"]))
         for tab in ("conclusion", "fact", "authority", "unit"):
             cleanup.append("DELETE %s WHERE record::id(id) CONTAINS 'zz_probe_%s';" % (tab, rule["id"]))
+        # A rule whose clause constrains the evidence MUST get the sharper probe. If it does not, the
+        # suite would be testing a weaker rule than the one written, and reporting green for it.
+        constrained = [c for c in (rule.get("requires") or []) if c.get("where")]
         out.append({"rule": rule["id"], "setup": setup, "attempt": attempt, "wrong": wrong, "fix": fix,
-                    "cleanup": cleanup})
+                    "cleanup": cleanup, "constrained": bool(constrained),
+                    "constraints": sorted(_expand(c.get("where"), inst) for c in constrained)})
     return out
+
+
+def spec(inst):
+    """What the rules claim, independent of any database: the shape a baseline pins down."""
+    out = {"instance": inst.id, "rules": {}}
+    for rule in inst.gate_rules():
+        clauses = []
+        for kind in ("requires", "forbids"):
+            for clause in rule.get(kind) or []:
+                clauses.append({"kind": kind, "edge": clause.get("edge"), "min": clause.get("min", 1),
+                                "where": _expand(clause.get("where"), inst) or None})
+        out["rules"][rule["id"]] = {"table": rule["table"], "field": rule["field"],
+                                    "value": rule["value"], "clauses": sorted(
+                                        clauses, key=lambda c: (c["kind"], str(c["edge"]), str(c["where"])))}
+    return out
+
+
+def compare_baseline(baseline, report, current_spec):
+    """Every way a gate can get weaker between runs. Returns a list of plain-language failures."""
+    failures = []
+    old_rules = (baseline.get("spec") or {}).get("rules") or {}
+    new_rules = current_spec["rules"]
+    for rule_id, was in old_rules.items():
+        now = new_rules.get(rule_id)
+        if now is None:
+            failures.append("rule %s is in the baseline and gone from the config" % rule_id)
+            continue
+        old_clauses = {(c["kind"], c["edge"], c["where"]): c for c in was["clauses"]}
+        new_clauses = {(c["kind"], c["edge"], c["where"]): c for c in now["clauses"]}
+        for key, clause in old_clauses.items():
+            if key not in new_clauses:
+                kind, edge, where = key
+                failures.append("rule %s lost a %s clause on %s%s"
+                                % (rule_id, kind, edge, " where %s" % where if where else ""))
+            elif new_clauses[key]["min"] < clause["min"]:
+                failures.append("rule %s lowered min on %s from %s to %s"
+                                % (rule_id, key[1], clause["min"], new_clauses[key]["min"]))
+    old_entries = {e["rule"]: e for e in (baseline.get("report") or {}).get("rules") or []}
+    for entry in (report or {}).get("rules") or []:   # report is optional: the spec half needs no database
+        was = old_entries.get(entry["rule"])
+        if not was:
+            continue
+        for flag in ("reject", "wrong_evidence_reject", "accept"):
+            if was.get(flag) is True and entry.get(flag) is not True:
+                failures.append("rule %s: %s was true in the baseline, now %r"
+                                % (entry["rule"], flag, entry.get(flag)))
+    return failures
+
+
+def judge(entry, probe):
+    """Decide whether one probe result counts as behaviour. Mutates `entry` with the reasons.
+
+    A constrained rule with no wrong-evidence result is a suite that stopped testing the
+    constraint, which is indistinguishable from "not applicable" unless we say so here.
+    """
+    entry["constrained"] = probe["constrained"]
+    entry["constraints"] = probe["constraints"]
+    if probe["constrained"] and entry["wrong_evidence_reject"] is None:
+        entry["missing_probe"] = ("this rule constrains its evidence (%s) but no wrong-evidence probe ran: "
+                                  "the suite is not testing the constraint" % "; ".join(probe["constraints"]))
+    behaved = bool(entry["reject"] and entry["accept"]
+                   and entry["wrong_evidence_reject"] in (None, True)
+                   and not entry.get("missing_probe"))
+    entry["behaved"] = behaved
+    return behaved
 
 
 def run_probes(inst, db):
@@ -276,8 +345,7 @@ def run_probes(inst, db):
         finally:
             for stmt in probe["cleanup"]:
                 db.try_sql(stmt)
-        behaved = entry["reject"] and entry["accept"] and entry["wrong_evidence_reject"] in (None, True)
-        entry["behaved"] = bool(behaved)
+        behaved = judge(entry, probe)
         report["rejected_ok"] += 1 if entry["reject"] else 0
         report["accepted_ok"] += 1 if entry["accept"] else 0
         report["misbehaved"] += 0 if behaved else 1
@@ -295,6 +363,8 @@ def main(argv=None):
     parser.add_argument("--url", default="http://127.0.0.1:8002/sql")
     parser.add_argument("--ns")
     parser.add_argument("--db")
+    parser.add_argument("--baseline", help="compare this run against a committed baseline; a gate that got weaker fails")
+    parser.add_argument("--write-baseline", help="write the baseline file (human-owned: commit it and review every change)")
     args = parser.parse_args(argv)
     inst = config.load(args.instance)
     if args.emit == "schema":
@@ -313,7 +383,25 @@ def main(argv=None):
         print(json.dumps(report, indent=2))
         print("PROBES: %d rejected as required, %d accepted as required, %d misbehaved"
               % (report["rejected_ok"], report["accepted_ok"], report["misbehaved"]))
-        return 1 if report["misbehaved"] else 0
+        for entry in report["rules"]:
+            if entry.get("missing_probe"):
+                print("MISSING PROBE %s: %s" % (entry["rule"], entry["missing_probe"]))
+        failures = []
+        if args.write_baseline:
+            pathlib.Path(args.write_baseline).write_text(
+                json.dumps({"instance": inst.id, "spec": spec(inst), "report": report}, indent=2), encoding="utf-8")
+            print("BASELINE written to %s; commit it and review every future change to it" % args.write_baseline)
+        if args.baseline:
+            path = pathlib.Path(args.baseline)
+            if not path.exists():
+                print("NOT EXECUTED: baseline %s does not exist; write one with --write-baseline" % path)
+                return 2
+            failures = compare_baseline(json.loads(path.read_text(encoding="utf-8")), report, spec(inst))
+            for line in failures:
+                print("WEAKENED: %s" % line)
+            print("BASELINE: %s (%d difference(s) that make a gate weaker)"
+                  % ("unchanged or stronger" if not failures else "FAILED", len(failures)))
+        return 1 if (report["misbehaved"] or failures) else 0
     parser.error("choose --emit or --apply")
 
 

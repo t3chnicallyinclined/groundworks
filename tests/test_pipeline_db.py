@@ -46,6 +46,8 @@ class ServerCase(unittest.TestCase):
     def setUpClass(cls):
         if not SURREAL:
             raise unittest.SkipTest("NOT EXECUTED: " + surreal_bin.MISSING)
+        if surreal_bin.port_in_use(PORT):
+            raise unittest.SkipTest(surreal_bin.occupied(PORT))
         cls.proc = subprocess.Popen([str(SURREAL), "start", "--bind", "127.0.0.1:%d" % PORT,
                                      "--user", "root", "--pass", "root", "memory"],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

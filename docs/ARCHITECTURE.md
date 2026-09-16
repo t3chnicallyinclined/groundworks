@@ -129,7 +129,7 @@ Agents act through the **MCP front door**: typed tools over the write surface, p
 |---|---|---|
 | L1 intake | locators resolve back to exact text; duplicates and work product excluded and logged | 9,101 units |
 | L2 readings | coverage and verbatim validator; double-labelled agreement sample | 77 of 77 chunks passed; agreement not yet measured |
-| L3/L4 gates | probe suite: each rule rejects what it should and accepts what it should | all probes behaved, before and after a database upgrade |
+| L3/L4 gates | probe suite: each rule rejects what it should and accepts what it should, **and the rule is no weaker than the committed baseline** | all probes behaved, before and after a database upgrade |
 | L5 lenses | a lens view returns nothing its own standard excludes | built for one framework lens |
 | L5 panels | protocol checks (stance, flaw quote, dissent, novelty, agreement) plus enforcement counts | 6 panels; 3 consensus, 3 splits; 0 of 18 stance changes |
 | L6 retrieval | bake-off against keyword search on the instance's own queries | keyword search won; no model adopted |
@@ -137,6 +137,13 @@ Agents act through the **MCP front door**: typed tools over the write surface, p
 | Whole | regression suite built from this project's real past errors | 16 pass, 0 fail |
 
 **Design rule this produced:** a layer without its own fixed test is a layer that will drift. Add the test before the feature.
+
+**Why the gate row carries a second test.** `misbehaved: 0` means every gate matches *its own current spec*, not that the spec is still strong. Delete a `where` clause from a promotion rule and the generator stops producing the sharper probe, so the run stays green while the datastore starts accepting evidence it used to refuse. Two checks close that:
+
+1. **Missing-probe detection.** A rule whose `requires` clause carries a `where` must produce a wrong-evidence result. `wrong_evidence_reject: null` on such a rule is now a failure, not "not applicable" — it says the suite stopped testing the constraint.
+2. **A committed baseline.** `instances/<name>/gate_baseline.json` pins what each rule claims. A rule that disappears, a clause that is dropped, a minimum that is lowered, or a probe flag that was `true` and no longer is, fails the run. Adding a rule or a clause is not a failure. The spec half needs no database and runs in the ordinary suite; the flag half runs in `--apply --baseline`.
+
+Changing a gate on purpose means re-running `--write-baseline` and having the diff reviewed. That review is the point of the file.
 
 ---
 

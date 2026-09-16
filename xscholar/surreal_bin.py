@@ -6,6 +6,7 @@ Order: $XSCHOLAR_SURREAL, `surreal` on PATH, the Windows per-user install locati
 import os
 import pathlib
 import shutil
+import socket
 
 
 def find():
@@ -19,3 +20,19 @@ def find():
 
 MISSING = ("SurrealDB binary not found. Install it (https://surrealdb.com/install) or set "
            "XSCHOLAR_SURREAL to its path.")
+
+
+def port_in_use(port, host="127.0.0.1"):
+    """True if something is already listening. A test that finds a stranger on its port and uses it
+    anyway is not testing anything: it inherits that database's rows and its schema. Measured once --
+    a leftover server on 8031 made seven temporal tests fail with `record already exists`, which is
+    the friendly version; the unfriendly version is a test that passes against the wrong database."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
+
+
+def occupied(port):
+    """The message to skip with. Never reuse the server that is already there."""
+    return ("NOT EXECUTED: port %d is already in use; this suite starts its own throwaway server and "
+            "will not borrow another one. Stop that process by PID (never by name) and re-run." % port)

@@ -71,6 +71,8 @@ class ServerTests(unittest.TestCase):
     def setUpClass(cls):
         if not SURREAL:
             raise unittest.SkipTest("NOT EXECUTED: " + surreal_bin.MISSING)
+        if surreal_bin.port_in_use(PORT):
+            raise unittest.SkipTest(surreal_bin.occupied(PORT))
         try:   # a foreign server on this port would make every probe run against unknown state
             urllib.request.urlopen("http://127.0.0.1:%d/health" % PORT, timeout=1)
             raise unittest.SkipTest("NOT EXECUTED: something already listens on %d; refusing to test against it" % PORT)

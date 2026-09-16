@@ -1,0 +1,82 @@
+{
+  "instance": "demo_incident",
+  "spec": {
+    "instance": "demo_incident",
+    "rules": {
+      "confirmed_needs_source_grade": {
+        "table": "fact",
+        "field": "status",
+        "value": "confirmed",
+        "clauses": [
+          {
+            "kind": "requires",
+            "edge": "cites",
+            "min": 1,
+            "where": "grade IN ['original_log', 'exported_metric'] AND status IN ['in_window']"
+          }
+        ]
+      },
+      "root_cause_needs_support_and_attack": {
+        "table": "conclusion",
+        "field": "ready",
+        "value": true,
+        "clauses": [
+          {
+            "kind": "forbids",
+            "edge": "attacks",
+            "min": 1,
+            "where": "verdict = 'damaging' AND answered = false"
+          },
+          {
+            "kind": "forbids",
+            "edge": "attacks",
+            "min": 1,
+            "where": "verdict = 'fatal'"
+          },
+          {
+            "kind": "requires",
+            "edge": "attacks",
+            "min": 1,
+            "where": null
+          },
+          {
+            "kind": "requires",
+            "edge": "supports",
+            "min": 1,
+            "where": null
+          }
+        ]
+      }
+    }
+  },
+  "report": {
+    "instance": "demo_incident",
+    "rules": [
+      {
+        "rule": "confirmed_needs_source_grade",
+        "reject": true,
+        "wrong_evidence_reject": true,
+        "accept": true,
+        "accept_error": "",
+        "constrained": true,
+        "constraints": [
+          "grade IN ['original_log', 'exported_metric'] AND status IN ['in_window']"
+        ],
+        "behaved": true
+      },
+      {
+        "rule": "root_cause_needs_support_and_attack",
+        "reject": true,
+        "wrong_evidence_reject": null,
+        "accept": true,
+        "accept_error": "",
+        "constrained": false,
+        "constraints": [],
+        "behaved": true
+      }
+    ],
+    "rejected_ok": 2,
+    "accepted_ok": 2,
+    "misbehaved": 0
+  }
+}
