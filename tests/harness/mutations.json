@@ -3419,6 +3419,48 @@
    "commit": "uncommitted",
    "source": "2026-09-16 validator quote anchoring (B-017 appeal / SUPERGUN report; proven by the runner on a worktree copy)",
    "needs_db": false
+  },
+  {
+   "id": "M360",
+   "guard": "the adjudication list is never capped",
+   "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
+   "file": "xscholar/pipeline/agreement.py",
+   "anchor": "    return sorted(units, key=lambda u: (_group(units[u]), str(u)))\n",
+   "replacement": "    return sorted(units, key=lambda u: (_group(units[u]), str(u)))[:20]\n",
+   "must_fail": [
+    "tests.test_agreement.AgreementTests.test_every_unit_with_a_disagreement_is_adjudicated_once_most_consequential_first"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 agreement adjudication list (reported by the SUPERGUN instance; proven by hand on a tree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M361",
+   "guard": "a tier split inside the relevant tiers (2 vs 3) is adjudicated before other tier splits",
+   "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
+   "file": "xscholar/pipeline/agreement.py",
+   "anchor": "        if d[\"field\"] == \"tier\" and isinstance(d[\"a\"], int) and isinstance(d[\"b\"], int) and d[\"a\"] >= 2 and d[\"b\"] >= 2:\n            return 1\n",
+   "replacement": "        if d[\"field\"] == \"tier\" and isinstance(d[\"a\"], int) and isinstance(d[\"b\"], int) and d[\"a\"] >= 2 and d[\"b\"] >= 2:\n            return 2\n",
+   "must_fail": [
+    "tests.test_agreement.AgreementTests.test_every_unit_with_a_disagreement_is_adjudicated_once_most_consequential_first"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 agreement adjudication list (reported by the SUPERGUN instance; proven by hand on a tree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M362",
+   "guard": "the adjudication list holds tier-only disagreements",
+   "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
+   "file": "xscholar/pipeline/agreement.py",
+   "anchor": "    for d in disagreements:\n        units.setdefault(d[\"unit\"], []).append(d)\n",
+   "replacement": "    for d in disagreements:\n        if d[\"field\"] != \"tier\":\n            units.setdefault(d[\"unit\"], []).append(d)\n",
+   "must_fail": [
+    "tests.test_agreement.AgreementTests.test_every_unit_with_a_disagreement_is_adjudicated_once_most_consequential_first"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 agreement adjudication list (reported by the SUPERGUN instance; proven by hand on a tree copy)",
+   "needs_db": false
   }
  ]
 }

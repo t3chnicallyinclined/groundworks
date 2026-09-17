@@ -12,6 +12,13 @@ Per field: exact agreement; for tier also "within one"; for set fields (issues, 
 Jaccard overlap; Cohen's kappa for tier and direction (chance-corrected: 1.0 perfect, 0 chance,
 below 0 worse than chance). Every disagreement is listed with both values so it can be adjudicated.
 
+`adjudicate` is EVERY unit with any disagreement, each once, most consequential first: a relevance split
+(one labeller tier 2+, the other not), then a split within the relevant tiers (2 vs 3: load-bearing or merely
+relevant), then any other tier split, then disagreements on direction, role, issues or targets only. It used to
+be the relevance splits plus the first 20 other units, with tier-only splits never listed: measured on another
+instance, 90 double-labelled units with 51 needing a human printed "27 unit(s) to adjudicate", and a reader who
+reviewed those 27 believed they had reviewed them all. `len(adjudicate) == units_with_any_disagreement` always.
+
 Kappa is None, never 1.0, on a degenerate sample -- one label value across every unit, where chance
 agreement is already 1.0. The report then carries `kappa_undefined` naming the field and the reason,
 so "20 units, exact 1.00" cannot be read as perfect agreement when nothing was measured.
@@ -121,7 +128,48 @@ def compare(path_a, path_b):
             "units_with_any_disagreement": len({d["unit"] for d in disagreements}),
             "relevance_split": {"count": len(salient), "share": round(len(salient) / n, 4),
                                 "meaning": "one labeller rated the unit relevant (tier 2+) and the other did not"},
-            "adjudicate": [d["unit"] for d in salient] + sorted({d["unit"] for d in disagreements if d["field"] != "tier"})[:20]}
+            "adjudicate": adjudication_order(disagreements),
+            "adjudicate_groups": adjudication_groups(disagreements)}
+
+
+ADJUDICATION_GROUPS = ("relevance_split", "within_relevant_tiers", "other_tier", "other_fields")
+
+
+def _group(unit_disagreements):
+    for d in unit_disagreements:
+        if d["field"] != "tier":
+            continue
+        rel_a = isinstance(d["a"], int) and d["a"] >= 2
+        rel_b = isinstance(d["b"], int) and d["b"] >= 2
+        if rel_a != rel_b:
+            return 0
+    for d in unit_disagreements:
+        if d["field"] == "tier" and isinstance(d["a"], int) and isinstance(d["b"], int) and d["a"] >= 2 and d["b"] >= 2:
+            return 1
+    if any(d["field"] == "tier" for d in unit_disagreements):
+        return 2
+    return 3
+
+
+def _by_unit(disagreements):
+    units = {}
+    for d in disagreements:
+        units.setdefault(d["unit"], []).append(d)
+    return units
+
+
+def adjudication_order(disagreements):
+    """Every unit with any disagreement, once, ordered by ADJUDICATION_GROUPS then by id. Never capped."""
+    units = _by_unit(disagreements)
+    return sorted(units, key=lambda u: (_group(units[u]), str(u)))
+
+
+def adjudication_groups(disagreements):
+    units = _by_unit(disagreements)
+    counts = {name: 0 for name in ADJUDICATION_GROUPS}
+    for u in units:
+        counts[ADJUDICATION_GROUPS[_group(units[u])]] += 1
+    return counts
 
 
 def main(argv=None):
@@ -142,8 +190,11 @@ def main(argv=None):
           "issues jaccard %.2f | targets jaccard %.2f | role exact %.2f"
           % (report["units"], f["tier"]["exact"], f["tier"]["within_one"], f["tier"]["kappa"],
              f["dir"]["exact"], f["dir"]["kappa"], f["issues"]["mean_jaccard"], f["targets"]["mean_jaccard"], f["role"]["exact"]))
-    print("relevance split (one saw tier 2+, the other did not): %d of %d units; %d unit(s) to adjudicate"
-          % (report["relevance_split"]["count"], report["units"], len(report["adjudicate"])))
+    g = report["adjudicate_groups"]
+    print("relevance split (one saw tier 2+, the other did not): %d of %d units; %d unit(s) to adjudicate, all "
+          "listed in --out (%d relevance split, %d tier 2 vs 3, %d other tier, %d other fields only)"
+          % (report["relevance_split"]["count"], report["units"], len(report["adjudicate"]),
+             g["relevance_split"], g["within_relevant_tiers"], g["other_tier"], g["other_fields"]))
     for field, why in sorted(report["kappa_undefined"].items()):
         print("KAPPA NOT MEASURED for %s: %s" % (field, why))
     return 0
