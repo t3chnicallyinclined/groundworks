@@ -702,9 +702,16 @@ class BaselineBlindSpotTests(unittest.TestCase):
         self.assertTrue(any("value" in f and "confirmed_needs_source_grade" in f for f in failures), failures)
 
     def test_moving_a_rule_to_another_field_or_table_is_a_weakening(self):
+        # A config can no longer gate a field with no enumerated domain (fact.note), and fact has no second
+        # enumerated field, so the move is made on the spec the baseline is compared with.
         def field(data):
             data["gates"][0]["field"] = "note"
-        self.assertTrue(any("field" in f for f in self.failures(field)), "a rule moved to another field")
+        with self.assertRaises(config.ConfigError):
+            self.mutated(field)
+        moved = json.loads(json.dumps(self.baseline["spec"]))
+        moved["rules"][self.inst.data["gates"][0]["id"]]["field"] = "note"
+        self.assertTrue(any("field" in f for f in gates.compare_baseline(self.baseline, None, moved)),
+                        "a rule moved to another field")
 
         def table(data):
             data["gates"][0].update({"table": "authority", "field": "verified", "value": True})
