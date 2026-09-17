@@ -167,8 +167,10 @@ class FakeAdapterTests(unittest.TestCase):
 
     def test_write_mode_is_refused_unless_scratch_names_the_adapters_own_database(self):
         adapter = WriteTrap(INCIDENT)
-        with self.assertRaises(conformance.ScratchRefused):
+        with self.assertRaises(conformance.ScratchRefused) as refused:
             conformance.Checker(adapter, write=True, scratch="any/thing")         # no discoverable database
+        # the refusal names exactly what to add (asked for by an adapter author who hit it, 2026-09-16)
+        self.assertIn("adapter.db.ns and adapter.db.db", str(refused.exception))
         adapter.db = dbmod.Db(url="http://127.0.0.1:9/sql", ns="live_ns", db="live_db")
         for scratch in (None, "", "live_ns/other", "other/live_db"):
             with self.subTest(scratch=scratch):
@@ -176,6 +178,13 @@ class FakeAdapterTests(unittest.TestCase):
                     conformance.Checker(adapter, write=True, scratch=scratch)
         conformance.Checker(adapter, write=True, scratch="live_ns/live_db")
         self.assertEqual(adapter.writes, [])
+
+    def test_the_contract_says_a_bare_unit_id_is_parseable(self):
+        """An adapter author read "InvalidArgument when the locator cannot be parsed" as covering a bare id with no
+        table prefix, and conformance (which asks for one) failed it. The contract now says so in words."""
+        doc = contract.InstanceAdapter.unit_get.__doc__
+        self.assertIn("IS parseable", doc)
+        self.assertIn("NotFound, never InvalidArgument", doc)
 
     def test_every_shape_field_is_named_in_the_contract_docstring(self):
         """The checker's shapes and adapter.py's docstrings cannot drift apart silently."""

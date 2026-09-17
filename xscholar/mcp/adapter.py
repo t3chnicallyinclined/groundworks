@@ -110,6 +110,9 @@ class InstanceAdapter(abc.ABC):
           claims_citing (claims that cite it, each with its status), eliminated_claims (claims about
           it that were investigated and eliminated, each with "display": "ELIMINATED CLAIM (false)").
         Raise NotFound when nothing matches, InvalidArgument when the locator cannot be parsed.
+        A bare id with no table prefix and no citation syntax (`u_0042`) IS parseable: it is a unit id,
+        so an absent one is NotFound, never InvalidArgument (an adapter that read it as unparseable
+        failed the conformance check, 2026-09-16). labels is a list, never a dict.
         """
 
     @abc.abstractmethod

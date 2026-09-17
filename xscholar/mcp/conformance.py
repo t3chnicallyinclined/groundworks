@@ -120,8 +120,9 @@ class Checker:
                 raise ScratchRefused(
                     "--write refused: it writes rows, and runs only against a scratch database named exactly with "
                     "--scratch NS/DB. This adapter's database is %s; --scratch was %r"
-                    % (target or "not discoverable (no .db with ns and db): writes cannot be pointed at a scratch "
-                                 "database", scratch))
+                    % (target or "not discoverable: conformance reads adapter.db.ns and adapter.db.db, and this "
+                                 "adapter has no `db` attribute carrying both (expose the connection it writes "
+                                 "through as `self.db`, with `.ns` and `.db` set)", scratch))
 
     def target(self):
         db = getattr(self.adapter, "db", None)
