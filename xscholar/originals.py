@@ -140,7 +140,7 @@ def none_key(identity):
 def schema_lines():
     """The document table and unit.document. Emitted by gates.schema_surql for every instance."""
     return [
-        "DEFINE TABLE OVERWRITE document SCHEMAFULL;",
+        gates.table_definition("document"),
         "DEFINE FIELD OVERWRITE sha256 ON document TYPE option<string> ASSERT $value = NONE OR "
         "(string::matches($value, '^[0-9a-f]{64}$') AND $value = record::id($this.id));",
         "DEFINE FIELD OVERWRITE media_type ON document TYPE string;",
@@ -163,7 +163,9 @@ def schema_lines():
 
 def ensure_schema_surql():
     """What the loader applies so a graph built before this module has the fields it writes. Never
-    DEFINE TABLE OVERWRITE: that would reset the PERMISSIONS access.py put on the table."""
+    DEFINE TABLE OVERWRITE: that would reset the PERMISSIONS access.py put on the table. (schema_lines()[0] is
+    the IF NOT EXISTS + ALTER pair from gates.table_definition, which keeps them too; it is skipped here only
+    because the loader must never re-shape a table.)"""
     return "\n".join(["DEFINE TABLE IF NOT EXISTS document SCHEMAFULL;"]
                      + [line.replace(" OVERWRITE ", " IF NOT EXISTS ", 1) for line in schema_lines()[1:]]) + "\n"
 
@@ -251,15 +253,12 @@ def run_probes(inst, db):
             continue
         entry = {"rule": rule["id"], "clauses": [c.get("edge") for _, c in enforced_clauses(rule, inst)]}
         plan = plans.get(rule["id"])
-        if config.independence_of(rule):
-            entry["not_built"] = ("the rule requires an independent promoter, so root cannot make the promotion "
-                                  "this probe needs; probe it with provisioned credentials")
-        elif not plan or not plan.get("unpromote"):
+        if not plan or not plan.get("unpromote"):
             entry["not_built"] = "the gate library produced no probe plan that can be un-promoted for this rule"
         elif not all(p["built"] for p in plan["evidence"]):
             entry["not_built"] = "the gate library could not build accepting evidence for every requires clause"
         else:
-            _probe_rule(db, rule, plan, entry)
+            _probe_rule(db, rule, plan, entry, inst)
         flags = ("accept", "reject_without_original", "reject_original_not_verified", "restored_accept")
         entry["behaved"] = not entry.get("not_built") and not entry.get("error") and not entry.get("cleanup_errors") \
             and all(entry.get(f) is True for f in flags)
@@ -272,7 +271,7 @@ def run_probes(inst, db):
     return report
 
 
-def _probe_rule(db, rule, plan, entry):
+def _probe_rule(db, rule, plan, entry, inst=None):
     from xscholar.pipeline.loader import q
     sha = _probe_sha(rule["id"])
     doc = doc_rid(sha)
@@ -280,33 +279,62 @@ def _probe_rule(db, rule, plan, entry):
     attach = "UPDATE unit SET document = %s WHERE string::contains(record::id(id), %s);" % (doc, tag)
     detach = "UPDATE unit SET document = NONE WHERE string::contains(record::id(id), %s);" % tag
     attempt, unpromote = plan["attempt"], plan["unpromote"]
+    # Who proposes and who promotes. Root, for an ordinary rule. For a rule that requires an independent promoter
+    # root can never make the change (it has no identity), so the row is written by one provisioned credential and
+    # promoted by others, exactly as gates.run_probes does. A promoter whose change went through is on the row's
+    # record of writers from then on, so the first accept is made by `promoter` and every later attempt by
+    # `promoter_b`, a credential (and a principal) of its own.
+    writer, first, later = db, db, db
+    run = gates.ProbeRunner(inst, db) if inst is not None else db
+    if inst is not None and config.independence_of(rule):
+        identities, why = gates._probe_identities(inst, db, rule, extra=("promoter_b",))
+        if identities is None:
+            entry["not_built"] = ("the rule requires an independent promoter and the probe could not provision the "
+                                  "credentials that must make the promotion: %s" % why)
+            return
+        writer, first, later = identities["proposer"], identities["promoter"], identities["promoter_b"]
 
-    def try_attempt():
-        ok, message = db.try_sql(attempt)
+    def try_attempt(conn):
+        ok, message = conn.try_sql(attempt)
         if ok:
             db.sql(unpromote)
         return ok, message
 
     try:
+        if inst is not None:
+            problem = run.prepare(gates.credential_statements(plan))
+            if problem:
+                entry["not_built"] = problem
+                return
         db.sql("UPSERT %s SET sha256 = %s, media_type = 'application/octet-stream', bytes = 0, capture = 'raw', "
                "integrity = 'ok', original_name = 'xscholar originals probe';" % (doc, q(sha)))
-        for statement in plan["setup"]:
+        db.sql(plan["setup"][0])
+        writer.sql(plan["setup"][1])    # the row under test, written by its proposer
+        for statement in plan["setup"][2:]:
             db.sql(statement)
         db.sql(attach)
         for statement in plan["fix"]:
-            db.sql(statement)
+            run.sql(statement)
             db.sql(attach)              # a staged promotion later in the fix needs its units' original now
-        ok, message = try_attempt()
+        if first is not db and config.independence_of(rule)["own_evidence"]:
+            link = gates._own_link(plan, inst, identities["role"])
+            if link is None:
+                entry["not_built"] = ("the rule requires the promoter's own evidence and no evidence link could be built "
+                                      "on an edge role %s writes" % identities["role"])
+                return
+            for conn in (first, later):
+                conn.sql(link)
+        ok, message = try_attempt(first)
         entry["accept"], entry["accept_error"] = ok, message
         db.sql(detach)
-        ok, message = try_attempt()
+        ok, message = try_attempt(later)
         entry["reject_without_original"], entry["without_original_error"] = (not ok and refused_by(message, rule["id"])), message
         db.sql(attach)
         db.sql("UPDATE %s SET integrity = 'missing';" % doc)
-        ok, message = try_attempt()
+        ok, message = try_attempt(later)
         entry["reject_original_not_verified"], entry["not_verified_error"] = (not ok and refused_by(message, rule["id"])), message
         db.sql("UPDATE %s SET integrity = 'ok';" % doc)
-        ok, message = try_attempt()
+        ok, message = try_attempt(later)
         entry["restored_accept"], entry["restored_error"] = ok, message
     except Exception as exc:          # recorded, judged misbehaved; cleanup still runs
         entry["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:500])

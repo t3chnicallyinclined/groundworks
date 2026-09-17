@@ -615,6 +615,7 @@ def validate(data):
             independent = _independence_value(rule, problems)
             if not rule.get("requires") and not rule.get("forbids") and not independent:
                 problems.append("gate %s requires or forbids nothing" % rule["id"])
+            _validate_gate_domains(data, rule, problems)
             if independent:
                 _validate_independent(data, rule, problems)
                 _validate_independence_mode(data, rule, independent, problems)
@@ -716,6 +717,74 @@ def _validate_independent(data, rule, problems):
     if not writers:
         problems.append("%s: independent: true, but no access role both reads and writes %s, so no "
                         "credential could propose or promote it" % (where, table))
+
+
+def expand_where(data, where):
+    """A clause's `where` with $confirming and $usable replaced by the config's own lists. The one expansion:
+    gates._expand calls this, so what validation reads and what the datastore enforces cannot differ."""
+    def lit(values):
+        return "[" + ", ".join("'%s'" % str(v).replace("'", "\\'") for v in values) + "]"
+    fidelity = data.get("fidelity") if isinstance(data.get("fidelity"), dict) else {}
+    status = data.get("status") if isinstance(data.get("status"), dict) else {}
+    return (where or "").replace("$confirming", lit(fidelity.get("confirming") or [])) \
+                        .replace("$usable", lit(status.get("usable") or []))
+
+
+def _validate_gate_domains(data, rule, problems):
+    """Every value a gate reads must come from an enumerated domain, or a misspelling slips past it.
+
+    Measured on a real instance (ROADMAP B-014): a status field that decided whether each of 21,332 records was
+    in evidence had no list of allowed values. A misspelt value (a transposed pair of letters) would have been
+    stored without a word, and the record would have dropped out of evidence: a typo never equals the value a
+    rule compares with. A gate on such a field is close to meaningless, so it is refused here, by name, and so is
+    a clause `where` that compares a field with no domain. That half is worse for `forbids`: a forbidden row
+    whose value is misspelt is not counted, and the gate lets the promotion through.
+
+    A domain is a vocabulary list the engine enforces (unit.type/status/grade, fact.status, critique.verdict,
+    label.tier/dir/role), a declared field's `one_of`, or a boolean. A value outside the domain is refused too:
+    a rule on `verified = ture` would never fire. Only `field = literal` and `field IN [literals]` terms are read;
+    anything else in a `where` is left to the probes, which report it untested by name."""
+    from xscholar import assertions, gates
+    if not all(key in rule for key in ("table", "field", "value")):
+        return
+    where = "gate %s" % rule["id"]
+    table, field = str(rule["table"]), str(rule["field"])
+    domain = assertions.field_domain(data, table, field)
+    if domain is None:
+        problems.append("%s: %s.%s has no enumerated domain (no vocabulary list, no one_of, not a bool), so the "
+                        "datastore stores a misspelt value without a word and this gate never sees it; declare the "
+                        "field with one_of, or gate a field that has one" % (where, table, field))
+    elif gates._value_literal(rule["value"]) not in [gates._value_literal(v) for v in domain]:
+        problems.append("%s: value %r is not one of %s.%s's values (%s), so the gate could never fire"
+                        % (where, rule["value"], table, field, ", ".join(map(str, domain))))
+    edges = edge_map_of(data)
+    for kind in ("requires", "forbids"):
+        for clause in rule.get(kind) or []:
+            if not isinstance(clause, dict) or not clause.get("where") or clause.get("edge") not in edges:
+                continue
+            src, dst = edges[clause["edge"]]
+            other = dst if table == src else src if table == dst else None
+            terms, _ = gates._where_terms(expand_where(data, clause["where"]))
+            if other is None or terms is None:
+                continue
+            for term_field, literals in terms:
+                values = assertions.field_domain(data, other, term_field)
+                said = "%s: a %s clause on %s compares %s.%s" % (where, kind, clause["edge"], other, term_field)
+                if values is None:
+                    problems.append("%s, which has no enumerated domain, so a misspelt value there is never counted%s; "
+                                    "declare the field with one_of" % (said, " and the forbidden row is let through"
+                                                                       if kind == "forbids" else ""))
+                    continue
+                allowed = [gates._value_literal(v) for v in values]
+                for literal in literals:
+                    text = literal.strip()
+                    if text[:1] == '"' and text[-1:] == '"':
+                        text = gates._value_literal(text[1:-1])
+                    elif text.lower() in ("true", "false"):
+                        text = text.lower()
+                    if text not in allowed:
+                        problems.append("%s with %s, which is not one of its values (%s), so the clause never matches"
+                                        % (said, literal, ", ".join(map(str, values))))
 
 
 def _independence_value(rule, problems):

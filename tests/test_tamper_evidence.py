@@ -121,10 +121,16 @@ class LiveSchemaTests(unittest.TestCase):
                 self.assertFalse(report.ok)
 
     def test_the_schema_reapplied_after_access_is_reported_table_by_table(self):
-        """Reported by the coordinating session: DEFINE TABLE OVERWRITE in the schema resets PERMISSIONS to NONE,
-        so re-applying the schema after access silently locks every agent out. Nothing said so."""
+        """Reported by the coordinating session: DEFINE TABLE OVERWRITE in the schema reset PERMISSIONS to NONE,
+        so re-applying the schema after access silently locked every agent out. Nothing said so. The generator
+        now re-shapes tables with ALTER TABLE and a re-apply changes nothing (tests/test_gates.py
+        GateFixServerTests); the check must still name every table such a statement resets, so the old generator's
+        statements are replayed here by hand."""
         root = deploy(self.inst)
+        self.assertEqual(rows(live_schema.check(self.inst, root)), [])
         root.script(gates.schema_surql(self.inst))
+        self.assertEqual(rows(live_schema.check(self.inst, root)), [], "re-applying the schema must change nothing")
+        root.script("DEFINE TABLE OVERWRITE fact SCHEMAFULL; DEFINE TABLE OVERWRITE critique SCHEMAFULL;")
         report = live_schema.check(self.inst, root)
         altered = {name for status, kind, name in rows(report) if status == "altered" and kind == "table"}
         self.assertIn("fact", altered, "\n".join(report.lines()))

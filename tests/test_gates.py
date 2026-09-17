@@ -88,15 +88,15 @@ class GenerationTests(unittest.TestCase):
     def test_a_declared_table_and_edge_reach_the_schema(self):
         """Declared once in the config; defined in the datastore with their enumerations enforced."""
         text = gates.schema_surql(declared_instance(self.inst))
-        self.assertIn("DEFINE TABLE OVERWRITE event SCHEMAFULL;", text)
+        self.assertIn(gates.table_definition("event"), text)
         self.assertIn("DEFINE FIELD OVERWRITE kind ON event TYPE string ASSERT $value IN "
                       "['deploy', 'alert', 'page'];", text)
-        self.assertIn("DEFINE TABLE OVERWRITE mentions TYPE RELATION IN unit OUT event SCHEMALESS;", text)
+        self.assertIn("ALTER TABLE mentions TYPE RELATION IN unit OUT event ENFORCED SCHEMALESS;", text)
         self.assertIn("DEFINE FIELD OVERWRITE stance ON mentions TYPE string ASSERT $value IN "
                       "['supports', 'disputes', 'neutral'];", text)
         self.assertIn("DEFINE FIELD OVERWRITE speaker ON mentions TYPE option<string>;", text)
         # the built-ins are untouched by an instance declaring its own
-        self.assertIn("DEFINE TABLE OVERWRITE unit SCHEMAFULL;", text)
+        self.assertIn(gates.table_definition("unit"), text)
         self.assertNotIn("event", gates.schema_surql(self.inst))
 
     def test_a_declared_edge_is_probed_exactly_like_a_built_in_one(self):
@@ -599,11 +599,15 @@ class BuiltInFieldGateTests(unittest.TestCase):
                 self.assertIn(" TYPE bool DEFAULT false ASSERT ", line)
 
     def test_a_gate_on_a_field_the_engine_cannot_restate_is_refused_by_name(self):
+        """config.load now refuses this rule first (no enumerated domain, B-014); the generator's own refusal is
+        still the last line, for a config that reached it without validation."""
         data = json.loads(json.dumps(self.demo.data))
         data["gates"].append({"id": "unknown_field_rule", "table": "fact", "field": "no_such_field", "value": "x",
                               "requires": [{"edge": "cites", "min": 1}]})
+        with self.assertRaises(config.ConfigError):
+            config.load(data)
         with self.assertRaises(gates.GateError) as raised:
-            gates.gate_surql(config.load(data))
+            gates.gate_surql(config.Instance(data))
         self.assertIn("unknown_field_rule", str(raised.exception))
 
 
@@ -1296,19 +1300,379 @@ class IndependenceDeclarationTests(unittest.TestCase):
                          "a baseline taken before independence existed must still read the same")
 
     def test_staged_evidence_behind_an_independent_rule_is_reported_not_built(self):
-        """V2-18 stages a gated evidence row by promoting it on the probe's own connection. Past an
-        independence rule that promotion cannot be made, so the plan must say so by name."""
-        inst = independent_instance(gated_evidence_instance(self.inst))
+        """V2-18 stages a gated evidence row by promoting it. Past an independence rule the promotion is made by
+        provisioned probe credentials (below); when no access role could make it -- here, none that writes fact
+        can read unit, which the rule counts -- the plan must say so by name, never build it as root."""
+        data = json.loads(json.dumps(independent_instance(gated_evidence_instance(self.inst)).data))
+        for role in data["access"]["roles"].values():
+            if "fact" in (role.get("write") or []):
+                role["read"] = [t for t in role["read"] if t != "unit"]
+        inst = config.load(data)
         plan = [p for p in gates.probes(inst) if p["rule"] == StagedEvidenceTests.RULE][0]["evidence"][0]
         self.assertFalse(plan["built"], plan)
-        self.assertIn("confirmed_needs_source_grade, which needs a promoter independent of the row's writers",
-                      plan["reason"])
+        self.assertIn("confirmed_needs_source_grade, which needs a promoter independent of the row's writers, and no "
+                      "probe credential could make that promotion", plan["reason"])
+
+    def test_staged_evidence_behind_an_independent_rule_is_written_and_promoted_by_probe_credentials(self):
+        """B-015 item 4: the staged row is CREATEd by one probe credential and promoted by another, never by root;
+        when the rule asks for the promoter's own evidence, the promoter relates a link of its own first."""
+        for mode in (True, {"between": "principal", "own_evidence": True}):
+            with self.subTest(mode=mode):
+                data = json.loads(json.dumps(gated_evidence_instance(self.inst).data))
+                for rule in data["gates"]:
+                    if rule["id"] == "confirmed_needs_source_grade":
+                        rule["independent"] = mode
+                probe = [p for p in gates.probes(config.load(data)) if p["rule"] == StagedEvidenceTests.RULE][0]
+                plan = probe["evidence"][0]
+                self.assertTrue(plan["built"], plan["reason"])
+                create = [s for s in plan["create"] if s.startswith("CREATE fact:")]
+                promote = [s for s in plan["create"] if s.startswith("UPDATE fact:") and "'confirmed'" in s]
+                self.assertEqual(len(create), 1, plan["create"])
+                self.assertEqual(len(promote), 1, plan["create"])
+                for statement, key in ((create[0], "proposer"), (promote[0], "promoter")):
+                    self.assertIsInstance(statement, gates.CredentialStatement, statement)
+                    self.assertEqual((statement.key, statement.rule["id"]), (key, "confirmed_needs_source_grade"))
+                    self.assertTrue(statement.stem.startswith("zz_probe_%s_s" % StagedEvidenceTests.RULE))
+                own = [s for s in plan["create"] if isinstance(s, gates.CredentialStatement) and "->cites->" in s]
+                self.assertEqual(len(own), 1 if isinstance(mode, dict) else 0, plan["create"])
+                if own:
+                    self.assertEqual(own[0].key, "promoter")
+                    self.assertLess(plan["create"].index(own[0]), plan["create"].index(promote[0]))
+                self.assertIn("DELETE agent WHERE record::id(id) CONTAINS 'zz_probe_%s';" % StagedEvidenceTests.RULE,
+                              probe["cleanup"])
 
     def test_the_generated_skill_tells_the_agent_who_may_promote(self):
         from xscholar import skills
         text = skills._gates_block(independent_instance(self.inst))
         self.assertIn("never by its own proposer, never by root", text)
         self.assertNotIn("never by root", skills._gates_block(self.inst))
+
+
+PORT_FIXES = surreal_bin.free_port()   # OS-assigned; a port of its own so it never waits on ServerTests' teardown
+
+
+def forbids_only_instance(base, independent=False):
+    """The demo plus a rule that only FORBIDS: an `item` may close unless a fatal critique flags it. Nothing here
+    is known to the engine."""
+    data = json.loads(json.dumps(base.data))
+    data["tables"] = {"item": {"fields": {"state": {"type": "string", "one_of": ["open", "closed"]}}}}
+    data["edges"]["flags"] = {"from": "critique", "to": "item"}
+    rule = {"id": "item_closes_unless_flagged_fatal", "table": "item", "field": "state", "value": "closed",
+            "forbids": [{"edge": "flags", "where": "verdict = 'fatal'"}]}
+    if independent:
+        rule["independent"] = True
+    data["gates"].append(rule)
+    data["access"]["roles"]["coordinator"]["read"].append("item")
+    data["access"]["roles"]["coordinator"]["write"] += ["item", "flags"]
+    return config.load(data)
+
+
+class DomainRefusalTests(unittest.TestCase):
+    """B-014: a gate that reads a field with no enumerated domain is refused at config load, by name."""
+
+    def setUp(self):
+        self.demo = config.load(DEMO)
+
+    def refused(self, mutate):
+        data = json.loads(json.dumps(self.demo.data))
+        mutate(data)
+        with self.assertRaises(config.ConfigError) as raised:
+            config.load(data)
+        return str(raised.exception)
+
+    def test_the_demo_and_the_template_still_load(self):
+        for path in (DEMO, ROOT / "instances" / "_template" / "instance.yaml"):
+            with self.subTest(path=path.parent.name):
+                self.assertTrue(config.load(path).gate_rules())
+
+    def test_a_gate_on_a_field_with_no_enumerated_domain_is_refused_by_name(self):
+        """The measured case: a status-like string field with no list. `recieved_k` is stored and never equals
+        the gate's value."""
+        def free_text_status(data):
+            data["tables"] = {"record": {"fields": {"status_k": "string"}}}
+            data["gates"].append({"id": "record_in_evidence", "table": "record", "field": "status_k",
+                                  "value": "received_k", "forbids": [{"edge": "cites"}]})
+        self.assertIn("gate record_in_evidence: record.status_k has no enumerated domain", self.refused(free_text_status))
+
+        def int_field(data):
+            data["tables"] = {"record": {"fields": {"rank": "int"}}}
+            data["gates"].append({"id": "record_rank", "table": "record", "field": "rank", "value": 3,
+                                  "forbids": [{"edge": "cites"}]})
+        self.assertIn("gate record_rank: record.rank has no enumerated domain", self.refused(int_field))
+
+        def built_in_free_text(data):
+            data["gates"].append({"id": "fact_note", "table": "fact", "field": "note", "value": "done",
+                                  "requires": [{"edge": "cites", "min": 1}]})
+        self.assertIn("gate fact_note: fact.note has no enumerated domain", self.refused(built_in_free_text))
+        # an enumerated declared field, a declared bool and a vocabulary field all still load
+        data = json.loads(json.dumps(self.demo.data))
+        data["tables"] = {"record": {"fields": {"status_k": {"type": "string", "one_of": ["received_k", "lost_k"]},
+                                                "held": "bool"}}}
+        data["edges"]["about"] = {"from": "record", "to": "unit"}
+        data["gates"] += [{"id": "record_in_evidence", "table": "record", "field": "status_k", "value": "received_k",
+                           "requires": [{"edge": "about", "where": "status IN $usable", "min": 1}]},
+                          {"id": "record_held", "table": "record", "field": "held", "value": True,
+                           "requires": [{"edge": "about", "min": 1}]},
+                          {"id": "unit_usable", "table": "unit", "field": "status", "value": "in_window",
+                           "requires": [{"edge": "cites", "where": "status = 'confirmed'", "min": 1}]}]
+        config.load(data)
+
+    def test_a_gate_value_outside_its_field_domain_is_refused(self):
+        def misspelt(data):
+            data["gates"][0]["value"] = "confirmd"
+        self.assertIn("gate confirmed_needs_source_grade: value 'confirmd' is not one of fact.status's values",
+                      self.refused(misspelt))
+
+    def test_a_clause_comparing_a_field_with_no_domain_is_refused(self):
+        def free_text_where(data):
+            data["gates"][1]["forbids"][0]["where"] = "text = 'fatal'"
+        text = self.refused(free_text_where)
+        self.assertIn("gate root_cause_needs_support_and_attack: a forbids clause on attacks compares critique.text, "
+                      "which has no enumerated domain", text)
+        self.assertIn("the forbidden row is let through", text)
+
+    def test_a_clause_comparing_with_a_value_outside_the_domain_is_refused(self):
+        def misspelt_forbids(data):
+            data["gates"][1]["forbids"][0]["where"] = "verdict = 'fatl'"
+        self.assertIn("a forbids clause on attacks compares critique.verdict with 'fatl', which is not one of its values",
+                      self.refused(misspelt_forbids))
+
+        def misspelt_expansion(data):
+            data["gates"][2]["requires"][0]["where"] = "grade = 'official_txt' AND status IN $usable"
+        self.assertIn("compares unit.grade with 'official_txt'", self.refused(misspelt_expansion))
+
+
+class ParamTests(unittest.TestCase):
+    """Item 6. A reviewer measured `DEFINE PARAM OVERWRITE` loosening a gate that READS a param. The engine emits no
+    DEFINE PARAM, and every generated statement reads only SurrealDB's own variables or its own LET and closure
+    bindings ($confirming and $usable are expanded in Python), so there is no param to pin in the baseline; a
+    hand-added one is reported by the live-schema check (tests/test_tamper_evidence.py, tests/test_originals_db.py).
+    If a generator ever reads a param this goes red: pin params in the baseline before letting it."""
+
+    BUILT_IN = {"value", "this", "before", "after", "event", "auth", "parent", "input", "session", "token", "access"}
+    # the record access SIGNIN reads what the signing-in client sends; measured on 3.1.6: with DEFINE PARAM $pass and
+    # $id set to a real credential's values, a sign-in with the wrong password is still refused
+    SIGNIN = {"id", "pass"}
+
+    def generated(self, inst):
+        from xscholar import access, assertions, originals, promotion_log, temporal
+        return "\n".join([gates.schema_surql(inst), gates.gate_surql(inst), temporal.temporal_surql(inst),
+                          assertions.surql(inst), access.access_surql(inst), originals.enforcement_surql(inst),
+                          "\n".join(promotion_log.log_surql(inst))])
+
+    def test_no_generator_defines_or_reads_a_database_param(self):
+        from tests.test_independence_modes import mode_instance
+        for inst in (config.load(DEMO), mode_instance({"between": "principal", "own_evidence": True}, log=True),
+                     forbids_only_instance(config.load(DEMO), independent=True)):
+            with self.subTest(inst=inst.id):
+                text = self.generated(inst)
+                self.assertNotRegex(text, r"(?i)DEFINE\s+PARAM")
+                bound = set(re.findall(r"LET \$([A-Za-z_]\w*)", text)) | set(re.findall(r"\|\$([A-Za-z_]\w*)\|", text))
+                read = set(re.findall(r"\$([A-Za-z_]\w*)", text)) - self.BUILT_IN - self.SIGNIN - bound
+                self.assertEqual(read, set(), "generated SurrealQL reads a param a DEFINE PARAM could replace")
+
+
+class GateFixServerTests(unittest.TestCase):
+    """Items 1, 3, 4 and 5 on a throwaway server (never a live one)."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not SURREAL:
+            raise unittest.SkipTest("NOT EXECUTED: " + surreal_bin.MISSING)
+        if surreal_bin.port_in_use(PORT_FIXES):
+            raise unittest.SkipTest(surreal_bin.occupied(PORT_FIXES))
+        cls.proc = subprocess.Popen([str(SURREAL), "start", "--bind", "127.0.0.1:%d" % PORT_FIXES,
+                                     "--user", "root", "--pass", "root", "memory"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(60):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:%d/health" % PORT_FIXES, timeout=1)
+                break
+            except Exception:
+                time.sleep(0.25)
+        else:
+            cls.proc.kill()
+            raise unittest.SkipTest("NOT EXECUTED: throwaway SurrealDB did not start on %d" % PORT_FIXES)
+        cls.inst = config.load(DEMO)
+        cls.n = 0
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()                 # our own process, by its handle: never by name
+        try:
+            cls.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            cls.proc.kill()
+
+    def fresh(self, inst, *more):
+        from xscholar import access
+        type(self).n += 1
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT_FIXES, ns="fixes", db="d%d" % self.n)
+        conn.script(gates.schema_surql(inst))
+        conn.script(gates.gate_surql(inst))
+        if "access" in more:
+            conn.script(access.access_surql(inst))
+        return conn
+
+    # ---- item 1: a link to a record that does not exist ----
+
+    def test_every_generated_relation_table_is_enforced(self):
+        inst = declared_instance(self.inst)
+        conn = self.fresh(inst)
+        tables = conn.sql("INFO FOR DB")[0]["tables"]
+        relations = {name: text for name, text in tables.items() if "TYPE RELATION" in text}
+        self.assertEqual(set(relations), set(inst.edge_map()))
+        for name, text in relations.items():
+            self.assertIn(" ENFORCED ", text, name)
+
+    def test_a_link_to_a_missing_record_is_refused_and_a_link_to_real_ones_is_taken(self):
+        """B-011, both ways, raw and through the typed write surface, on a built-in and a declared edge."""
+        from xscholar.pipeline import write
+        conn = self.fresh(self.inst)
+        conn.sql("CREATE unit:u1 SET type='log_line', text='t', locator={p: 1}, status='in_window', "
+                 "grade='original_log', hash='h';")
+        conn.sql("CREATE fact:f1 SET statement='s', status='proposed';")
+        for statement, missing in (("RELATE fact:f1->cites->unit:nowhere;", "unit:nowhere"),
+                                   ("RELATE fact:nowhere->cites->unit:u1;", "fact:nowhere"),
+                                   ("INSERT RELATION INTO cites {in: fact:f1, out: unit:gone};", "unit:gone"),
+                                   ("RELATE unit:u1->preserves->conclusion:nowhere SET how='alert';",
+                                    "conclusion:nowhere")):
+            with self.subTest(statement=statement):
+                ok, message = conn.try_sql(statement)
+                self.assertFalse(ok, "a link to a record that does not exist was stored: %s" % statement)
+                self.assertIn("The record '%s' does not exist" % missing, message)
+        ok, message = conn.try_sql("RELATE fact:f1->cites->unit:u1;")
+        self.assertTrue(ok, message)
+        writer = write.Writer(conn, self.inst, {"agent_id": "probe_writer", "role": "coordinator", "lens": None})
+        with self.assertRaises(dbmod.DbError) as raised:
+            writer.cite("f1", ["not_loaded_yet"])
+        self.assertIn("does not exist", str(raised.exception))
+        with self.assertRaises(dbmod.DbError):
+            writer.relate("preserves", "u1", "not_a_conclusion", how="alert")
+        writer.cite("f1", ["u1"])
+        conn.sql("CREATE conclusion:c1 SET statement='s', ready=false;")
+        writer.relate("preserves", "u1", "c1", how="alert")
+        self.assertEqual(conn.count("cites"), 2)
+        self.assertEqual(conn.count("preserves"), 1)
+        self.assertEqual(gates.count_dangling_edges(conn, self.inst), {})
+
+    def test_links_stored_before_enforcement_are_counted_by_name(self):
+        """ENFORCED never looks at what is already stored (measured), so an existing graph is swept once."""
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT_FIXES, ns="fixes", db="old_graph")
+        conn.script("DEFINE TABLE OVERWRITE fact SCHEMALESS; DEFINE TABLE OVERWRITE unit SCHEMALESS; "
+                    "DEFINE TABLE OVERWRITE cites TYPE RELATION IN fact OUT unit SCHEMALESS;")
+        conn.sql("CREATE fact:f; CREATE unit:u; RELATE fact:f->cites->unit:u; RELATE fact:f->cites->unit:gone;")
+        conn.script(gates.schema_surql(self.inst))
+        self.assertIn(" ENFORCED ", conn.sql("INFO FOR DB")[0]["tables"]["cites"])
+        self.assertEqual(gates.count_dangling_edges(conn, self.inst), {"cites": 1})
+        conn.sql("DELETE cites WHERE out = unit:gone;")
+        self.assertEqual(gates.count_dangling_edges(conn, self.inst), {})
+
+    # ---- item 5: a schema re-apply keeps PERMISSIONS and CHANGEFEED ----
+
+    def test_reapplying_the_schema_keeps_permissions_and_changefeeds(self):
+        """Measured before the fix on the demo: 14 of 20 tables back to PERMISSIONS NONE, CHANGEFEED gone from 5."""
+        from xscholar import access, live_schema, queue, temporal
+        conn = self.fresh(self.inst)
+        for text in (temporal.temporal_surql(self.inst), access.access_surql(self.inst),
+                     queue.changefeed_surql(self.inst)):
+            conn.script(text)
+        before = conn.sql("INFO FOR DB")[0]["tables"]
+        with_permissions = [t for t, text in before.items() if "PERMISSIONS NONE" not in text]
+        with_feed = [t for t, text in before.items() if "CHANGEFEED" in text]
+        self.assertGreaterEqual(len(with_permissions), 13, before)
+        self.assertEqual(sorted(with_feed), sorted(queue.TABLES), before)
+        conn.script(gates.schema_surql(self.inst))
+        conn.script(gates.gate_surql(self.inst))
+        after = conn.sql("INFO FOR DB")[0]["tables"]
+        self.assertEqual({t: after.get(t) for t in before}, before, "a schema re-apply changed a table definition")
+        report = live_schema.check(self.inst, conn, components=("schema", "gates", "temporal", "access", "changefeed"))
+        self.assertEqual([r for r in report.rows if r["kind"] == "table"], [], "\n".join(report.lines()))
+        # the re-apply still puts a hand-changed SHAPE back, and keeps the permissions while doing it
+        conn.sql("ALTER TABLE fact SCHEMALESS;")
+        conn.script(gates.schema_surql(self.inst))
+        fact = conn.sql("INFO FOR DB")[0]["tables"]["fact"]
+        self.assertIn("SCHEMAFULL", fact)
+        self.assertIn("PERMISSIONS FOR select WHERE", fact)
+        self.assertIn("CHANGEFEED", fact)
+
+    # ---- item 3: a rule that only forbids ----
+
+    def test_a_correct_forbids_only_rule_behaves_and_a_broken_one_does_not(self):
+        """Before: a forbids-only rule was always judged misbehaved, because nothing refuses the first attempt."""
+        for independent in (False, True):
+            with self.subTest(independent=independent):
+                inst = forbids_only_instance(self.inst, independent=independent)
+                conn = self.fresh(inst, "access")
+                rule = "item_closes_unless_flagged_fatal"
+                entry = [e for e in gates.run_probes(inst, conn)["rules"] if e["rule"] == rule][0]
+                self.assertTrue(entry["behaved"], json.dumps(entry, indent=2))
+                self.assertIs(entry["reject"], True)
+                self.assertIs(entry["accept"], True)
+                self.assertIs(entry["forbidden_evidence_reject"], True)
+                self.assertEqual(conn.count("item"), 0)
+                self.assertEqual(conn.count("agent"), 0)
+                # broken in the datastore: the rule's ASSERT and its event are gone, so a flagged item closes
+                conn.sql("REMOVE EVENT %s_gate ON TABLE item;" % rule)
+                conn.sql("DEFINE FIELD OVERWRITE state ON item TYPE string ASSERT $value IN ['open', 'closed'];")
+                report = gates.run_probes(inst, conn)
+                entry = [e for e in report["rules"] if e["rule"] == rule][0]
+                self.assertFalse(entry["behaved"], json.dumps(entry, indent=2))
+                self.assertIs(entry["reject"], False)
+                self.assertFalse(entry["forbidden_evidence_reject"])
+                self.assertGreaterEqual(report["misbehaved"], 1)
+
+    # ---- item 4: rules whose probes needed an independent promoter ----
+
+    def test_staged_evidence_behind_independence_is_probed_on_real_credentials(self):
+        from tests.test_independence_modes import mode_instance
+        for mode in (True, {"between": "principal", "own_evidence": True}):
+            with self.subTest(mode=mode):
+                inst = mode_instance(mode, base=gated_evidence_instance(self.inst))
+                conn = self.fresh(inst, "access")
+                report = gates.run_probes(inst, conn)
+                entry = [e for e in report["rules"] if e["rule"] == StagedEvidenceTests.RULE][0]
+                self.assertTrue(entry["behaved"], json.dumps(entry, indent=2))
+                self.assertEqual(report["misbehaved"], 0, json.dumps(report, indent=2))
+                self.assertEqual(report["requires_untested"], 0)
+                self.assertEqual([e["satisfied"] for e in entry["evidence"]], [True])
+                for table in inst.tables() + ["agent"]:
+                    self.assertEqual(conn.count(table), 0, "probe rows left behind in %s" % table)
+
+    def test_staged_evidence_without_credentials_to_sign_in_is_reported_by_name(self):
+        inst = independent_instance(gated_evidence_instance(self.inst))
+        conn = self.fresh(inst)                        # no access applied: nothing can sign in
+        entry = [e for e in gates.run_probes(inst, conn)["rules"] if e["rule"] == StagedEvidenceTests.RULE][0]
+        self.assertFalse(entry["behaved"])
+        self.assertIn("staged evidence behind rule confirmed_needs_source_grade needs a row written by one probe "
+                      "credential and promoted by another", entry["setup_error"])
+
+    def test_originals_enforcement_is_probed_for_a_rule_needing_an_independent_promoter(self):
+        from xscholar import originals
+        from tests.test_independence_modes import mode_instance
+        for mode in (True, {"between": "principal", "own_evidence": True}):
+            with self.subTest(mode=mode):
+                inst = mode_instance(mode)
+                conn = self.fresh(inst, "access")
+                conn.script(originals.enforcement_surql(inst))
+                report = originals.run_probes(inst, conn)
+                entry = [e for e in report["rules"] if e["rule"] == "confirmed_needs_source_grade"][0]
+                self.assertTrue(entry["behaved"], json.dumps(entry, indent=2))
+                for flag in ("accept", "reject_without_original", "reject_original_not_verified", "restored_accept"):
+                    self.assertIs(entry[flag], True, flag)
+                self.assertEqual(report["misbehaved"], 0, json.dumps(report, indent=2))
+                for table in inst.tables() + ["agent"]:
+                    self.assertEqual(conn.count(table), 0, "probe rows left behind in %s" % table)
+
+    def test_originals_probe_without_credentials_is_reported_by_name(self):
+        from xscholar import originals
+        inst = independent_instance(self.inst)
+        conn = self.fresh(inst)
+        conn.script(originals.enforcement_surql(inst))
+        entry = [e for e in originals.run_probes(inst, conn)["rules"]
+                 if e["rule"] == "confirmed_needs_source_grade"][0]
+        self.assertFalse(entry["behaved"])
+        self.assertIn("could not provision the credentials that must make the promotion", entry["not_built"])
 
 
 if __name__ == "__main__":   # last, so running this file directly runs every class in it
