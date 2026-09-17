@@ -32,6 +32,15 @@ Design decisions a reviewer should know about (they are not obvious from the tic
     coincidentally contain "key" (e.g. `monkey_patch.py`). That is intentional over-flagging: this is a
     FLAG for a human to glance at, not a classifier, and the instruction was explicit never to read
     contents to disambiguate.
+  * A local-only project boundary (matched by `--local-only` glob, or a git project with no remote)
+    is never walked at all -- `scan_tree` decides local-only BEFORE its os.walk, and if so returns
+    just that one minimal record. This is deliberate: a local-only folder's insides (e.g. a private
+    folder's own nested git worktrees) must not leak into the registry even as bare paths, since the
+    whole point of local-only is "an outsider reading this JSON should learn nothing about what's in
+    here beyond that something git-tracked exists at this path."
+  * All git reads go through `--no-optional-locks` (see `_run_git`) because a plain `git status`
+    opportunistically rewrites `.git/index`, which is itself a write this scanner is not allowed to
+    make.
 """
 from __future__ import annotations
 
@@ -43,7 +52,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-SKIP_DIRS = {"node_modules", "target", ".venv", "__pycache__", "dist", "build"}
+SKIP_DIRS = {"node_modules", "target", ".venv", "__pycache__", "dist", "build", ".history"}
+# glob patterns (fnmatch, not exact names) for directories to skip -- e.g. GP2040-CE's build_w6100/
+SKIP_DIR_PATTERNS = ("build_*",)
 DEFAULT_LOCAL_ONLY_GLOBS = ["*Family court*"]
 
 _SECRET_PATTERNS = (".env", ".env.*", "*.pem", "*key*", "credentials*", "id_rsa*")
@@ -56,10 +67,19 @@ _GIT_TIMEOUT = 15
 
 
 def _run_git(directory: Path, args):
-    """`git -C directory <args>`, read-only. Returns stdout (stripped) or None on any failure."""
+    """`git --no-optional-locks -C directory <args>`, read-only. Returns stdout (stripped) or None
+    on any failure.
+
+    `--no-optional-locks` matters here: plain `git status` opportunistically refreshes and
+    rewrites `.git/index` (and briefly takes `index.lock`) even though it only *reports* status --
+    that write is exactly what "read-only, without touching any file" forbids, and it can also
+    collide with a live agent working in the same worktree. `--no-optional-locks` makes git skip
+    that refresh and report from the index as it last sat on disk (see
+    test_git_status_does_not_touch_index in tests/scan/test_scan.py).
+    """
     try:
         result = subprocess.run(
-            ["git", "-C", str(directory)] + list(args),
+            ["git", "--no-optional-locks", "-C", str(directory)] + list(args),
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
@@ -197,6 +217,12 @@ BUILD_FILE_MATCHERS = {
 
 
 def _is_k8s_yaml(rel_parts, name):
+    """Unverified: this is a filename/path-shape heuristic (a kustomization file, or any yaml under
+    a `k8s`/`kubernetes` directory), never checked against a real manifest in this estate. It only
+    populates `build_files["k8s"]` -- there is deliberately no derived candidate gate for it (unlike
+    pyproject/cargo/etc above): "apply this to a cluster" is not a safe thing to even suggest running
+    the way `pytest` or `cargo test` is, so k8s presence is surfaced as a flag for a human, not a
+    candidate command."""
     if not (name.endswith(".yaml") or name.endswith(".yml")):
         return False
     if name.lower() in ("kustomization.yaml", "kustomization.yml"):
@@ -269,7 +295,11 @@ def candidate_gates(build_files: dict, project_root: Path):
     if "cmake" in build_files:
         candidates.append("ctest")
     if "sln" in build_files:
-        candidates.append("dotnet test")
+        # Unverified: unlike npm/make above, this is never checked against the .sln's actual
+        # content (test project present, dotnet vs MSBuild-only solution, etc). Review flagged
+        # this heuristic as untested against a real .sln in this estate -- rather than guess at a
+        # verification rule, it is labelled so a human treats it as a hint, not a confirmed gate.
+        candidates.append("dotnet test (unverified)")
     return candidates
 
 
@@ -280,23 +310,42 @@ def _has_git_entry(directory: Path):
     return (directory / ".git").exists()
 
 
-def scan_tree(project_root: Path):
+def _should_skip_dir(name):
+    if name == ".git":
+        return True
+    if name in SKIP_DIRS:
+        return True
+    return any(fnmatch.fnmatch(name, pat) for pat in SKIP_DIR_PATTERNS)
+
+
+def scan_tree(project_root: Path, local_only_globs):
     """One record for `project_root`, followed by records for every nested project boundary inside
-    it. Every file under `project_root` is visited by exactly one os.walk call in this recursion
-    (see the module docstring's "PROJECT BOUNDARY" note)."""
+    it -- UNLESS `project_root` itself is local-only, in which case this returns just its own
+    minimal record and never walks its contents at all (no file names, no nested-project search;
+    a local-only folder's insides -- e.g. a private folder's own nested worktrees -- must not leak
+    into the registry even as bare paths). Every file under a non-local-only `project_root` is visited
+    by exactly one os.walk call in this recursion (see the module docstring's "PROJECT BOUNDARY"
+    note).
+    """
+    git_data = git_info(project_root) if _has_git_entry(project_root) else None
+    kind = git_data["kind"] if git_data else "plain folder"
+    remotes = git_data["remotes"] if git_data else []
+    if _is_local_only(project_root, kind, remotes, local_only_globs):
+        return [_minimal_record(project_root, kind, git_data)]
+
     files = _ProjectFiles()
     nested_records = []
 
     for dirpath, dirnames, filenames in _walk(project_root):
         cur = Path(dirpath)
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != ".git"]
+        dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
         if cur != project_root and _has_git_entry(cur):
-            nested_records.extend(scan_tree(cur))
+            nested_records.extend(scan_tree(cur, local_only_globs))
             dirnames[:] = []  # this subtree is the nested project's own walk now, not ours
             continue
         _collect_in_dir(project_root, cur, filenames, files)
 
-    own = _build_record(project_root, files)
+    own = _build_record(project_root, files, git_data)
     return [own] + nested_records
 
 
@@ -307,7 +356,7 @@ def _walk(project_root: Path):
         yield dirpath, dirnames, filenames
 
 
-def _build_record(project_root: Path, files: _ProjectFiles):
+def _build_record(project_root: Path, files: _ProjectFiles, git_data):
     record = {
         "path": str(project_root),
         "kind": "plain folder",
@@ -325,41 +374,37 @@ def _build_record(project_root: Path, files: _ProjectFiles):
         "secret_flags": files.secret_flags,
         "local_only": False,
     }
-    if _has_git_entry(project_root):
-        record.update(git_info(project_root))
+    if git_data is not None:
+        record.update(git_data)
     return record
 
 
-def _is_local_only(record, local_only_globs):
-    path = record["path"]
-    if any(fnmatch.fnmatch(path, glob) for glob in local_only_globs):
+def _is_local_only(path: Path, kind, remotes, local_only_globs):
+    if any(fnmatch.fnmatch(str(path), glob) for glob in local_only_globs):
         return True
-    if record["kind"] in ("git repo", "git worktree", "git submodule") and not record["remotes"]:
+    if kind in ("git repo", "git worktree", "git submodule") and not remotes:
         return True
     return False
 
 
-def _minimal_record(record):
+def _minimal_record(path: Path, kind, git_data):
     return {
-        "path": record["path"],
-        "kind": record["kind"],
-        "head_sha": record["head_sha"],
+        "path": str(path),
+        "kind": kind,
+        "head_sha": git_data["head_sha"] if git_data else None,
         "local_only": True,
     }
 
 
 def scan_root(root: Path, local_only_globs=None):
-    """Every project record under `root` (its immediate children plus anything nested beneath them)."""
+    """Every project record under `root` (its immediate children plus anything nested beneath them,
+    except beneath a local-only child -- see scan_tree)."""
     local_only_globs = list(local_only_globs or DEFAULT_LOCAL_ONLY_GLOBS)
     records = []
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name in SKIP_DIRS or child.name == ".git":
+        if not child.is_dir() or _should_skip_dir(child.name):
             continue
-        for record in scan_tree(child):
-            if _is_local_only(record, local_only_globs):
-                records.append(_minimal_record(record))
-            else:
-                records.append(record)
+        records.extend(scan_tree(child, local_only_globs))
     return records
 
 

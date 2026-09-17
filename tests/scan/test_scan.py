@@ -177,6 +177,64 @@ class ScanFixtureTests(unittest.TestCase):
         expected = {str(self.repo1), str(self.worktree1), str(self.plain), str(self.local_only_dir)}
         self.assertEqual(top_level_paths, expected)
 
+    def test_local_only_folder_not_descended_into(self):
+        # a nested git repo INSIDE the local-only folder must produce no record at all: local-only
+        # means the scan never walks that folder's contents, not just that it minimizes what it finds.
+        nested_in_local = self.local_only_dir / "inner" / "nestedrepo"
+        _init_repo(nested_in_local)
+        (nested_in_local / "f.txt").write_text("x\n", encoding="utf-8")
+        _commit_all(nested_in_local, "inner initial")
+        try:
+            records = scan.scan_root(self.root)
+            by_path = {r["path"]: r for r in records}
+            self.assertNotIn(str(nested_in_local), by_path)
+            self.assertNotIn(str(self.local_only_dir / "inner"), by_path)
+            rec = by_path[str(self.local_only_dir)]
+            self.assertEqual(set(rec.keys()), {"path", "kind", "head_sha", "local_only"})
+        finally:
+            shutil.rmtree(self.local_only_dir / "inner", ignore_errors=True)
+
+    def test_build_underscore_and_dot_history_dirs_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = _init_repo(root / "repoB", remote="https://github.com/example/repoB.git")
+            skipped_a = repo / "build_w6100" / "_deps" / "somevendor"
+            skipped_a.mkdir(parents=True)
+            (skipped_a / "CMakeLists.txt").write_text("", encoding="utf-8")
+            skipped_b = repo / ".history" / "old"
+            skipped_b.mkdir(parents=True)
+            (skipped_b / "Cargo.toml").write_text("", encoding="utf-8")
+            _commit_all(repo, "init")
+
+            records = scan.scan_root(root)
+            by_path = {r["path"]: r for r in records}
+            self.assertNotIn(str(skipped_a), by_path)
+            self.assertNotIn(str(repo / "build_w6100"), by_path)
+            self.assertNotIn(str(skipped_b), by_path)
+            self.assertNotIn(str(repo / ".history"), by_path)
+            rec = by_path[str(repo)]
+            self.assertNotIn("cmake", rec["build_files"])
+            self.assertNotIn("cargo", rec["build_files"])
+
+    def test_git_status_does_not_touch_index(self):
+        # the BLOCKING review finding: plain `git status` opportunistically refreshes and rewrites
+        # .git/index. Use a fresh, dirty (untracked file present) repo -- not the shared class
+        # fixture, whose index has already been touched by setUpClass's own scan -- so this measures
+        # a clean before/after around exactly the calls scan.py makes.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo(pathlib.Path(tmp) / "repo")
+            (repo / "tracked.txt").write_text("a\n", encoding="utf-8")
+            _commit_all(repo, "init")
+            (repo / "untracked.txt").write_text("b\n", encoding="utf-8")  # keeps status non-empty
+
+            index_path = repo / ".git" / "index"
+            before = index_path.stat().st_mtime_ns
+            scan.git_info(repo)
+            after = index_path.stat().st_mtime_ns
+
+            self.assertEqual(before, after)
+            self.assertFalse((repo / ".git" / "index.lock").exists())
+
 
 class HostPathFromRemoteTests(unittest.TestCase):
 
