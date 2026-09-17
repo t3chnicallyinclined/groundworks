@@ -25,7 +25,7 @@ Every result is an envelope: `{"status", "tool", "data"}` on success, or `{"stat
 | `unit_search(query, usable_only=true, limit=20, view="data")` | read | Keyword search over located units (plain words, not a query language) | ok (possibly empty), invalid_argument, db_unreachable |
 | `claim_explain(claim_id, view="data")` | read | Status, support with grades, adverse material, critiques, and in words everything that blocks readiness | ok, not_found, db_unreachable |
 | `eliminated_claims(about=None, view="data")` | read | Claims investigated and found false, shown as `ELIMINATED CLAIM (false)`, and failed approaches | ok (possibly empty), db_unreachable |
-| `health(view="data")` | read | The instance audit, plus the server's identity and tool list. For the generic adapter: counts by status, the originals gap (units without a verified original), live-schema drift (missing / altered / unexpected definitions against what the config generates; needs a root connection, else `NOT_EXECUTED`), the promotion log verified with its `late` count (or `off`), and contradicting assertions (or `none declared`) | ok, db_unreachable |
+| `health(view="data", detail=true)` | read | First `engine_code` (is this server's engine code a verified, current commit, so are writes served; `STALE` means restart), then `summary` (every NOT_EXECUTED, false `ok` flag, drift number, non-zero count and list length, derived from the detail; `detail=false` returns only this), then the instance audit, plus the server's identity and tool list. For the generic adapter: counts by status, the originals gap (units without a verified original), live-schema drift (missing / altered / unexpected definitions against what the config generates; needs a root connection, else `NOT_EXECUTED`), the promotion log verified with its `late` count (or `off`), and contradicting assertions (or `none declared`) | ok, db_unreachable |
 | `critique_add(target, head, verdict, lens=None, text=None)` | write | One critique against a conclusion; returns what still blocks it | ok, not_found, rejected_by_gate, invalid_argument |
 | `critique_answer(critique, answer)` | write | The answer to a critique; returns what still blocks its target | ok, not_found, invalid_argument |
 | `panel_submit(run_dir, round, seat, text)` | write | Saves a seat's answer verbatim to `round1/` or `round2/<seat>.md`; logs `submissions.jsonl` | ok, rejected_by_gate, not_found, invalid_argument |
@@ -53,6 +53,7 @@ The five read tools take `view`: `data` (default) or one of the reading-layer mo
 | `XSCHOLAR_ROLE` | yes | For example `coordinator`, `critic`, `seat` |
 | `XSCHOLAR_LENS` | no | Critiques default to this lens; a different lens is refused |
 | `XSCHOLAR_PANEL_ROOT` | no | Panel run directories must be inside it |
+| `XSCHOLAR_ALLOW_UNVERIFIED` | no | `1` lets write tools run from engine code that is not a verified, current commit. Set only by a human; `health` then leads with a `WARNING` |
 
 Instance adapters may read their own variables (datastore URL, credentials). Missing or malformed identity stops the server before it serves (exit 2, `NOT STARTED`). Check a configuration without serving: `python xscholar/mcp/server.py --list-tools`.
 
@@ -83,6 +84,14 @@ A client shares one server process across the agents it runs, so every write fro
 1. Launch the session from the directory that holds `.mcp.json`, or put the entry where that client looks for its config.
 2. Confirm the tools are listed in the session (for example, that `health` is callable) **before** the first write.
 3. Call `health` once and read the result. A reply with the instance id you expect proves the server, the adapter and the datastore are all connected, not just the first of them.
+
+## Engine code guard
+
+At startup the server records the engine checkout's commit, branch and uncommitted changes (`code_state.py`, from git) and prints them to stderr. Before every write it reads them again. **Every write tool answers `rejected_by_gate`**, with `missing` naming the cure, unless the server started from branch `main` with no uncommitted changes (tracked files anywhere, untracked files under `xscholar/`) and the checkout is still that commit and branch with none now. A checkout that moved under a running server makes it `STALE`: restart it. An engine that is not a git checkout is `UNKNOWN` and refused. Reads are never refused.
+
+## Checking an adapter against this contract
+
+`python -m xscholar.mcp.conformance [--query WORDS] [--unit ID] [--claim ID] [--lens NAME]` loads the adapter named by `XSCHOLAR_ADAPTER` and calls every read method through the server's envelope, reporting each missing, empty or mistyped field and each wrong status by name. It is read-only by default and safe against a live graph. `--write --scratch NS/DB` also calls the write methods, and refuses unless `NS/DB` is the adapter's own database.
 
 ## Design rules
 

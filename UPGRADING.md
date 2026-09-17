@@ -356,6 +356,24 @@ Then read `consistency.report` (every row standing at a gated value its gate no 
 
 ---
 
+## 7m. The MCP server refuses writes from unverified engine code, and `health` changed shape
+
+From real use: a live MCP server served write tools from a work-in-progress branch someone had checked out in the engine checkout, and kept serving that code after the checkout was switched back (a process keeps what it imported).
+
+| What | Used to | Now | What to do |
+|---|---|---|---|
+| Any write tool (`critique_add`, `critique_answer`, `claim_propose`, `claim_confirm`, `claim_rule_out`, `claim_support`, `conclusion_mark_ready`, `panel_submit`) | Ran from whatever engine code the server loaded | **`rejected_by_gate`** unless the server started from branch `main` with no uncommitted changes, and the checkout is still that commit and branch with none now. `missing` names the cure | Launch the server from a clean `main` checkout of the engine. **If writes are refused with `STALE`, restart the server**: the checkout moved under it |
+| An engine that is not a git checkout (an installed copy, an archive) | Served writes | `engine_code.verdict` `UNKNOWN`, **writes refused** | Run from a checkout, or a human sets `XSCHOLAR_ALLOW_UNVERIFIED=1` in the launch entry; `health` then leads with a `WARNING` and every write result carries `engine_code_warning` |
+| `health` result | `{"instance", "server"}` | `{["WARNING"], "engine_code", "summary", "instance", "server"}`, in that order. `instance` is unchanged; `server` gains `write_tools` | A caller that reads `data["instance"]` keeps working. Read `data["summary"]["headline"]` and `attention` first |
+| `health(detail=false)` | (did not exist) | Same, with `instance` replaced by a one-line note; the summary is still derived from the full detail | Use it for the pre-write check |
+| `health` when the datastore is down | `db_unreachable` and nothing else | Also carries `engine_code` | Nothing |
+| Generic adapter `health` counts under a provisioned (record) credential | **Read 0**: an unfiltered `count() GROUP ALL` returns 0 to a record credential even when it can read the rows (SurrealDB 3.1.6, measured), and a table it cannot read also counted 0 | True counts; a count over a table the credential's role cannot read is the string `NOT_EXECUTED: ...`. **A count may now be a string** | Launch agent servers with `XSCHOLAR_ROLE` equal to the credential's access role (what `--provision` prints). Without it a zero count under a record credential reads `NOT_EXECUTED` |
+| `xscholar.mcp.server.build_server(adapter, provenance, panel_root)` | No guard | Takes `guard=`; without one it reads the real engine checkout | Tests that exercise writes pass `guard=code_state.CodeGuard(reader=lambda: code_state.git_state(<sha>, "main"))` |
+
+**Check your own adapter against the contract** (read-only, safe against a live graph): `python -m xscholar.mcp.conformance --query "<words a unit contains>" --claim <an id>`, with your launch environment set. It names every missing, empty or mistyped field and every wrong status. `--write --scratch NS/DB` adds the write methods, only against the database named. Measured on the engine's own generic adapter over the demo: it FAILS the contract docstring on `unit_search` (no `method`), `unit_get` (returns one unit, not `{locator, units}`), `eliminated_claims` (`claims`, not `eliminated_claims`; no `about` / `failed_approaches`) and `claim_explain` (`blocking_now`, not `blocking`; no `support` / `adverse` / `critiques` / `ready`; kind `fact`). Not changed in this release: it is recorded in `docs/DECISIONS.md` as open.
+
+---
+
 ## 8. What this release does NOT give you
 
 - **No container.** Deliberate, see step 2.

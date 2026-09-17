@@ -555,7 +555,9 @@ def _enforcement_or_why_not(db, inst):
 
 def health(db, inst):
     """Datastore-only numbers (no store walk): the gap, by name, next to the flattering count."""
-    units = _count(db, "SELECT count() AS n FROM unit GROUP ALL")
+    # `WHERE true`: without a WHERE, SurrealDB 3.1.6 answers count() GROUP ALL with 0 to a record credential that can
+    # read every row (measured 2026-09-16; root sees the true count), and an agent's health read a gap of 0
+    units = _count(db, "SELECT count() AS n FROM unit WHERE true GROUP ALL")
     verified = _count(db, "SELECT count() AS n FROM unit WHERE document != NONE AND %s GROUP ALL" % OK)
     without = _count(db, "SELECT count() AS n FROM unit WHERE document = NONE GROUP ALL")
     by_integrity = {r["integrity"]: r["n"] for r in db.sql(
@@ -572,7 +574,7 @@ def health(db, inst):
         drift.extend({"rule": rule["id"], "row": i} for i in ids)
     linked = _count(db, "SELECT count() AS n FROM unit WHERE document != NONE GROUP ALL")
     gap = units - verified
-    if linked and not _count(db, "SELECT count() AS n FROM document GROUP ALL"):
+    if linked and not _count(db, "SELECT count() AS n FROM document WHERE true GROUP ALL"):
         # units link originals this connection cannot read, so every one would look unverified: not a gap, a blind spot
         gap = "NOT_EXECUTED: %d unit(s) link an original, and this connection can read no document row" % linked
     return {"mode": mode(inst), "units": units, "units_with_verified_original": verified,
