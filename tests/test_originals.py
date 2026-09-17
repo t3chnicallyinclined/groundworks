@@ -190,6 +190,45 @@ class IntakeTests(Base):
             [plain["type"], plain["locator"], plain["text"]], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest())
 
 
+class LocatorInsideOriginalTests(Base):
+    """Intake refuses a unit whose locator points outside its own original. Measured 2026-09-16 before the
+    fix: line 99 and line 0 of a 2-line original, and character 5000 of an 89-character one, were all kept."""
+
+    DOC = [{"key": "app.log", "bytes": LOG, "media_type": "text/plain"}]
+
+    def intake(self, units, inst=None):
+        return intake.write_units(Adapter(self.DOC, units), self.dir, inst or instance(), store=self.store)
+
+    def test_a_line_past_the_last_line_or_before_the_first_is_refused_by_name(self):
+        for line in (3, 99, 0):
+            with self.subTest(line=line), self.assertRaises(intake.IntakeError) as err:
+                self.intake([unit(1, "pool exhausted"), unit(line, "retrying upstream call")])
+            self.assertIn("unit u%d" % line, str(err.exception))
+            self.assertIn("does not point into its own original", str(err.exception))
+        counts = self.intake([unit(1, "pool exhausted"), unit(2, "retrying upstream call")])
+        self.assertEqual((counts["locators_checked"], counts["locators_not_checkable"]), (2, {}))
+
+    def test_a_character_span_past_the_length_or_reversed_is_refused(self):
+        inst = instance(spans={"log_line": {"chars": ["line", "line"]}})
+        for offset in (len(LOG) + 1, 5000):
+            with self.subTest(offset=offset), self.assertRaises(intake.IntakeError):
+                self.intake([unit(offset, "pool exhausted")], inst)
+        self.assertEqual(self.intake([unit(len(LOG), "pool exhausted")], inst)["locators_checked"], 1)
+        reversed_span = unit(1, "pool exhausted")
+        reversed_span["locator"]["ts"] = 0
+        with self.assertRaises(intake.IntakeError):
+            self.intake([reversed_span], instance(spans={"log_line": {"lines": ["line", "ts"]}}))
+
+    def test_what_cannot_be_checked_is_counted_by_reason_never_as_checked(self):
+        docs = [{"key": "scan.png", "bytes": PNG, "media_type": "image/png"}]
+        counts = intake.write_units(Adapter(docs, [unit(99, "", document="scan.png")]), self.dir, instance(),
+                                    store=self.store)
+        self.assertEqual((counts["locators_checked"], counts["locators_not_checkable"]), (0, {"binary original": 1}))
+        counts = self.intake([unit(99, "pool exhausted")], instance(spans={"change": {"whole": True}}))
+        self.assertEqual(counts["locators_checked"], 0)
+        self.assertEqual(counts["locators_not_checkable"], {"no span declared for unit type log_line": 1})
+
+
 class ValidatorTests(Base):
     def run_labels(self, documents, units, labels, inst=None):
         inst = inst or instance()

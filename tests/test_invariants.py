@@ -93,6 +93,39 @@ class ChunkerInvariantTests(unittest.TestCase):
         props.assert_holds(self, props.check("chunk_exactly_once", prop, lambda rng: gen.gen_case(rng.getrandbits(32)),
                                              n=N, seed=SEED), min_checked=N // 2)
 
+    def test_a_chunk_by_value_spans_two_slices_only_when_it_alone_exceeds_the_chunk_size(self):
+        """Units sharing the chunk_by value stay in one slice wherever they sit in the input (2026-09-16:
+        only adjacent units were grouped, so an interleaved value was split without a word)."""
+        def prop(case):
+            inst = config.load(case["config"])
+            grouped = [u for u in inst.units if u.get("chunk_by")]
+            if not case["units"] or not grouped:
+                raise props.Discard()
+            with tempfile.TemporaryDirectory() as tmp:
+                work = pathlib.Path(tmp)
+                (work / "units.jsonl").write_text("".join(json.dumps(u) + "\n" for u in case["units"]),
+                                                  encoding="utf-8")
+                chunks = chunker.chunk(work / "units.jsonl", work, inst)
+            by_id = {u["id"]: u for u in case["units"]}
+            for utype in grouped:
+                field, size = utype["chunk_by"], utype["chunk_size"]
+                slices, members = collections.defaultdict(set), collections.Counter()
+                for chunk in chunks:
+                    if chunk["type"] != utype["name"]:
+                        continue
+                    for uid in chunk["units"]:
+                        value = str(by_id[uid]["locator"].get(field))
+                        slices[value].add(chunk["id"])
+                        members[value] += 1
+                for value, ids in slices.items():
+                    assert len(ids) == 1 or members[value] > size, (
+                        "%s value %r (%d units, chunk_size %d) is split across %s"
+                        % (utype["name"], value, members[value], size, sorted(ids)))
+
+        props.assert_holds(self, props.check("chunk_by_one_slice_per_value", prop,
+                                             lambda rng: gen.gen_case(rng.getrandbits(32)), n=N, seed=SEED),
+                           min_checked=N // 5)
+
 
 class ValidatorInvariantTests(unittest.TestCase):
     """Oracle labels pass; each single planted defect yields an error naming that unit (D13)."""

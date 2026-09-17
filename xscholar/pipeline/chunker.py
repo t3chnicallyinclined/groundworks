@@ -21,20 +21,24 @@ class ChunkError(Exception):
 def _pieces(rows, size, chunk_by=None):
     """Cut rows into slices of at most `size`. With `chunk_by` (a locator field), units that share a
     value of that field stay in one slice: a slice is closed only at a value boundary, unless one
-    value alone exceeds `size`, in which case that value is split at `size` (and reported as such)."""
+    value alone exceeds `size`, in which case that value is split at `size` (and reported as such).
+
+    Groups are formed over the WHOLE input, not over runs of adjacent rows: values appear in the order
+    their first unit appears, and units keep input order within their value. Until 2026-09-16 only
+    consecutive units were grouped, so d1, d2, d1 put day d1 in two slices without a word (measured).
+    Grouping rather than refusing unsorted input: adapters yield units in source order (per file, per
+    host), and a corpus interleaved across sources is ordinary, not an error; the promise is "one value,
+    one slice", and input order carries no meaning the labeller loses by grouping."""
     if not chunk_by:
         for start in range(0, len(rows), size):
             yield rows[start:start + size]
         return
-    groups = []
+    groups = {}                                    # insertion-ordered: first appearance of each value
     for row in rows:
         key = str((row.get("locator") or {}).get(chunk_by))
-        if groups and groups[-1][0] == key:
-            groups[-1][1].append(row)
-        else:
-            groups.append((key, [row]))
+        groups.setdefault(key, []).append(row)
     piece = []
-    for _, group in groups:
+    for group in groups.values():
         if len(group) > size:
             if piece:
                 yield piece

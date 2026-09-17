@@ -345,5 +345,67 @@ class EnforcementLogTests(PanelCase):
         self.assertEqual(panel.enforcement_counts(self.dir)["missing_stance"], 2)
 
 
+class CounterfactualContentTests(PanelCase):
+    """The agreement counterfactual is judged by what it says, not by the presence of an OBJECTION line.
+    Measured 2026-09-16 before the fix: `OBJECTION: vibes | x`, and a copy of the seat's own round-2 objection,
+    each satisfied the check and the unanimous panel tallied."""
+
+    def setUp(self):
+        super().setUp()
+        self.ready_for_round2({"seat_alpha": "affirm", "seat_beta": "affirm", "seat_gamma": "affirm"})
+        self.good_r2("seat_alpha", conf="high")
+        self.good_r2("seat_beta", conf="low", objections=[("record", "the commute testimony stands alone")])
+        self.good_r2("seat_gamma", conf="med")
+        self.put("round2", "seat_gamma", "Alternative.\nOBJECTION: remedy | remittal may fit better here\n",
+                 ".counterfactual.md")
+
+    def owed_beta(self):
+        return ("agreement_check", "seat_beta") in self.conditions()
+
+    def test_an_objection_outside_the_panel_categories_does_not_satisfy_it(self):
+        self.put("round2", "seat_beta", "Alternative.\nOBJECTION: vibes | the record may not carry it at all\n",
+                 ".counterfactual.md")
+        self.assertTrue(self.owed_beta())
+        with self.assertRaises(panel.PanelError):
+            panel.tally(self.dir)
+        self.put("round2", "seat_beta", "Alternative.\nOBJECTION: record | the record may not carry it at all\n",
+                 ".counterfactual.md")
+        self.assertFalse(self.owed_beta())
+        self.assertEqual(panel.tally(self.dir)["verdict"], "affirm")
+
+    def test_restating_the_seats_own_round2_objection_or_a_token_line_does_not_satisfy_it(self):
+        for text in ("OBJECTION: record | the commute testimony stands alone\n", "OBJECTION: record | x\n"):
+            with self.subTest(text=text):
+                self.put("round2", "seat_beta", "Alternative.\n" + text, ".counterfactual.md")
+                self.assertTrue(self.owed_beta())
+        self.put("round2", "seat_beta", "Alternative.\nOBJECTION: remedy | a remittal would cure the gap cheaply\n",
+                 ".counterfactual.md")
+        self.assertFalse(self.owed_beta())
+
+
+class CategoriesRequiredTests(PanelCase):
+    """A panel without objection_categories is refused. Measured 2026-09-16 before the fix: without them any
+    category passed, and three near-identical objections ("the same point al/be/ga") met the dissent quota."""
+
+    def test_a_panel_without_categories_or_with_fewer_than_the_quota_is_not_executed(self):
+        for bad in ({"objection_categories": None}, {"objection_categories": []},
+                    {"objection_categories": ["record", "record"]}, {"objection_categories": ["record", ""]},
+                    {"objection_categories": ["record"]}, {"objection_categories": "record"}):
+            with self.subTest(bad=bad):
+                self.write_panel(**bad)
+                with self.assertRaises(panel.PanelError) as err:
+                    panel.lock(self.dir)
+                self.assertEqual(err.exception.code, 2)
+                self.assertIn("objection_categories", str(err.exception))
+        self.write_panel()
+        panel.lock(self.dir)
+
+    def test_dissent_is_counted_by_category_never_by_wording(self):
+        self.ready_for_round2()
+        for sid in CATS:
+            self.good_r2(sid, objections=[("record", "the same point %s" % sid)])
+        self.assertEqual([c for c, _ in self.conditions() if c == "dissent_quota"], ["dissent_quota"])
+
+
 if __name__ == "__main__":
     unittest.main()

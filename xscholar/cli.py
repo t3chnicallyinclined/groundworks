@@ -59,6 +59,9 @@ def _skills(args):
 
 DEMO = ("instances/demo-incident/instance.yaml", "instances/demo-incident/skills")
 DEMO_DIR = "instances/demo-incident"
+# The docs the drift check's docs arm (check c) reads. Until 2026-09-16 none was passed, so that arm had never
+# run outside its unit tests; its first real run failed the generated skill on the read tool's name.
+DEMO_DOCS = ("instances/demo-incident/README.md", "instances/demo-incident/skills/red-team/SKILL.md")
 
 
 def _stream(cmd):
@@ -105,12 +108,13 @@ def _test(args):
                       "%d test(s) skipped -- read the NOT EXECUTED lines above; pass --require-db "
                       "to make that a failure" % n_skipped))
 
-    rc_lic, _ = _stream([sys.executable, str(ROOT / "scripts" / "license_check.py")])
-    steps.append(("license check", rc_lic == 0, "clean" if rc_lic == 0 else "problems found"))
+    # its last line counts the files and imports it scanned; a tree it scanned nothing in exits 2, a failure here
+    rc_lic, out_lic = _stream([sys.executable, str(ROOT / "scripts" / "license_check.py")])
+    steps.append(("license check", rc_lic == 0, _last_line(out_lic)))
 
-    # the generated role skills must still match the config they came from (ROADMAP C8)
-    rc_drift = _module("xscholar.drift", list(DEMO))
-    steps.append(("drift check", rc_drift == 0, "clean" if rc_drift == 0 else "drift found"))
+    # the generated role skills, and the docs that describe the demo, must still match its config (ROADMAP C8)
+    rc_drift, out_drift = _stream([sys.executable, "-m", "xscholar.drift"] + list(DEMO) + list(DEMO_DOCS))
+    steps.append(("drift check", rc_drift == 0, _last_line(out_drift)))
 
     # The mutation registry (docs/TESTING.md s.2), without running a break: every anchor still matches
     # exactly once and outside comments, every named test still exists above its file's __main__ block,

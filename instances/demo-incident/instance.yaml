@@ -164,6 +164,9 @@ roles:
       weighted_seat: null
 
 evaluator:
+  # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository
+  # root and not the working directory (xscholar/config.py regression_file_path); an absolute path is taken as it
+  # is. The pinned id list beside it (<name>.ids.json) resolves the same way.
   regression_file: evals/known_errors.json
   gate_probes: generated
   label_agreement:
