@@ -1,0 +1,9 @@
+{
+  "name": "xsp",
+  "displayName": "xsp (placeholder name)",
+  "version": "0.0.1",
+  "description": "Skeleton proving skills + SessionStart hook + MCP server load via --plugin-dir. No real logic yet. Rename: change 'xsp' here, in .mcp.json's server key, and any doc reference (ticket 2026-09-17-product-plugin-skeleton).",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}
