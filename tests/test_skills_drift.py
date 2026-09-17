@@ -64,6 +64,10 @@ class Base(unittest.TestCase):
         import json
         path = self.tmp / name
         path.write_text(json.dumps(data), encoding="utf-8")
+        # a config loaded from a file must have its declared regression file beside it (xscholar/config.py)
+        regression = self.tmp / data["evaluator"]["regression_file"]
+        regression.parent.mkdir(parents=True, exist_ok=True)
+        regression.write_text('{"format": "xscholar.known_errors/1", "entries": []}', encoding="utf-8")
         return path
 
     def build(self, data=None, sub="skills"):
@@ -427,6 +431,67 @@ class DemoTreeTests(unittest.TestCase):
         expected = {role["skill"] for role in inst.roles}
         found = {p.parent.name for p in DEMO_SKILLS.glob("*/SKILL.md")}
         self.assertEqual(expected, found)
+
+
+class DemoDocsArmTests(Base):
+    """Check (c) runs on real documents in `xscholar test` and CI, and it can fail there. Before 2026-09-16 both
+    passed no doc, so the arm never ran; its first run on the generated skill failed on `lens_view`."""
+
+    def test_the_test_command_passes_the_demo_docs_and_a_drifted_doc_fails_the_run(self):
+        from unittest import mock
+        from xscholar import cli
+        calls, state = [], {"drift": False}
+
+        def stream(cmd):
+            calls.append([str(c) for c in cmd])
+            if "xscholar.drift" in calls[-1] and state["drift"]:
+                return 1, "DRIFT README.md: lens_x\ndrift check FAILED\n"
+            return 0, "Ran 5 tests in 0.1s\n\nOK\n"
+
+        with mock.patch.object(cli, "_stream", side_effect=stream), \
+                mock.patch.object(cli, "_module", return_value=0), mock.patch("builtins.print"):
+            self.assertEqual(cli._test([]), 0)
+            drift_calls = [c for c in calls if "xscholar.drift" in c]
+            self.assertEqual(len(drift_calls), 1, calls)
+            docs = [a for a in drift_calls[0] if a.endswith(".md")]
+            self.assertIn("instances/demo-incident/README.md", docs)
+            for doc in docs:
+                self.assertTrue((ROOT / doc).is_file(), doc)
+            state["drift"] = True
+            self.assertEqual(cli._test([]), 1)
+
+    def test_ci_passes_the_demo_readme_to_the_drift_check(self):
+        raw = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        runs = [ln.split("#", 1)[0].strip() for ln in raw.splitlines()]
+        drift_runs = [ln for ln in runs if "xscholar.drift" in ln]
+        self.assertTrue(drift_runs, "CI does not run the drift check")
+        self.assertTrue(all("instances/demo-incident/README.md" in ln for ln in drift_runs), drift_runs)
+
+    def test_the_real_demo_docs_are_clean_and_a_renamed_lens_in_them_is_drift(self):
+        from xscholar import cli
+        docs = [ROOT / d for d in cli.DEMO_DOCS]
+        report = drift.check(DEMO, DEMO_SKILLS, docs)
+        self.assertTrue(report.ok, str(report))
+        self.assertEqual(report.checked["docs"], len(docs))
+        self.assertGreaterEqual(report.checked["doc_mentions"], 6)
+        renamed = self.tmp / "README.md"
+        renamed.write_text((ROOT / cli.DEMO_DOCS[0]).read_text(encoding="utf-8").replace("lens_security", "lens_secops"),
+                           encoding="utf-8", newline="\n")
+        report = drift.check(DEMO, DEMO_SKILLS, [renamed])
+        self.assertEqual({item for _f, item in self.drifted(report)}, {"lens_secops"}, str(report))
+
+    def test_engine_identifiers_are_not_lens_mentions_and_a_doc_naming_none_is_drift(self):
+        path, out = self.build()
+        doc = self.tmp / "TOOLS.md"
+        doc.write_text("Read with `lens_view`; access roles may be lens_bound. The seat is seat_security.\n",
+                       encoding="utf-8", newline="\n")
+        report = drift.check(path, out, [doc])
+        self.assertTrue(report.ok, str(report))
+        self.assertEqual(report.checked["doc_mentions"], 1)
+        doc.write_text("Nothing about any lens here.\n", encoding="utf-8", newline="\n")
+        report = drift.check(path, out, [doc])
+        self.assertFalse(report.ok)
+        self.assertIn("checked nothing", report.items()[0]["why"])
 
 
 if __name__ == "__main__":

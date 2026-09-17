@@ -4,8 +4,11 @@
 SYNTHETIC DATA. No real service, host, person or customer. The corpus is generated here so the
 demo runs anywhere with nothing to download.
 
-Contract (docs/MODULES.md): `Adapter().units()` yields units with exact locators. Nothing here
-interprets anything; the labels come later, from agents (or from labeler_stub.py in the demo).
+Contract (docs/MODULES.md): `Adapter().documents()` yields the originals -- the exported log file, the
+commit record, the metrics export -- as exact bytes; `Adapter().units()` yields units with exact locators
+INTO those originals (a log line's `line` is its line number in app.log). Intake stores every original in
+the instance's content-addressed store, so any unit can be traced back to the bytes it was cut from.
+Nothing here interprets anything; the labels come later, from agents (or from labeler_stub.py in the demo).
 """
 import random
 
@@ -50,22 +53,54 @@ def _lines():
     return rows
 
 
+CHANGE_TEXT = "config: HTTP client retry max_attempts 3 -> 8; backoff unchanged"
+RETRIEVED = "2026-03-04T12:30:00Z"
+
+
+def app_log():
+    """The exported log file, one line per entry: line N of this file is unit log_N."""
+    return "".join("%s %s %s %s\n" % (ts, host, level, text) for host, _, ts, level, text, _ in _lines()).encode("utf-8")
+
+
+def commit_record():
+    return ("commit a1b2c3d\nrepo: checkout\nauthor-role: deployer\ndate: %s\n\n    %s\n"
+            % (_ts(31, 5), CHANGE_TEXT)).encode("utf-8")
+
+
+def metrics_csv():
+    return ("ts,series,value,max,baseline\n%s,db.pool.in_use,50,50,\n%s,db.query.p99_ms,41,,38\n"
+            % (_ts(40), _ts(40))).encode("utf-8")
+
+
 class Adapter:
+    def documents(self):
+        yield {"key": "app.log", "bytes": app_log(), "media_type": "text/plain", "capture": "raw",
+               "source_uri": "synthetic://demo-incident/checkout/app.log", "retrieved_at": RETRIEVED,
+               "original_name": "app.log"}
+        yield {"key": "commit:a1b2c3d", "bytes": commit_record(), "media_type": "text/plain", "capture": "raw",
+               "source_uri": "synthetic://demo-incident/checkout/commit/a1b2c3d", "retrieved_at": RETRIEVED,
+               "original_name": "commit-a1b2c3d.txt"}
+        yield {"key": "metrics.csv", "bytes": metrics_csv(), "media_type": "text/csv", "capture": "raw",
+               "source_uri": "synthetic://demo-incident/metrics/export-1140.csv", "retrieved_at": RETRIEVED,
+               "original_name": "metrics-export-1140.csv"}
+
     def units(self):
         for host, line, ts, level, text, status in _lines():
             yield {"id": "log_%04d" % line, "type": "log_line",
                    "locator": {"host": host, "file": "app.log", "line": line, "ts": ts},
-                   "text": text, "status": status, "grade": "original_log",
+                   "text": text, "status": status, "grade": "original_log", "document": "app.log",
                    "meta": {"level": level, "service": "checkout"}}
         yield {"id": "chg_0001", "type": "change",
                "locator": {"repo": "checkout", "commit": "a1b2c3d", "ts": _ts(31, 5)},
-               "text": "config: HTTP client retry max_attempts 3 -> 8; backoff unchanged",
+               "text": CHANGE_TEXT, "document": "commit:a1b2c3d",
                "status": "in_window", "grade": "original_log", "meta": {"author_role": "deployer"}}
+        # A metric unit is a rendering of a row of the export, not a quotation of it: its original is the
+        # export, and no span is declared for its type, so the validator counts its quotes as not checkable.
         yield {"id": "met_0001", "type": "metric_point",
-               "locator": {"series": "db.pool.in_use", "ts": _ts(40)},
+               "locator": {"series": "db.pool.in_use", "ts": _ts(40)}, "document": "metrics.csv",
                "text": "db.pool.in_use = 50 (max 50) at 11:40", "status": "in_window", "grade": "exported_metric"}
         yield {"id": "met_0002", "type": "metric_point",
-               "locator": {"series": "db.query.p99_ms", "ts": _ts(40)},
+               "locator": {"series": "db.query.p99_ms", "ts": _ts(40)}, "document": "metrics.csv",
                "text": "db.query.p99_ms = 41 at 11:40 (baseline 38)", "status": "in_window", "grade": "exported_metric"}
         # something the adapter excludes and logs: a duplicate export of the same log
         yield {"id": "log_dup_0001", "type": "log_line", "exclude": "duplicate export of app.log lines 1-40"}

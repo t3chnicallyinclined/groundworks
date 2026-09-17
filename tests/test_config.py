@@ -111,6 +111,10 @@ class DemoInstanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "instance.json"
             path.write_text(json.dumps(MINIMAL), encoding="utf-8")
+            # a config loaded from a file must have its declared regression file beside it
+            (pathlib.Path(tmp) / "evals").mkdir()
+            (pathlib.Path(tmp) / "evals" / "known_errors.json").write_text(
+                '{"format": "xscholar.known_errors/1", "entries": []}', encoding="utf-8")
             self.assertEqual(config.load(path).id, "toy")
 
 
@@ -241,6 +245,19 @@ class VerdictDefinitionTests(unittest.TestCase):
 
     def base(self):
         return json.loads(json.dumps(config.load(DEMO).data))
+
+    def test_a_new_instance_starts_from_required_originals_owned_by_a_human(self):
+        """instances/_template is what a new instance is copied from. Its default is the strict one: a unit with no
+        original is refused at intake, and whether that bar holds is the owner's, not a role's."""
+        from xscholar import originals
+        inst = config.load(DEMO.parents[1] / "_template" / "instance.yaml")
+        self.assertEqual(originals.mode(inst), "required")
+        self.assertIn("originals", inst.data["human_owned"])
+        data = json.loads(json.dumps(inst.data))
+        data["human_owned"].remove("originals")
+        with self.assertRaises(config.ConfigError) as raised:
+            config.validate(data)
+        self.assertIn("originals", str(raised.exception))
 
     def test_the_demo_and_the_template_both_define_every_verdict(self):
         for path in (DEMO, DEMO.parents[1] / "_template" / "instance.yaml"):

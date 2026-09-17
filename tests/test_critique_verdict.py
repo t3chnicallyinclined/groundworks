@@ -34,7 +34,7 @@ from xscholar import surreal_bin  # noqa: E402
 from xscholar import temporal  # noqa: E402
 from xscholar.pipeline import write  # noqa: E402
 
-PORT = 8029
+PORT = surreal_bin.free_port()   # OS-assigned (was 8029): suites no longer share a registry of fixed ports
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()
@@ -166,6 +166,58 @@ class VerdictTests(unittest.TestCase):
         w.answer(cid, "the reply")
         released, message = self.conn.try_sql("UPDATE conclusion:c1 SET ready = true")
         self.assertTrue(released, "downgraded on the record and answered, and still blocked: %s" % message)
+
+    # ---- ROADMAP V2-22(f): answering the same critique again ------------------------------------------
+    # critique() became an UPSERT on a deterministic id (7733fd5); answer() stayed a CREATE of
+    # `answer:ans_<critique>`, so a second answer to the same critique hard-errored with "record already exists":
+    # a demo re-run, or revising an answer after the head's verdict is downgraded -- the flow 7733fd5 opened.
+
+    def answers(self, cid):
+        return self.conn.sql("SELECT record::id(id) AS id, text, author FROM answer; "
+                             "SELECT VALUE record::id(id) FROM answers WHERE out = %s" % cid)
+
+    def test_answering_the_same_critique_again_revises_the_answer_in_the_same_and_a_later_session(self):
+        w = self.writer()
+        cid = w.critique("c1", "the head", "damaging", text="t")
+        first = w.answer(cid, "the first reply")
+        second = w.answer(cid, "the revised reply")                                   # same session
+        third = self.writer(agent="a2").answer(cid, "a later session's reply")        # a fresh Keyer
+        self.assertEqual(first, second)
+        self.assertEqual(first, third)
+        rows, edges = self.answers(cid)
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["text"], "a later session's reply")
+        self.assertEqual(len(edges), 1, "a repeat added a second answers edge: %s" % edges)
+        self.assertTrue(self.critiques()[0]["answered"])
+
+    def test_an_answer_revision_is_on_the_record_and_its_history_cannot_be_rewritten(self):
+        w = self.writer()
+        cid = w.critique("c1", "the head", "damaging", text="t")
+        aid = w.answer(cid, "the first reply")
+        self.writer(agent="a2").answer(cid, "the revised reply")
+        w.answer(cid, "the revised reply")          # the same text again: nothing to record
+        history = self.conn.sql("SELECT VALUE text_history FROM %s" % aid)[0][0]
+        self.assertEqual(len(history), 1, "a revision must never be a silent edit, and a repeat is not one: %s" % history)
+        self.assertEqual((history[0]["text_before"], history[0]["text_after"]), ("the first reply", "the revised reply"))
+        self.assertIn("a2", history[0]["by"])
+        ok, _ = self.conn.try_sql("UPDATE %s SET text_history = []" % aid)
+        self.assertFalse(ok, "answer history is append-only")
+
+    def test_a_downgraded_then_revised_answer_releases_the_conclusion(self):
+        """The flow end to end: fatal head answered, downgraded to damaging, answer revised, conclusion ready."""
+        self.conn.sql("CREATE fact:f1 SET statement='s', status='proposed'")
+        self.conn.sql("RELATE fact:f1->supports:s1->conclusion:c1")
+        usable, utype = self.inst.usable_statuses()[0], self.inst.unit_names()[0]
+        self.conn.sql("CREATE unit:u1 SET type='%s', text='t', locator={}, status='%s', grade='%s', hash='h1'"
+                      % (utype, usable, self.inst.confirming_grades()[1]))
+        self.conn.sql("RELATE unit:u1->preserves:p1->conclusion:c1 SET how='alert'")
+        w = self.writer()
+        cid = w.critique("c1", "the head", "fatal", text="t")
+        w.answer(cid, "a reply to the fatal head")
+        w.critique("c1", "the head", "damaging", text="t")
+        w.answer(cid, "the reply, revised for the downgraded head")
+        released, message = self.conn.try_sql("UPDATE conclusion:c1 SET ready = true")
+        self.assertTrue(released, "downgraded, answer revised, and still blocked: %s" % message)
 
 
 if __name__ == "__main__":   # last, so running this file directly runs every class in it

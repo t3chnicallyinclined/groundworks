@@ -12,6 +12,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"      # nightly: the FULL mutation registry (docs/TESTING.md s.2)
+  workflow_dispatch:          # on demand: the same
 
 defaults:
   run:
@@ -22,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the mutation step diffs this change against its base commit
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -37,12 +42,29 @@ jobs:
           command -v surreal || { echo "NOT EXECUTED: surreal is not on PATH after the install step"; exit 1; }
           surreal version
 
-      - name: Every suite, the license check, the drift check and the privacy scan
-        # --require-db turns a skipped suite into a failure instead of "OK (skipped=N)".
+      - name: Every suite, the license check, the drift check, the mutation lint, the evaluator and the privacy scan
+        # --require-db turns a skipped suite, or an evaluator that could not reach a server, into a failure
+        # instead of "OK (skipped=N)".
         run: python -m xscholar.cli test --require-db
 
+      - name: The registered breaks for the files this change touched
+        # Each break is applied to a COPY of the tree and its named test must go red. Only the breaks whose
+        # file this change touched run here; the full registry runs nightly and on demand (job below).
+        # A push with no usable base (a new branch, a force push) runs the whole registry rather than none.
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "${BASE:-}" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            python -m tests.harness.mutate run --from HEAD --changed-since "$BASE"
+          else
+            echo "no usable base commit for this event; running every registered break"
+            python -m tests.harness.mutate run --from HEAD
+          fi
+
       - name: Role skills still match the config they came from
-        run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills
+        # the docs arm (check c) needs a doc to read: without one it checks nothing and still exits 0
+        run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills instances/demo-incident/README.md instances/demo-incident/skills/red-team/SKILL.md
 
       - name: Gates are no weaker than the committed baseline
         run: |
@@ -61,3 +83,24 @@ jobs:
 
       - name: Demo instance end to end
         run: python scripts/run_instance.py instances/demo-incident --memory 8025
+
+  mutations:
+    # The full registry: every guard's break, database suites included, serially. Too slow for every push
+    # (each database break starts its own server), so it runs nightly and on demand. Exit 1 on any
+    # SURVIVED / INVALID / STILLBORN break, 2 on NOT EXECUTED: both fail the job.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install SurrealDB
+        run: |
+          curl -sSf https://install.surrealdb.com | sh
+          echo "$HOME/.surrealdb" >> "$GITHUB_PATH"
+      - name: SurrealDB really is installed
+        run: |
+          command -v surreal || { echo "NOT EXECUTED: surreal is not on PATH after the install step"; exit 1; }
+      - name: Every registered break
+        run: python -m tests.harness.mutate run --from HEAD

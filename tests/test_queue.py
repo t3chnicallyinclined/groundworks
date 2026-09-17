@@ -25,9 +25,7 @@ from xscholar import surreal_bin  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()
-PORT = 8033
-
-
+PORT = surreal_bin.free_port()   # OS-assigned (was 8033): suites no longer share a registry of fixed ports
 class ParsingTests(unittest.TestCase):
     """Pure Python, on records copied from SHOW CHANGES output on 3.1.6."""
 
@@ -161,7 +159,8 @@ class ServerTests(unittest.TestCase):
         tables = conn.sql("INFO FOR DB")[0]["tables"]
         for table in ("unit", "fact", "conclusion", "critique"):
             self.assertIn("SCHEMAFULL CHANGEFEED 1w INCLUDE ORIGINAL", tables[table], tables[table])
-        self.assertIn("TYPE RELATION IN fact OUT unit SCHEMALESS CHANGEFEED 1w INCLUDE ORIGINAL", tables["cites"])
+        # ENFORCED since the gates lane (B-011): a link to a missing record is refused
+        self.assertIn("TYPE RELATION IN fact OUT unit ENFORCED SCHEMALESS CHANGEFEED 1w INCLUDE ORIGINAL", tables["cites"])
         self.assertIn("ASSERT", conn.sql("INFO FOR TABLE fact")[0]["fields"]["status"])
         report = gates.run_probes(self.inst, conn)
         self.assertEqual(report["misbehaved"], 0, report)

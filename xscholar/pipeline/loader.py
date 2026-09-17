@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """loader.py -- units and passing labels into the datastore. Bulk loads never create claims.
 
-  units  -> unit rows (upsert by id)
+  documents -> one document row per original the units name (xscholar/originals.py), integrity as the
+            store finds it at load; loaded before the units, whose `document` link must resolve
+  units  -> unit rows (upsert by id), each with its `document` link or NONE
   labels -> label rows at grade 'agent', plus bears_on edges to their targets (conclusion rows,
             one per vocabulary target, created if missing, never marked ready here)
 
@@ -45,6 +47,8 @@ if __package__ in (None, ""):  # run as a plain script: make the repo root impor
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
 from xscholar.pipeline.intake import read_units  # noqa: E402
 from xscholar.patterns import edge_ids  # noqa: E402
+from xscholar import originals  # noqa: E402
+from xscholar import store as storemod  # noqa: E402
 
 BATCH = 50
 PLAIN_ID = re.compile(r"^[A-Za-z0-9_]+$")
@@ -168,7 +172,8 @@ def _unit_statements(db, units, token, accept_source, counts):
         for kind in REPORTED:
             counts[kind + "_rows"].extend(plan[kind])
         sets = ["type=%s" % q(unit["type"]), "text=%s" % q(unit["text"]), "locator=%s" % q(unit["locator"]),
-                "hash=%s" % q(unit["hash"]), "meta=%s" % q(unit.get("meta") or {})]
+                "hash=%s" % q(unit["hash"]), "meta=%s" % q(unit.get("meta") or {}),
+                "document=%s" % (originals.doc_rid(unit["document"]) if unit.get("document") else "NONE")]
         sets += ["%s=%s" % (f, q(v)) for f, v in plan["set"].items()]
         for f, hold in plan["corrected"].items():
             sets.append("corrected.%s=%s" % (f, "NONE" if hold is None else
@@ -190,9 +195,54 @@ def _unit_statements(db, units, token, accept_source, counts):
     return statements
 
 
-def load(units_path, labels_dir, db, inst, scope="load", accept_source=()):
+def _documents_statements(units, documents_path, store, inst, counts):
+    """UPSERT one document row per original the units name, its integrity as the store finds it NOW.
+
+    A unit naming an original that documents.jsonl does not describe is a LoadError before anything is
+    written: the datastore would refuse the unit's link anyway (record::exists), but by then half a batch
+    could be in. An original that is missing or corrupt in the store is loaded with that integrity, counted
+    and named: its units are in the graph and readable, and no gated promotion can rest on them."""
+    named = {u["document"] for u in units if u.get("document")}
+    counts["units_with_document"] = sum(1 for u in units if u.get("document"))
+    counts["units_without_document"] = len(units) - counts["units_with_document"]
+    path = pathlib.Path(documents_path)
+    manifest = {}
+    if path.is_file():
+        manifest = {row["id"]: row for row in read_units(path)}
+    missing = sorted(named - set(manifest))
+    if missing:
+        raise LoadError("%d unit original(s) are not described in %s (first: %s); re-run intake so units and "
+                        "documents.jsonl come from the same run" % (len(missing), path, ", ".join(missing[:5])))
+    statements = []
+    for key in sorted(named):
+        row = manifest[key]
+        if row["capture"] == "none":
+            integrity = "not_captured"
+        else:
+            if store is None:
+                try:
+                    store = storemod.for_instance(inst)
+                except storemod.StoreError as exc:
+                    raise LoadError("units name originals, but %s" % exc) from exc
+            integrity = store.verify(row["sha256"])
+        if integrity != "ok":
+            counts["originals_not_ok"].append({"id": key, "name": row.get("original_name"), "integrity": integrity})
+        statements.append(
+            "UPSERT %s SET sha256=%s, media_type=%s, bytes=%s, capture=%s, source_uri=%s, retrieved_at=%s, "
+            "original_name=%s, integrity=%s, verified_at=time::now()"
+            % (originals.doc_rid(key), q(row.get("sha256")), q(row["media_type"]), q(row.get("bytes")),
+               q(row["capture"]), q(row.get("source_uri")),
+               "<datetime> %s" % q(row["retrieved_at"]) if row.get("retrieved_at") else "NONE",
+               q(row.get("original_name")), q(integrity)))
+    return statements
+
+
+def load(units_path, labels_dir, db, inst, scope="load", accept_source=(), store=None, documents_path=None):
+    """`documents_path` defaults to documents.jsonl beside `units_path` (where intake writes it); `store`
+    defaults to the instance's own. Neither is touched when no unit names an original."""
     token = edge_ids.run_token()
-    counts = {"units": 0, "labels": 0, "targets": 0, "edges": 0, "swept": 0, "run": token}
+    counts = {"units": 0, "labels": 0, "targets": 0, "edges": 0, "swept": 0, "run": token, "documents": 0,
+              "originals_not_ok": []}
     for kind, key in REPORTED.items():
         counts[key], counts[kind + "_rows"] = 0, []
     keyer = edge_ids.Keyer()
@@ -200,7 +250,13 @@ def load(units_path, labels_dir, db, inst, scope="load", accept_source=()):
     try:
         # 1. units: held fields reconciled against corrections, never silently overwritten
         db.script(provenance_surql())
-        statements = _unit_statements(db, read_units(units_path), token, accept_source, counts)
+        db.script(originals.ensure_schema_surql())
+        units = read_units(units_path)
+        # 0. originals first: a unit's link is refused unless its document row exists
+        doc_statements = _documents_statements(
+            units, documents_path or pathlib.Path(units_path).parent / "documents.jsonl", store, inst, counts)
+        _run_batches(db, doc_statements, counts, "documents")
+        statements = _unit_statements(db, units, token, accept_source, counts)
         for kind, key in REPORTED.items():
             counts[key] = len(counts[kind + "_rows"])
         for start in range(0, len(statements), BATCH):

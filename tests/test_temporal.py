@@ -6,6 +6,7 @@ proof that removing the no-op guard makes a same-status re-write append an entry
     python -m unittest discover -s tests -p "test_temporal.py" -v
 """
 import datetime as _dt
+import json
 import pathlib
 import subprocess
 import time
@@ -25,7 +26,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
 from xscholar import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
-PORT = 8031
+PORT = surreal_bin.free_port()   # OS-assigned (was 8031): suites no longer share a registry of fixed ports
 UTC = _dt.timezone.utc
 
 
@@ -302,6 +303,49 @@ class ServerTests(unittest.TestCase):
         self.assertIsNotNone(conn.sql("SELECT VALUE learned_at FROM conclusion:old")[0][0])
         conn.sql("UPDATE fact:old SET status='inferred'")
         self.assertEqual(len(self.history(conn, "fact", "old")), 1)
+
+    # ---- the probes themselves must be able to fail (2026-09-16) ----------------------------------------
+
+    def test_a_history_write_that_fails_for_any_other_reason_fails_the_append_only_probes(self):
+        """Measured before the fix: with the rewrite statement misspelt, `history entry cannot be rewritten`
+        passed (it asserted only that the statement failed), and so would a looser message check, because a
+        parse error quotes the statement and so names status_history too."""
+        conn = self.fresh("probe_typo")
+        real = conn.try_sql
+
+        def misspelt(statement):
+            if "SET status_history" in statement:
+                statement = statement.replace("UPDATE fact:", "UPDTE fact:")
+            return real(statement)
+
+        conn.try_sql = misspelt
+        report = temporal.run_probes(self.inst, conn)
+        verdicts = {c["check"]: c["pass"] for c in report["checks"]}
+        self.assertIs(verdicts["history entry cannot be rewritten"], False, report)
+        self.assertIs(verdicts["history cannot be emptied"], False, report)
+        conn.try_sql = real
+        report = temporal.run_probes(self.inst, conn)
+        self.assertEqual(report["failed"], 0, report)
+
+    def test_a_config_with_no_ready_gate_says_the_gated_flip_was_not_probed(self):
+        data = json.loads(json.dumps(self.inst.data))
+        data["gates"] = [g for g in data["gates"] if not (g["table"] == "conclusion" and g["field"] == "ready")]
+        inst = config.load(data)
+        conn = self.fresh_for(inst, "no_ready_gate")
+        report = temporal.run_probes(inst, conn)
+        self.assertEqual(report["failed"], 0, report)
+        self.assertEqual(len(report["not_executed"]), 1, report)
+        self.assertIn("conclusion.ready", report["not_executed"][0])
+        self.assertTrue(any("UNGATED" in c["check"] for c in report["checks"]), report["checks"])
+        gated = temporal.run_probes(self.inst, self.fresh("with_ready_gate"))
+        self.assertEqual((gated["failed"], gated["not_executed"]), (0, []), gated)
+
+    def fresh_for(self, inst, name):
+        conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT, ns="t", db=name)
+        conn.script(gates.schema_surql(inst))
+        conn.script(gates.gate_surql(inst))
+        conn.script(temporal.temporal_surql(inst))
+        return conn
 
 
 if __name__ == "__main__":

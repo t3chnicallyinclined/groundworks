@@ -184,6 +184,7 @@
         ],
         "wrong_evidence": [],
         "setup_error": "",
+        "blind_probe": "not needed on this database: access is not applied, so every writer is a system user that reads every row",
         "accept_error": "",
         "constrained": false,
         "constraints": [],
@@ -234,6 +235,23 @@
     "independence_refused_ok": 0,
     "independence_untested": 0,
     "misbehaved": 0,
+    "independence_rules": 0,
+    "independence_failed": 0,
+    "unpassable_roles": [
+      {
+        "role": "loader",
+        "rule": "root_cause_needs_support_and_attack",
+        "table": "conclusion",
+        "field": "ready",
+        "value": true,
+        "unreadable": [
+          "attacks",
+          "critique",
+          "fact",
+          "supports"
+        ]
+      }
+    ],
     "unique": [
       {
         "table": "authority",

@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover
 HERE = pathlib.Path(__file__).resolve().parent
 DEMO = HERE.parent / "instances" / "demo-incident" / "instance.yaml"
 SURREAL = surreal_bin.find()
-PORT = 8026
+PORT = surreal_bin.free_port()   # OS-assigned (was 8026): suites no longer share a registry of fixed ports
 PROV = contract.Provenance("agent_7", "reader", None)
 SEAT = contract.Provenance("seat_2", "seat", "lens_skeptic")
 

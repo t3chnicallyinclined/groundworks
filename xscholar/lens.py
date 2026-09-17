@@ -282,7 +282,8 @@ def lens_view(db, inst, name, limit=50):
         head.update({"source": entry["source"], "filed": entry["filed"], "nodes": entry["nodes"]})
         return head
     view = view_name(lens)
-    total = db.sql("SELECT count() AS n FROM %s GROUP ALL" % view, expect=1)[0]
+    # `WHERE true`: an unfiltered count() GROUP ALL reads 0 to a record credential (SurrealDB 3.1.6, measured 2026-09-16)
+    total = db.sql("SELECT count() AS n FROM %s WHERE true GROUP ALL" % view, expect=1)[0]
     drift = db.sql("SELECT count() AS n FROM %s WHERE NOT (%s) GROUP ALL" % (view, standard_where(inst, lens)), expect=1)[0]
     rows = db.sql("SELECT label, unit, unit.text AS words, unit.locator AS locator, unit.status AS status, "
                   "unit.grade AS grade, tier, dir, issues, targets, role FROM %s ORDER BY tier DESC LIMIT %d"

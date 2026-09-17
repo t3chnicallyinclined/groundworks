@@ -4,31 +4,35 @@
     python scripts/run_instance.py instances/demo-incident --memory 8025
     python scripts/run_instance.py INSTANCE_DIR --url http://127.0.0.1:8002/sql --ns NS --db DB
 
-Steps: config -> schema and gates -> probes (both ways) -> intake -> chunk -> label -> validate
-       -> load -> lens views and framework filings (matrix per node, row count per lens)
-       -> access (per-agent PERMISSIONS, applied as root) -> the adapter's scenario through the typed
-       write surface, each step under a provisioned agent credential, never root -> health.
+Steps: config -> schema, gates, temporal, assertions -> probes (both ways) -> access (per-agent PERMISSIONS,
+       applied as root) -> the probes again under access, so the blind-caller probe actually runs -> intake (originals into the instance's store)
+       -> chunk -> label -> validate (quotes against unit text and against the original at the locator)
+       -> load (document rows, then units linked to them) -> originals: enforcement applied and probed both
+       ways, the store and graph verified -> lens views and framework filings (matrix per node, row count per lens)
+       -> the adapter's scenario through the typed write surface, each step under a provisioned agent
+       credential, never root -> the live schema compared with the config -> health.
 Any failed check stops the run with a non-zero exit. Outputs go to INSTANCE_DIR/out/.
 """
 import argparse
 import importlib.util
 import json
 import pathlib
-import subprocess
 import sys
-import time
-import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
 from xscholar import access  # noqa: E402
+from xscholar import assertions  # noqa: E402
 from xscholar import config  # noqa: E402
 from xscholar import consistency  # noqa: E402
 from xscholar import db as dbmod  # noqa: E402
 from xscholar import gates  # noqa: E402
 from xscholar import lens as lensmod  # noqa: E402
+from xscholar import live_schema  # noqa: E402
+from xscholar import originals  # noqa: E402
+from xscholar import store as storemod  # noqa: E402
 from xscholar import temporal  # noqa: E402
 from xscholar.pipeline import intake  # noqa: E402
 from xscholar.pipeline import chunker  # noqa: E402
@@ -47,42 +51,13 @@ def load_module(path):
     return module
 
 
-SETTLE = 0.5   # how long our own server is given to die before its health answer is believed
-
-
 def start_memory(port):
-    if not SURREAL:
-        raise SystemExit("NOT EXECUTED: " + surreal_bin.MISSING)
-    # Check the port BEFORE starting. Without this, our own `surreal start` fails to bind, the health
-    # poll below succeeds against whatever is already there, and the whole demo runs -- and reports
-    # success -- against a stranger's database, leaving their server running at the end. Measured:
-    # another session held 8025, the port this script's own README example uses.
-    if surreal_bin.port_in_use(port):
-        raise SystemExit(surreal_bin.occupied(port))
-    proc = subprocess.Popen([str(SURREAL), "start", "--bind", "127.0.0.1:%d" % port, "--user", "root",
-                             "--pass", "root", "memory"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(80):
-        if proc.poll() is not None:
-            raise SystemExit("NOT EXECUTED: throwaway SurrealDB on %d exited at once (exit %s); "
-                             "something else may hold the port" % (port, proc.returncode))
-        try:
-            urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=1)
-        except Exception:
-            time.sleep(0.25)
-            continue
-        # Something answered. That is not the same as OUR server answering: the port check above is
-        # a moment in time, and a stranger who bound the port just after it leaves our own process
-        # failing to bind and dying a beat later -- by which time we have already been answered, and
-        # would run the whole demo against their database. Measured: the health poll returned while
-        # poll() was still None. Let our process settle and ask again before trusting the answer.
-        time.sleep(SETTLE)
-        if proc.poll() is not None:
-            raise SystemExit("NOT EXECUTED: something is answering on %d but our own SurrealDB exited "
-                             "(exit %s); the port was taken between the check and the start. Stop that "
-                             "process by PID (never by name) or choose another port." % (port, proc.returncode))
-        return proc
-    proc.kill()
-    raise SystemExit("NOT EXECUTED: throwaway SurrealDB did not start on %d" % port)
+    """A throwaway in-memory SurrealDB this run owns, or SystemExit saying NOT EXECUTED. The guards live in
+    xscholar/surreal_bin.py (one implementation, shared with the evaluator); `SURREAL` is read at call time."""
+    try:
+        return surreal_bin.start_memory(port, binary=SURREAL)
+    except surreal_bin.NotStarted as exc:
+        raise SystemExit(str(exc))
 
 
 def say(step, detail=""):
@@ -142,6 +117,16 @@ def scenario_problems(lines, tally, conn):
     return problems
 
 
+def health_consistency(report):
+    """consistency.report() split into the two things it holds, for the health line: (rows whose own gate no longer
+    holds, structured assertions that contradict their target). They are different findings with different cures,
+    so an assertion count is never printed under DRIFT_gate_no_longer_holds."""
+    drift = {k: v for k, v in report.items() if k not in ("rules", "assertions")}
+    if "assertions" not in report:
+        return drift, "none declared"
+    return drift, {k: (len(v) if isinstance(v, list) else v) for k, v in report["assertions"].items()}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("instance_dir")
@@ -179,11 +164,17 @@ def main(argv=None):
         conn.script(gates.gate_surql(inst))
         conn.script(temporal.temporal_surql(inst))
         say("temporal", "valid_from/valid_to, learned_at and an append-only status_history on fact; "
-                        "learned_at and ready_history on conclusion; verdict_history on critique; "
-                        "status_history and grade_history on unit")
-        report = gates.run_probes(inst, conn)
-        say("gates", "%d rule(s): %d rejected as required, %d accepted as required, %d misbehaved"
-            % (len(report["rules"]), report["rejected_ok"], report["accepted_ok"], report["misbehaved"]))
+                        "learned_at and ready_history on conclusion; verdict_history on critique; text_history on "
+                        "answer; status_history and grade_history on unit")
+        conn.script(assertions.surql(inst))
+        declared_assertions = assertions.declared(inst)
+        say("assertions", "%d assertion edge(s) declared%s" % (len(declared_assertions), "".join(
+            "; %s: %s asserts %s of %s, %s" % (edge, spec["from"], ", ".join(spec["fields"]), spec["to"],
+                                               "ENFORCED" if spec["enforce"] else "report only")
+            for edge, spec in declared_assertions.items()) or " (nothing for the contradiction check to count)"))
+        report, where = gates.run_probes_where_they_can_run(inst, conn)
+        say("gates", "%d rule(s): %d rejected as required, %d accepted as required, %d misbehaved%s"
+            % (len(report["rules"]), report["rejected_ok"], report["accepted_ok"], report["misbehaved"], where))
         if report["misbehaved"]:
             print(json.dumps(report, indent=2))
             return 1
@@ -192,13 +183,39 @@ def main(argv=None):
             applied = conn.script(access.access_surql(inst))
             say("access", "%d role(s) -> PERMISSIONS on %d table(s), applied as root (%d statements)"
                 % (len(inst.access_roles()), len(access.tables(inst)), len(applied)))
+            # The probes above ran before any record credential existed, so every writer was a system user that
+            # reads every row, and the blind-caller probe could only report "not needed on this database". Run
+            # them again now that PERMISSIONS are in force: a caller who may write a gated table but cannot read
+            # what its forbids clauses count is provisioned and must be refused (ROADMAP V2-21).
+            report, where = gates.run_probes_where_they_can_run(inst, conn)
+            say("gates", "again under access: %d rule(s): %d rejected as required, %d accepted as required, "
+                         "%d misbehaved%s" % (len(report["rules"]), report["rejected_ok"], report["accepted_ok"],
+                                              report["misbehaved"], where))
+            for line in gates.blind_lines(report):
+                print("   " + line)
+            if report["misbehaved"]:
+                print(json.dumps(report, indent=2))
+                return 1
         else:
             say("access", "no access: section; every scenario step will run as root (nothing separates identities)")
 
         adapter = load_module(inst_dir / "adapter.py")
-        counts = intake.write_units(adapter.Adapter(), out, inst)
+        store = storemod.for_instance(inst)
+        counts = intake.write_units(adapter.Adapter(), out, inst, store=store)
         say("intake", "%d units kept (%s), %d excluded and logged"
             % (counts["kept"], ", ".join("%s %d" % kv for kv in counts["by_type"].items()), counts["excluded"]))
+        mode = originals.mode(inst)
+        say("originals", "mode %s; %d original(s) in %s (%d stored once for several keys, %d never captured); "
+                         "%d unit(s) linked to a retrievable original, %d WITHOUT one%s"
+            % (mode if mode != originals.UNDECLARED else "NOT DECLARED (treated as transition)", counts["documents"],
+               store.describe(), counts["documents_deduplicated"], counts["documents_not_captured"],
+               counts["units_with_original"], counts["units_without_original"],
+               "; first: %s (all in %s)" % (", ".join(counts["without_original"]), out / "without_original.jsonl")
+               if counts["units_without_original"] else ""))
+        say("locators", "%d unit locator(s) cut out of their own original; %d not checkable%s"
+            % (counts["locators_checked"], sum(counts["locators_not_checkable"].values()),
+               " (%s)" % "; ".join("%s: %d" % kv for kv in sorted(counts["locators_not_checkable"].items()))
+               if counts["locators_not_checkable"] else ""))
 
         chunks = chunker.chunk(out / "units.jsonl", out, inst)
         say("chunk", "%d slice(s): %s" % (len(chunks), ", ".join("%s=%d" % (c["id"], c["count"]) for c in chunks)))
@@ -217,6 +234,7 @@ def main(argv=None):
             source = "stand-in labeler, not agents"
         failures = 0
         tiers = {}
+        against, not_checkable = 0, {}
         for chunk in chunks:
             slice_path = out / "slices" / (chunk["id"] + ".jsonl")
             labels_path = labels_dir / (chunk["id"] + ".jsonl")
@@ -227,8 +245,11 @@ def main(argv=None):
                 print("   missing labels for %s at %s" % (chunk["id"], labels_path))
                 return 1
             labels = intake.read_units(labels_path)
-            rep = validator.validate(slice_path, labels_path, inst)
+            rep = validator.validate(slice_path, labels_path, inst, store=store)
             failures += len(rep["errors"])
+            against += rep["original_checked"]
+            for reason, n in rep["original_not_checkable"].items():
+                not_checkable[reason] = not_checkable.get(reason, 0) + n
             for l in labels:
                 tiers[l["tier"]] = tiers.get(l["tier"], 0) + 1
             for err in rep["errors"]:
@@ -236,12 +257,44 @@ def main(argv=None):
         say("label", "%d labels by tier %s (%s)" % (sum(tiers.values()), dict(sorted(tiers.items())), source))
         say("validate", "%s" % ("PASS: every unit once, vocabulary ok, quotes verbatim" if not failures
                                  else "FAIL: %d error(s)" % failures))
+        say("", "%d quote(s) also found verbatim in the original at the unit's locator; not checkable against "
+                "an original: %s" % (against, ", ".join("%d %s" % (n, r) for r, n in sorted(not_checkable.items()))
+                                     or "none"))
         if failures:
             return 1
 
-        counts = loader.load(out / "units.jsonl", labels_dir, conn, inst, accept_source=accept_source)
-        say("load", "%d units, %d labels (grade agent), %d targets, %d bears_on edges, %d swept"
-            % (counts["units"], counts["labels"], counts["targets"], counts["edges"], counts["swept"]))
+        counts = loader.load(out / "units.jsonl", labels_dir, conn, inst, accept_source=accept_source, store=store)
+        say("load", "%d document(s), %d units (%d linked to a document), %d labels (grade agent), %d targets, "
+                    "%d bears_on edges, %d swept"
+            % (counts["documents"], counts["units"], counts["units_with_document"], counts["labels"],
+               counts["targets"], counts["edges"], counts["swept"]))
+        counts["assertions"] = assertions.after_load(conn, inst, counts)
+        say("", "assertions after the load: %d counted, %d contradiction(s) standing, %d caused by this load, "
+                "%d held-value conflict(s) annotated"
+            % (counts["assertions"]["counted"], len(counts["assertions"]["standing"]),
+               len(counts["assertions"]["caused_by_this_load"]), len(counts["assertions"]["conflicts"])))
+        for row in counts["assertions"]["caused_by_this_load"]:
+            print("   CONTRADICTION caused by this load: %s says %s.%s = %r, it holds %r (changed last: %s)"
+                  % (row.get("edge"), row["target"], row["field"], row["asserted"], row["current"], row["changed_last"]))
+        for row in counts["originals_not_ok"]:
+            print("   ORIGINAL %s %s (%s): loaded, and no gated promotion can rest on it"
+                  % (row["integrity"].upper(), row["id"], row["name"]))
+
+        conn.script(originals.enforcement_surql(inst))
+        oprobes = originals.run_probes(inst, conn)
+        say("originals", "enforcement on %d rule(s): %d refused as required (no original; original not verified), "
+                         "%d accepted as required (verified; verified again), %d misbehaved"
+            % (len(oprobes["rules"]), oprobes["rejected_ok"], oprobes["accepted_ok"], oprobes["misbehaved"]))
+        if oprobes["misbehaved"] or not oprobes["rules"]:
+            print(json.dumps(oprobes, indent=2))
+            return 1
+        verified = originals.verify(conn, store, inst)
+        for line in originals.verify_lines(verified):
+            print(line)
+        (out / "originals_verify.json").write_text(json.dumps(verified, indent=2, default=str), encoding="utf-8")
+        if not verified["ok"]:
+            print("ORIGINALS FAILED: see the lines above")
+            return 1
         say("corrections", "%d unit field(s) followed a source change, %d held against the source, "
                            "%d CONFLICT(S) with the source, %d accepted from source by name"
             % (counts["followed"], counts["held"], counts["conflicts"], counts["accepted"]))
@@ -293,6 +346,38 @@ def main(argv=None):
             print("SCENARIO NOT EXECUTED: %s" % problem)
             return 1
 
+        cited = conn.sql("SELECT VALUE record::id(out) FROM cites WHERE in.status = 'confirmed' ORDER BY out LIMIT 1")[0]
+        if cited:
+            found = originals.original_for_unit(conn, cited[0], store)
+            doc = found["document"]
+            say("original", "unit %s, cited by a confirmed fact -> %s (%s, %s, %d bytes, sha256 %s..., re-hashed on read)"
+                % (found["unit"], doc["original_name"], doc["media_type"], doc["capture"], len(found["bytes"]),
+                   doc["sha256"][:16]))
+            unit_type = conn.sql("SELECT VALUE type FROM unit WHERE record::id(id) = %s" % json.dumps(found["unit"]))[0][0]
+            spec = originals.spans(inst).get(unit_type)
+            if spec and originals.is_text(doc, found["bytes"]):
+                print("   at %s: %s" % (json.dumps(found["locator"]),
+                                         " ".join(originals.span_text(found["bytes"], found["locator"], spec).split())[:160]))
+
+        # The live schema, after every apply step (schema, gates, temporal, assertions, access, the loader's
+        # provenance, originals enforcement, lenses): each definition the database holds, compared by name with
+        # what the config generates, rendered by this same server. A drift here is a generator that disagrees
+        # with what was applied, or a hand edit; either way the run is not what the config says.
+        components = live_schema.deployed_components(inst)
+        try:
+            drift = live_schema.check(inst, conn, components=components)
+        except live_schema.LiveSchemaError as exc:
+            print("LIVE SCHEMA NOT EXECUTED: %s" % exc)
+            return 1
+        for line in drift.lines():
+            print("   " + line)
+        say("live schema", "%d definition(s) expected, %d live, %d drift row(s) (%s)"
+            % (drift.expected_count, drift.live_count, len(drift.rows), ", ".join(components)))
+        if not drift.ok:
+            print("LIVE SCHEMA DRIFT: the database does not hold what the config generates")
+            return 1
+
+        consistency_report = consistency.report(conn, inst)
         health = {
             "units": conn.count("unit"), "labels": conn.count("label"),
             "facts": conn.sql("SELECT status, count() AS n FROM fact GROUP BY status")[0],
@@ -301,8 +386,11 @@ def main(argv=None):
             "temporal": temporal.history_count(conn, "fact"),   # facts whose status has changed since learned
             # every gate rule, not only the one DRIFT_confirmed_without_valid_cite hard-codes: rows at a gated
             # value whose own gate no longer holds, next to how many rows stand at a gated value at all
-            "DRIFT_gate_no_longer_holds": {k: v for k, v in consistency.report(conn, inst).items() if k != "rules"},
+            "DRIFT_gate_no_longer_holds": health_consistency(consistency_report)[0],
+            "assertions": health_consistency(consistency_report)[1],
+            "live_schema_drift": len(drift.rows),
             "load_conflicts": counts["conflicts"],
+            "originals": originals.health(conn, inst),
             "DRIFT_confirmed_without_valid_cite": conn.sql(
                 "SELECT count() AS n FROM fact WHERE status = 'confirmed' AND "
                 "count(SELECT VALUE id FROM $parent->cites->unit WHERE grade IN %s AND status IN %s) = 0 GROUP ALL"
@@ -313,8 +401,7 @@ def main(argv=None):
         say("done", "outputs in %s" % out)
         return 0
     finally:
-        if proc:
-            proc.terminate()
+        surreal_bin.stop(proc)
 
 
 if __name__ == "__main__":

@@ -29,8 +29,7 @@ from test_pipeline import Adapter, CORPUS  # noqa: E402
 DEMO = HERE.parent / "instances" / "demo-incident" / "instance.yaml"
 from xscholar import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
-PORT = 8024
-
+PORT = surreal_bin.free_port()   # OS-assigned (was 8024): suites no longer share a registry of fixed ports
 LABELS = [
     {"id": "log_001", "tier": 3, "dir": "for_goal", "issues": ["saturation"], "targets": ["rc_pool_exhaustion"],
      "role": "error", "reason": "Direct evidence.", "quote": "pool exhausted"},

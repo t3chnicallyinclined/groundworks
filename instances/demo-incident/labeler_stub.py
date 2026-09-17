@@ -26,5 +26,8 @@ def label(unit):
     for phrase, tier, direction, issues, targets, role in RULES:
         if phrase in text:
             return {"id": unit["id"], "tier": tier, "dir": direction, "issues": issues, "targets": targets,
-                    "role": role, "reason": "matched rule %r" % phrase, "quote": phrase}
+                    "role": role, "reason": "matched rule %r" % phrase,
+                    # a phrase under three words is quoted with its whole line: the validator refuses a short
+                    # fragment of a longer unit (labels.quote_min_words), which anchors no reason
+                    "quote": phrase if len(phrase.split()) >= 3 else text}
     return {"id": unit["id"], "tier": 0, "dir": None, "issues": [], "targets": [], "role": "note"}

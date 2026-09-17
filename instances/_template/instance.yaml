@@ -148,6 +148,9 @@ roles:
 
 # 8. EVALUATOR. HUMAN-OWNED (entries may be added, never removed or loosened).
 evaluator:
+  # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository
+  # root and not the working directory (xscholar/config.py regression_file_path); an absolute path is taken as it
+  # is. The pinned id list beside it (<name>.ids.json) resolves the same way.
   regression_file: evals/known_errors.json
   gate_probes: generated
   label_agreement: {sample_chunks: 2, adjudicate: true}
@@ -157,10 +160,10 @@ evaluator:
 # lens_bound = writes lens-carrying rows only under its own lens. Only loader writes label. DELETE is root-only.
 access:
   roles:
-    reader:      {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
+    reader:      {read: [unit, document, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
     seat:        {read: [unit, label, fact, conclusion, critique, answer], write: [critique, attacks, answer, answers], lens_bound: true}
-    loader:      {read: [unit, label, conclusion], write: [unit, label, bears_on, conclusion]}
-    coordinator: {read: [unit, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}
+    loader:      {read: [unit, document, label, conclusion], write: [unit, document, label, bears_on, conclusion]}
+    coordinator: {read: [unit, document, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}
 
 privacy:
   deny_list: "~/.xscholar/denylist.txt"     # outside the repo; the scan fails closed without it
@@ -177,4 +180,20 @@ verdicts:
   damaging: "A real problem that blocks readiness until answered on the record. Anything curable by evidence or a rewrite belongs here."
   survivable: "Recorded so the next reader sees it was considered; it does not block."
 
-human_owned: [gates, fidelity, status, evaluator, privacy, verdicts]
+# ORIGINALS. HUMAN-OWNED. Every unit links to the exact bytes it was extracted from, kept in this instance's
+# content-addressed store (xscholar/originals.py, xscholar/store.py). The adapter yields them from
+# `documents()` and names one per unit with `document: <key>` (docs/MODULES.md, adapter `documents()`).
+#   required    intake refuses a unit with no original, by name. The default for a new instance.
+#   transition  a unit with no original is kept and named in health; for an existing corpus being migrated.
+# In both modes nothing without a VERIFIED original can support a gated promotion. Run
+# `python -m xscholar.originals verify instance.yaml` after any restore or import.
+# spans: how a unit's locator cuts its span out of a text original, so a label's quote is checked against the
+# original as well as the extracted text: line: <field> | lines: [from, to] | chars: [start, end] | whole: true.
+# A unit type with no span (a scanned page has no text span) is counted as not checkable, never as checked.
+originals:
+  mode: required
+  store: originals
+  spans:
+    page_line: {line: line}
+
+human_owned: [gates, fidelity, status, evaluator, privacy, verdicts, originals]

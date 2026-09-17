@@ -27,9 +27,12 @@ Rules the generated permissions hold, whatever the config says:
   * DELETE is NONE for every role: deletes go through the archive, by a human, as root;
   * the gates (ASSERTs from gates.py) stay in force for every credential: permissions never loosen a gate.
 
-Apply order: schema, gates, then access. Re-running the schema after access resets no permissions
-(gates.py uses DEFINE FIELD, and ALTER TABLE ... PERMISSIONS is separate), but re-run access anyway
-after any schema change so a new table is never left with default permissions.
+Apply order: schema, gates, then access. Until 2026-09-16 re-running the schema after access reset permissions: its
+DEFINE TABLE OVERWRITE put every table back to PERMISSIONS NONE (measured on 3.1.6), locking every agent out
+without a word. The schema now re-shapes each table with ALTER TABLE, which keeps PERMISSIONS and CHANGEFEED
+(measured: a re-apply leaves every table definition identical; gates.table_definition). Re-running access after a
+config change is still what brings permissions in line with the config; `python -m xscholar.live_schema` shows
+every table whose permissions are not what the config generates.
 Standard library only.
 """
 import argparse
@@ -113,6 +116,7 @@ def access_surql(inst):
         "DEFINE FIELD OVERWRITE pass ON %s TYPE string;" % AGENT_TABLE,
         "DEFINE FIELD OVERWRITE enabled ON %s TYPE bool DEFAULT true;" % AGENT_TABLE,
         "DEFINE FIELD OVERWRITE created ON %s TYPE datetime DEFAULT time::now();" % AGENT_TABLE,
+    ] + provisioning_fields_surql() + [
         "DEFINE ACCESS OVERWRITE %s ON DATABASE TYPE RECORD SIGNIN ("
         " SELECT * FROM %s WHERE id = type::record('%s', $id) AND enabled = true AND crypto::argon2::compare(pass, $pass)"
         " ) DURATION FOR TOKEN %s, FOR SESSION %s;" % (ACCESS_NAME, AGENT_TABLE, AGENT_TABLE, TOKEN_DURATION, TOKEN_DURATION),
@@ -131,9 +135,44 @@ def access_surql(inst):
 
 # ---- credentials ---------------------------------------------------------------------------------
 
-def provision(db_root, inst, agent_id, role, lens=None, password=None):
-    """Create (or reset) one agent record as root. Returns the launch environment for that agent."""
+PRINCIPAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+
+
+def provisioning_fields_surql():
+    """What the agent row records about who the credential stands for and how it came to exist.
+
+    principal        the person or independent process this credential acts for, declared by whoever
+                     provisions it. Independence `between: principal` compares these. The datastore cannot
+                     know what is behind a credential; it records what the provisioner declared.
+    provisioned_at   the datastore clock when the credential was last provisioned (a reset counts: it is a
+                     new credential as far as anyone holding the old password is concerned)
+    provisioned_by   who ran the provisioning, as the provisioning process declared it (root has no identity
+                     for the datastore to record). A claim, not a proof."""
+    return ["DEFINE FIELD OVERWRITE principal ON %s TYPE option<string>;" % AGENT_TABLE,
+            "DEFINE FIELD OVERWRITE provisioned_at ON %s TYPE option<datetime>;" % AGENT_TABLE,
+            "DEFINE FIELD OVERWRITE provisioned_by ON %s TYPE option<string>;" % AGENT_TABLE]
+
+
+def _provisioner():
+    try:
+        import getpass
+        return "declared: %s" % getpass.getuser()
+    except Exception:            # no user name available (a service account without one): say so
+        return "declared: unknown"
+
+
+def provision(db_root, inst, agent_id, role, lens=None, password=None, principal=None, provisioned_by=None):
+    """Create (or reset) one agent record as root. Returns the launch environment for that agent.
+
+    `principal` is required when a gate rule compares principals: a credential with none could never be
+    shown independent of anyone, and every row it wrote would be unpromotable under that rule."""
     roles = _roles(inst)
+    if principal is not None and not PRINCIPAL_ID.match(str(principal)):
+        raise AccessError("principal %r is not a plain identifier (letters, digits, _ . -)" % principal)
+    if principal is None and inst.principal_rules():
+        raise AccessError("instance %s has rule(s) %s that compare principals: provision %s with a principal (the "
+                          "person or independent process it acts for)"
+                          % (inst.id, ", ".join(r["id"] for r in inst.principal_rules()), agent_id))
     if not AGENT_ID.match(str(agent_id or "")):
         raise AccessError("agent id %r is not a plain identifier (letters, digits, _ . : -)" % agent_id)
     if role not in roles:
@@ -143,8 +182,10 @@ def provision(db_root, inst, agent_id, role, lens=None, password=None):
     if lens and not LENS_ID.match(lens):
         raise AccessError("lens %r is not a plain identifier" % lens)
     password = password or secrets.token_urlsafe(24)
-    rows = db_root.sql("UPSERT %s SET role=%s, lens=%s, pass=crypto::argon2::generate(%s), enabled=true"
-                       % (rid(AGENT_TABLE, agent_id), q(role), q(lens), q(password)), expect=1)[0]
+    rows = db_root.sql("UPSERT %s SET role=%s, lens=%s, pass=crypto::argon2::generate(%s), enabled=true, "
+                       "principal=%s, provisioned_at=time::now(), provisioned_by=%s"
+                       % (rid(AGENT_TABLE, agent_id), q(role), q(lens), q(password), q(principal),
+                          q(provisioned_by or _provisioner())), expect=1)[0]
     if not rows:
         raise AccessError("provisioning %s wrote nothing (is this connection root, and is access applied?)" % agent_id)
     creds = {"XSCHOLAR_AGENT_ID": agent_id, "XSCHOLAR_ROLE": role,
@@ -152,7 +193,23 @@ def provision(db_root, inst, agent_id, role, lens=None, password=None):
              "XSCHOLAR_DB_ACCESS": ACCESS_NAME, "XSCHOLAR_DB_USER": agent_id, "XSCHOLAR_DB_PASS": password}
     if lens:
         creds["XSCHOLAR_LENS"] = lens
+    if principal:
+        creds["XSCHOLAR_PRINCIPAL"] = principal
     return creds
+
+
+def credentials_report(db_root):
+    """Every credential with its principal and provisioning record, and what stands out, never blocking:
+    principals holding more than one credential, and credentials with no declared principal. Read as root."""
+    rows = db_root.sql("SELECT record::id(id) AS agent, role, lens, principal, enabled, provisioned_at, provisioned_by "
+                       "FROM %s ORDER BY provisioned_at;" % AGENT_TABLE, expect=1)[0] or []
+    by_principal = {}
+    for row in rows:
+        if row.get("principal"):
+            by_principal.setdefault(row["principal"], []).append(row["agent"])
+    return {"credentials": rows,
+            "shared_principals": {p: ids for p, ids in by_principal.items() if len(ids) > 1},
+            "undeclared": [row["agent"] for row in rows if not row.get("principal")]}
 
 
 def revoke(db_root, agent_id):
@@ -183,7 +240,10 @@ def main(argv=None):
     parser.add_argument("--provision", nargs=2, metavar=("AGENT_ID", "ROLE"), help="create a credential; prints env lines")
     parser.add_argument("--lens")
     parser.add_argument("--password", help="use this password instead of a generated one")
+    parser.add_argument("--principal", help="the person or independent process this credential acts for")
+    parser.add_argument("--provisioned-by", help="who is provisioning (recorded as declared, not proven)")
     parser.add_argument("--revoke", metavar="AGENT_ID")
+    parser.add_argument("--credentials", action="store_true", help="list credentials, principals and provisioning")
     parser.add_argument("--url", default="http://127.0.0.1:8002/sql")
     parser.add_argument("--ns")
     parser.add_argument("--db")
@@ -194,19 +254,31 @@ def main(argv=None):
     if args.emit:
         print(access_surql(inst))
         return 0
-    if not (args.apply or args.provision or args.revoke):
-        parser.error("choose --emit, --apply, --provision or --revoke")
+    if not (args.apply or args.provision or args.revoke or args.credentials):
+        parser.error("choose --emit, --apply, --provision, --revoke or --credentials")
     root = dbmod.Db(url=args.url, ns=args.ns or inst.id, db=args.db or inst.id, user=args.root_user, password=args.root_pass)
     root.ping()
     if args.apply:
         report = root.script(access_surql(inst))
         print("ACCESS applied: %d statement(s), %d role(s), %d table(s)" % (len(report), len(inst.access_roles()), len(tables(inst))))
     if args.provision:
-        creds = provision(root, inst, args.provision[0], args.provision[1], lens=args.lens, password=args.password)
+        creds = provision(root, inst, args.provision[0], args.provision[1], lens=args.lens, password=args.password,
+                          principal=args.principal, provisioned_by=args.provisioned_by)
         for key, value in creds.items():
             print("%s=%s" % (key, value))
     if args.revoke:
         print("REVOKED %s" % revoke(root, args.revoke))
+    if args.credentials:
+        report = credentials_report(root)
+        for row in report["credentials"]:
+            print("%s role=%s principal=%s enabled=%s provisioned_at=%s provisioned_by=%s"
+                  % (row["agent"], row["role"], row.get("principal") or "-", row.get("enabled"),
+                     row.get("provisioned_at") or "-", row.get("provisioned_by") or "-"))
+        for principal, ids in sorted(report["shared_principals"].items()):
+            print("NOTE principal %s holds %d credentials (%s): independence between principals treats them as one"
+                  % (principal, len(ids), ", ".join(ids)))
+        if report["undeclared"]:
+            print("NOTE %d credential(s) declare no principal: %s" % (len(report["undeclared"]), ", ".join(report["undeclared"])))
     return 0
 
 

@@ -60,6 +60,36 @@ class AgreementTests(unittest.TestCase):
         self.assertEqual(fields, {("u1", "tier"), ("u2", "dir"), ("u5", "issues")})
         self.assertLess(r["fields"]["tier"]["kappa"], 1.0)
 
+    def test_every_unit_with_a_disagreement_is_adjudicated_once_most_consequential_first(self):
+        """Reported from another instance: the list was the relevance splits plus the first 20 other units, and
+        tier splits that did not cross tier 2 were never listed. 90 units, 51 needing a human, printed 27."""
+        a, b = [], []
+        for i in range(30):                      # 30 units disagreeing only on direction: more than the old cap
+            a.append({"id": "d%02d" % i, "tier": 1, "dir": "neutral", "issues": [], "targets": [], "role": "note"})
+            b.append(dict(a[-1], dir="mixed"))
+        a.append({"id": "t3v2", "tier": 3, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
+        b.append(dict(a[-1], tier=2))            # load-bearing or merely relevant: never listed before
+        a.append({"id": "t0v1", "tier": 0, "dir": None, "issues": [], "targets": [], "role": "note"})
+        b.append(dict(a[-1], tier=1))
+        a.append({"id": "split", "tier": 3, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
+        b.append(dict(a[-1], tier=0, dir="neutral"))   # a relevance split that also disagrees on direction
+        a.append({"id": "flip", "tier": 2, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
+        b.append(dict(a[-1], dir="against_goal"))   # both relevant, opposite readings: ahead of a 0-vs-1 split
+        a.append({"id": "same", "tier": 2, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
+        b.append(dict(a[-1]))
+        r = agreement.compare(self.write("a.jsonl", a), self.write("b.jsonl", b))
+        self.assertEqual(r["units_with_any_disagreement"], 34)
+        self.assertEqual(len(r["adjudicate"]), 34, "every unit with a disagreement is listed")
+        self.assertEqual(len(set(r["adjudicate"])), len(r["adjudicate"]), "no unit twice")
+        self.assertEqual(r["adjudicate"][:4], ["split", "t3v2", "flip", "t0v1"])
+        self.assertNotIn("same", r["adjudicate"])
+        self.assertEqual(r["adjudicate_groups"], {"relevance_split": 1, "within_relevant_tiers": 1,
+                                                  "direction_on_relevant": 1, "other_tier": 1, "other_fields": 30})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            agreement.main([str(self.dir / "a.jsonl"), str(self.dir / "b.jsonl")])
+        self.assertIn("34 unit(s) to adjudicate", out.getvalue())
+
     def test_kappa_is_chance_corrected(self):
         # One value across the whole sample is NOT perfect agreement: chance agreement is already
         # 1.0, so kappa is undefined. See test_kappa_is_undefined_on_a_degenerate_sample_not_perfect.

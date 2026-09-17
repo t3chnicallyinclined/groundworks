@@ -62,13 +62,14 @@ TOOL_TABLES = {
     "claim_support":         (("fact", "conclusion"), ("supports",)),
     "conclusion_mark_ready": ((), ("conclusion",)),
     "lens_view":             (("label", "unit"), ()),
+    "document_get":          (("unit", "document"), ()),
 }
 TOOL_PURPOSE = {
     "unit_get": "Read one evidence unit by id or locator; the source text comes back under the untrusted key.",
     "unit_search": "Find units by words in their text; usable statuses only unless you ask otherwise.",
     "claim_explain": "What a claim rests on: its citations, their grades and statuses, and what still blocks it.",
     "eliminated_claims": "What was investigated and found false or superseded. Never repeat one of these.",
-    "health": "Counts by status, the lens list, and the drift count for claims confirmed without a valid citation.",
+    "health": "Counts by status, the lens list, the drift count for claims confirmed without a valid citation, the originals gap, schema drift, the promotion log check and contradicting assertions.",
     "critique_add": "Record one head of attack against a conclusion, with a verdict, under your lens.",
     "critique_answer": "Record the answer to a critique. It returns what still blocks the target.",
     "panel_submit": "Save one seat's answer verbatim into a locked panel run directory. The text is never edited.",
@@ -79,6 +80,7 @@ TOOL_PURPOSE = {
     "claim_support": "Attach a confirmed claim to a conclusion as support.",
     "conclusion_mark_ready": "Ask the datastore whether a conclusion has met its readiness gate.",
     "lens_view": "The graph through one configured lens; never a row that lens's own standard excludes.",
+    "document_get": "The original a unit was extracted from, re-hashed on every read; text comes back under the untrusted key.",
 }
 
 # Which `access:` role a skill is launched as, unless the role entry names one with `access_role:`.
@@ -314,9 +316,16 @@ def _gates_block(inst):
             parts.append("has at least %d %s" % (count, _clause_words(rule, clause, inst, count)))
         for clause in rule.get("forbids") or []:
             parts.append("has no %s" % _clause_words(rule, clause, inst))
-        if rule.get("independent") is True:
+        mode = config.independence_of(rule)
+        if mode:
             parts.append("the change is made by a signed-in credential that has not written the row "
                          "(never by its own proposer, never by root: ask another agent to review and promote it)")
+            if mode["between"] == "principal":
+                parts.append("that credential acts for a different principal than every writer of the row (a second "
+                             "login held by the same person or process does not count)")
+            if mode["own_evidence"]:
+                parts.append("the promoter itself created at least one of the evidence links counted above (check "
+                             "the evidence and link it yourself; links someone else created do not count)")
         lines.append("%s %s." % (head, ", and ".join(parts)))
     lines += ["", "Gate ids in this instance: %s. These are human-owned (`human_owned:` in `instance.yaml`); "
                   "no agent may edit them." % _code_list([r["id"] for r in inst.gate_rules()])]

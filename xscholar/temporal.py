@@ -5,7 +5,7 @@ Two time axes on every claim (roadmap B12, v0.2 item V2-2):
   valid time    `valid_from` / `valid_to` on fact: when the claim held in the source (supplied by the writer)
   transaction   `learned_at` (the moment the row was recorded) plus an append-only history the datastore
                 writes itself: `status_history` on fact, `ready_history` on conclusion, `verdict_history` on
-                critique, `status_history` and `grade_history` on unit. An event appends
+                critique, `text_history` on answer, `status_history` and `grade_history` on unit. An event appends
                 {status_before, status_after, at, by} only when the value actually changed, so a loader
                 re-write with the same status appends nothing.
 
@@ -51,6 +51,12 @@ TRACKED = {
     # and from what, belong on the record exactly as a fact's status changes do.
     "critique": {"field": "verdict", "history": "verdict_history", "before": "verdict_before",
                  "after": "verdict_after", "type": "option<string>", "event": "critique_verdict_history"},
+    # An answer can be revised now that answering the same critique again replaces its text (write.py answer(),
+    # ROADMAP V2-22(f)). A `damaging` head is released by being answered, so what the answer said before a
+    # revision, who changed it and when belong on the record as a verdict change does. Not a status: it is
+    # left out of snapshot(), which counts rows by value.
+    "answer": {"field": "text", "history": "text_history", "before": "text_before", "after": "text_after",
+               "type": "option<string>", "event": "answer_text_history", "snapshot": False},
 }
 
 # A unit's status and grade are the evidence axes every gate reads, and a change to either can take the
@@ -236,6 +242,8 @@ def snapshot(db, when):
     when = to_datetime(when)
     out = {"when": iso(when)}
     for table, spec in TRACKED.items():
+        if spec.get("snapshot") is False:
+            continue
         rows = db.sql("SELECT %s AS value, learned_at, %s AS history FROM %s"
                       % (spec["field"], spec["history"], _table(table)), expect=1)[0]
         counts, unknown = {}, 0
@@ -264,11 +272,18 @@ def history_count(db, table="fact"):
 PROBE = "zz_temporal_probe"
 
 
+def refused_by_append_only(message, history_field):
+    """True only for the datastore's refusal of a write by the field's ASSERT. The field's bare name is not
+    enough: a statement that fails to parse is refused with its own text quoted, which names the field too
+    (measured 2026-09-16: a misspelt UPDATE passed a check that looked for "status_history" in the message)."""
+    return ("for field `%s`" % history_field) in message and "must conform to" in message
+
+
 def run_probes(inst, db):
     """Both ways on throwaway rows: entries appear on change, not on re-writes; history cannot shrink;
     as_of and snapshot rebuild the past. Cleans up even on failure."""
     from xscholar import gates
-    report = {"instance": inst.id, "checks": [], "passed": 0, "failed": 0}
+    report = {"instance": inst.id, "checks": [], "passed": 0, "failed": 0, "not_executed": []}
 
     def check(name, ok, detail=""):
         report["checks"].append({"check": name, "pass": bool(ok), "detail": detail})
@@ -297,9 +312,13 @@ def run_probes(inst, db):
         db.sql("UPDATE %s SET status='inferred', note='loader re-write';" % fact)
         check("same-status re-write appends nothing", len(history("fact", PROBE)) == 1)
         ok, msg = db.try_sql("UPDATE %s SET status_history = [];" % fact)
-        check("history cannot be emptied", not ok and "status_history" in msg, msg[:160])
+        check("history cannot be emptied", not ok and refused_by_append_only(msg, "status_history"), msg[:160])
+        # Refused BY THE APPEND-ONLY ASSERT, and the entry still reads as written. Until 2026-09-16 this asserted
+        # only `not ok`, so any failing statement passed it: measured with the UPDATE misspelt, it reported pass.
         ok, msg = db.try_sql("UPDATE %s SET status_history[0].status_after = 'x';" % fact)
-        check("history entry cannot be rewritten", not ok, msg[:160])
+        kept = history("fact", PROBE)
+        check("history entry cannot be rewritten", not ok and refused_by_append_only(msg, "status_history")
+              and len(kept) == 1 and kept[0]["status_after"] == "inferred", {"error": msg[:160], "history": kept})
         check("as_of before learned_at is not known", as_of(db, "fact", PROBE, t0)["known"] is False)
         check("as_of between create and change says proposed", as_of(db, "fact", PROBE, t1)["value"] == "proposed")
         check("as_of now says inferred", as_of(db, "fact", PROBE, now())["value"] == "inferred")
@@ -318,9 +337,15 @@ def run_probes(inst, db):
             check("conclusion ready flip appends one entry (gate satisfied via its probe recipe)",
                   len(h) == 1 and h[0]["ready_before"] is False and h[0]["ready_after"] is True, h)
         else:
+            # No conclusion.ready gate in this config, so the flip below is an ungated write. It still proves the
+            # history event; it proves nothing about a gated flip, and the report says so rather than counting
+            # the same check under the same name as the gated route (the case until 2026-09-16).
             db.sql("UPDATE %s SET ready=true;" % conc)
             h = history("conclusion", PROBE)
-            check("conclusion ready flip appends one entry", len(h) == 1 and h[0]["ready_after"] is True, h)
+            check("conclusion ready flip appends one entry (UNGATED: this config has no conclusion.ready gate)",
+                  len(h) == 1 and h[0]["ready_after"] is True, h)
+            report["not_executed"].append("conclusion ready flip through its gate: this config declares no gate rule "
+                                          "on conclusion.ready = true, so only an ungated flip was probed")
     finally:
         if ready_probe:
             for stmt in ready_probe["cleanup"]:
@@ -352,7 +377,10 @@ def main(argv=None):
         conn.script(temporal_surql(inst))
         report = run_probes(inst, conn)
         print(json.dumps(report, indent=2, default=str))
-        print("TEMPORAL PROBES: %d passed, %d failed" % (report["passed"], report["failed"]))
+        for line in report["not_executed"]:
+            print("NOT EXECUTED: " + line)
+        print("TEMPORAL PROBES: %d passed, %d failed, %d not executed"
+              % (report["passed"], report["failed"], len(report["not_executed"])))
         return 1 if report["failed"] else 0
     parser.error("choose --emit or --apply")
 

@@ -26,12 +26,13 @@ ID_RE = re.compile(r"^[a-z0-9_]+$")
 
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
             "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access",
-            "authority", "staleness", "discovery", "tables", "edges", "verdicts", "unique"}
+            "authority", "staleness", "discovery", "tables", "edges", "verdicts", "unique",
+            "assertions", "promotion_log", "labels"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
 # optional sections that, WHEN PRESENT, are a bar the owner sets and no role may turn
-HUMAN_OWNED_IF_PRESENT = ["verdicts", "unique"]
+HUMAN_OWNED_IF_PRESENT = ["verdicts", "unique", "assertions", "promotion_log"]
 
 # ---- the graph shape ---------------------------------------------------------------------------
 #
@@ -71,11 +72,59 @@ BUILT_IN_FIELDS = {
     "answer": {"text": "string", "author": "string"},
 }
 
+# ---- originals (xscholar/originals.py, xscholar/store.py) -- one self-contained block -------------------
+# Every unit links to one original document, kept byte-exact in the instance's content-addressed store.
+# `document` is a built-in node table (its schema comes from originals.schema_lines() via gates.schema_surql);
+# `unit.document` is the link. `originals:` (mode, store, spans) is human-owned when present: whether units
+# must carry an original is a bar the owner sets.
+TOP_KEYS = TOP_KEYS | {"originals"}
+HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + ["originals"]
+# `labels:` (pipeline/validator.py): how much a label's quote must say. A bar the owner sets.
+HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + ["labels"]
+BUILT_IN_NODE_TABLES = BUILT_IN_NODE_TABLES + ("document",)
+BUILT_IN_FIELDS["unit"]["document"] = "record"
+BUILT_IN_FIELDS["document"] = {"sha256": "string", "media_type": "string", "bytes": "int", "capture": "string",
+                               "source_uri": "string", "retrieved_at": "datetime", "original_name": "string",
+                               "integrity": "string", "verified_at": "datetime"}
+
+
+def _validate_originals(data, problems):
+    """`originals: required | transition` or `{mode, store, spans}` (xscholar/originals.py holds the checks)."""
+    if "originals" not in data:
+        return
+    from xscholar import originals
+    originals.config_problems(data, problems)
+# ---- end originals block --------------------------------------------------------------------------------
+
 # Independent promotion (a gate rule with `independent: true`). The datastore -- never the caller --
 # records on this field every signed-in credential (`$auth`) that has written the row, and refuses the
 # gated change from a credential already on it, from root, and on a row no credential has written.
 # Engine-owned: a declared table may not declare a field of this name.
 INDEPENDENCE_FIELD = "written_by"
+
+# How independent the promoter must be (`independent:` on a gate rule). `true` is the original rule:
+# a credential that has not written the row. The mapping form tightens it along two axes:
+#   between: principal   the promoter's declared principal (a person or an independent process, bound
+#                        to the credential when it is provisioned) must differ from every writer's
+#   own_evidence: true   the promoter must itself have CREATED at least one of the evidence links the
+#                        rule's `requires` clauses count
+# Engine-owned tables that record who wrote what, and the promotion log (`promotion_log: true`). An
+# instance may not declare a table or an edge of these names.
+INDEPENDENCE_BETWEEN = ("credential", "principal")
+INDEPENDENCE_KEYS = {"between", "own_evidence"}
+AUDIT_TABLES = ("row_writer", "link_creator", "promotion_log", "promotion_head")
+
+
+def independence_of(rule):
+    """{"between": "credential"|"principal", "own_evidence": bool} for a rule that requires an independent
+    promoter, or None. Every reader goes through this, so `independent: true` and the mapping form can
+    never be read two different ways (a mapping read as "not `is True`" would switch the rule off)."""
+    value = (rule or {}).get("independent", False)
+    if value is True:
+        return {"between": "credential", "own_evidence": False}
+    if isinstance(value, dict) and value:
+        return {"between": value.get("between", "credential"), "own_evidence": value.get("own_evidence") is True}
+    return None
 
 FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
 TABLE_KEYS = {"fields", "doc"}
@@ -433,7 +482,15 @@ class Instance:
 
     def independent_rules(self):
         """The gate rules whose change only a credential that has not written the row may make."""
-        return [rule for rule in self.gate_rules() if rule.get("independent") is True]
+        return [rule for rule in self.gate_rules() if independence_of(rule)]
+
+    def promotion_log_enabled(self):
+        """True when every gated promotion is written to the hash-chained promotion log."""
+        return self.data.get("promotion_log") is True
+
+    def principal_rules(self):
+        """Independent rules whose promoter must be a different declared principal, not only a different credential."""
+        return [rule for rule in self.independent_rules() if independence_of(rule)["between"] == "principal"]
 
     def access_roles(self):
         """role name -> {read: [tables], write: [tables], lens_bound: bool}; {} when no access: section."""
@@ -557,13 +614,13 @@ def validate(data):
             for key in ("table", "field", "value"):
                 if key not in rule:
                     problems.append("gate %s needs %s" % (rule["id"], key))
-            independent = rule.get("independent", False)
-            if independent not in (True, False):
-                problems.append("gate %s: independent must be true or false" % rule["id"])
-            if not rule.get("requires") and not rule.get("forbids") and independent is not True:
+            independent = _independence_value(rule, problems)
+            if not rule.get("requires") and not rule.get("forbids") and not independent:
                 problems.append("gate %s requires or forbids nothing" % rule["id"])
-            if independent is True:
+            _validate_gate_domains(data, rule, problems)
+            if independent:
                 _validate_independent(data, rule, problems)
+                _validate_independence_mode(data, rule, independent, problems)
         if len(set(ids)) != len(ids):
             problems.append("gate ids must be unique")
 
@@ -619,6 +676,10 @@ def validate(data):
                     problems.append("access role %s: lens_bound must be true or false" % name)
 
     _validate_unique(data, problems)
+    _validate_assertions(data, problems)
+    _validate_audit_tables(data, problems)
+    _validate_originals(data, problems)
+    _validate_labels(data, problems)
 
     ev = data["evaluator"]
     if not isinstance(ev, dict) or not ev.get("regression_file"):
@@ -629,6 +690,38 @@ def validate(data):
     if problems:
         raise ConfigError("config invalid:\n  - " + "\n  - ".join(problems))
     return data
+
+
+def _whole_number(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _validate_labels(data, problems):
+    """`labels: {quote_min_words, quote_distinct_units}` -- how much a label's quote must say (pipeline/validator.py)."""
+    if "labels" not in data:
+        return
+    section = data["labels"]
+    if not isinstance(section, dict):
+        problems.append("labels must be a mapping: {quote_min_words: <int>, quote_distinct_units: {<unit type>: <int>}}")
+        return
+    unknown = sorted(set(section) - {"quote_min_words", "quote_distinct_units"})
+    if unknown:
+        problems.append("labels: unknown key(s) %s; allowed: quote_min_words, quote_distinct_units" % ", ".join(unknown))
+    if "quote_min_words" in section and not _whole_number(section["quote_min_words"]):
+        problems.append("labels.quote_min_words must be a whole number of at least 1, not %r" % section["quote_min_words"])
+    distinct = section.get("quote_distinct_units")
+    if distinct is not None:
+        if not isinstance(distinct, dict):
+            problems.append("labels.quote_distinct_units must map a unit type to a whole number")
+        else:
+            types = [u.get("name") for u in data.get("units") or [] if isinstance(u, dict)]
+            for name, limit in distinct.items():
+                if name not in types:
+                    problems.append("labels.quote_distinct_units names unit type %r; known: %s"
+                                    % (name, ", ".join(map(str, types))))
+                if not _whole_number(limit):
+                    problems.append("labels.quote_distinct_units.%s must be a whole number of at least 1, not %r"
+                                    % (name, limit))
 
 
 def _validate_independent(data, rule, problems):
@@ -659,6 +752,143 @@ def _validate_independent(data, rule, problems):
     if not writers:
         problems.append("%s: independent: true, but no access role both reads and writes %s, so no "
                         "credential could propose or promote it" % (where, table))
+
+
+def expand_where(data, where):
+    """A clause's `where` with $confirming and $usable replaced by the config's own lists. The one expansion:
+    gates._expand calls this, so what validation reads and what the datastore enforces cannot differ."""
+    def lit(values):
+        return "[" + ", ".join("'%s'" % str(v).replace("'", "\\'") for v in values) + "]"
+    fidelity = data.get("fidelity") if isinstance(data.get("fidelity"), dict) else {}
+    status = data.get("status") if isinstance(data.get("status"), dict) else {}
+    return (where or "").replace("$confirming", lit(fidelity.get("confirming") or [])) \
+                        .replace("$usable", lit(status.get("usable") or []))
+
+
+def _validate_gate_domains(data, rule, problems):
+    """Every value a gate reads must come from an enumerated domain, or a misspelling slips past it.
+
+    Measured on a real instance (ROADMAP B-014): a status field that decided whether each of 21,332 records was
+    in evidence had no list of allowed values. A misspelt value (a transposed pair of letters) would have been
+    stored without a word, and the record would have dropped out of evidence: a typo never equals the value a
+    rule compares with. A gate on such a field is close to meaningless, so it is refused here, by name, and so is
+    a clause `where` that compares a field with no domain. That half is worse for `forbids`: a forbidden row
+    whose value is misspelt is not counted, and the gate lets the promotion through.
+
+    A domain is a vocabulary list the engine enforces (unit.type/status/grade, fact.status, critique.verdict,
+    label.tier/dir/role), a declared field's `one_of`, or a boolean. A value outside the domain is refused too:
+    a rule on `verified = ture` would never fire. Only `field = literal` and `field IN [literals]` terms are read;
+    anything else in a `where` is left to the probes, which report it untested by name."""
+    from xscholar import assertions, gates
+    if not all(key in rule for key in ("table", "field", "value")):
+        return
+    where = "gate %s" % rule["id"]
+    table, field = str(rule["table"]), str(rule["field"])
+    domain = assertions.field_domain(data, table, field)
+    if domain is None:
+        problems.append("%s: %s.%s has no enumerated domain (no vocabulary list, no one_of, not a bool), so the "
+                        "datastore stores a misspelt value without a word and this gate never sees it; declare the "
+                        "field with one_of, or gate a field that has one" % (where, table, field))
+    elif gates._value_literal(rule["value"]) not in [gates._value_literal(v) for v in domain]:
+        problems.append("%s: value %r is not one of %s.%s's values (%s), so the gate could never fire"
+                        % (where, rule["value"], table, field, ", ".join(map(str, domain))))
+    edges = edge_map_of(data)
+    for kind in ("requires", "forbids"):
+        for clause in rule.get(kind) or []:
+            if not isinstance(clause, dict) or not clause.get("where") or clause.get("edge") not in edges:
+                continue
+            src, dst = edges[clause["edge"]]
+            other = dst if table == src else src if table == dst else None
+            terms, _ = gates._where_terms(expand_where(data, clause["where"]))
+            if other is None or terms is None:
+                continue
+            for term_field, literals in terms:
+                values = assertions.field_domain(data, other, term_field)
+                said = "%s: a %s clause on %s compares %s.%s" % (where, kind, clause["edge"], other, term_field)
+                if values is None:
+                    problems.append("%s, which has no enumerated domain, so a misspelt value there is never counted%s; "
+                                    "declare the field with one_of" % (said, " and the forbidden row is let through"
+                                                                       if kind == "forbids" else ""))
+                    continue
+                allowed = [gates._value_literal(v) for v in values]
+                for literal in literals:
+                    text = literal.strip()
+                    if text[:1] == '"' and text[-1:] == '"':
+                        text = gates._value_literal(text[1:-1])
+                    elif text.lower() in ("true", "false"):
+                        text = text.lower()
+                    if text not in allowed:
+                        problems.append("%s with %s, which is not one of its values (%s), so the clause never matches"
+                                        % (said, literal, ", ".join(map(str, values))))
+
+
+def _independence_value(rule, problems):
+    """The rule's `independent:` read through independence_of(), with anything else refused by name."""
+    where = "gate %s" % rule["id"]
+    value = rule.get("independent", False)
+    if value is True or value is False:
+        return independence_of(rule)
+    if not isinstance(value, dict) or not value:
+        problems.append("%s: independent must be true or false, or a mapping with between and/or own_evidence "
+                        "(got %r)" % (where, value))
+        return None
+    unknown = sorted(set(map(str, value)) - INDEPENDENCE_KEYS)
+    if unknown:
+        problems.append("%s: independent has unknown key(s) %s; allowed: %s"
+                        % (where, ", ".join(unknown), ", ".join(sorted(INDEPENDENCE_KEYS))))
+    if value.get("between", "credential") not in INDEPENDENCE_BETWEEN:
+        problems.append("%s: independent.between must be one of %s (got %r)"
+                        % (where, ", ".join(INDEPENDENCE_BETWEEN), value.get("between")))
+    if not isinstance(value.get("own_evidence", False), bool):
+        problems.append("%s: independent.own_evidence must be true or false (got %r)" % (where, value.get("own_evidence")))
+    return independence_of(rule)
+
+
+def _validate_independence_mode(data, rule, mode, problems):
+    """What the mapping form of `independent:` needs beyond what `true` needs.
+
+    own_evidence: the rule must count evidence links (an independence-only rule has none to contribute),
+    and some role must be able to write the row's table AND one of those links -- otherwise no single
+    credential could ever both be independent and have created its own evidence, and the rule would
+    refuse every promotion."""
+    if not mode["own_evidence"]:
+        return
+    where = "gate %s" % rule["id"]
+    edges = [str(c.get("edge")) for c in (rule.get("requires") or []) if isinstance(c, dict)]
+    if not edges:
+        problems.append("%s: independent.own_evidence needs requires clauses: the promoter's own evidence is "
+                        "one of the links they count, and this rule counts none" % where)
+        return
+    table = str(rule.get("table"))
+    access = data.get("access") if isinstance(data.get("access"), dict) else {}
+    roles = access.get("roles") if isinstance(access.get("roles"), dict) else {}
+    able = [name for name, spec in roles.items() if isinstance(spec, dict)
+            and table in (spec.get("write") or []) and table in (spec.get("read") or [])
+            and set(edges) & set(spec.get("write") or [])]
+    if roles and not able:
+        problems.append("%s: independent.own_evidence, but no access role both reads and writes %s and writes "
+                        "one of its evidence edges (%s), so no credential could promote it"
+                        % (where, table, ", ".join(sorted(set(edges)))))
+
+
+def _validate_audit_tables(data, problems):
+    """`promotion_log:` and the engine-owned audit table names."""
+    for section in ("tables", "edges"):
+        for name in _declared(data, section):
+            if str(name) in AUDIT_TABLES:
+                problems.append("%s.%s: %r is owned by the engine (who wrote what, and the promotion log); "
+                                "choose another name" % (section, name, str(name)))
+    if "promotion_log" not in data:
+        return
+    if data["promotion_log"] not in (True, False) or not isinstance(data["promotion_log"], bool):
+        problems.append("promotion_log must be true or false (got %r)" % (data["promotion_log"],))
+        return
+    if data["promotion_log"] is True:
+        declared = declared_tables_of(data)
+        for rule in data.get("gates") or []:
+            if isinstance(rule, dict) and INDEPENDENCE_FIELD in (declared.get(str(rule.get("table"))) or {}):
+                problems.append("promotion_log: tables.%s declares a field %r, which the engine owns for "
+                                "recording who wrote a gated row" % (rule.get("table"), INDEPENDENCE_FIELD))
 
 
 def _validate_unique(data, problems):
@@ -697,6 +927,16 @@ def _validate_unique(data, problems):
             if str(field) not in known:
                 problems.append("%s: %r is not a field of %s; its fields are %s"
                                 % (where, field, table, ", ".join(sorted(known))))
+
+
+def _validate_assertions(data, problems):
+    """`assertions: {edge: {fields, promoted_by, enforce}}` -- structured claims one row makes about another
+    row's field (xscholar/assertions.py holds the contract and its checks). Imported here, not at the top:
+    that module reads this one's graph-shape helpers."""
+    if "assertions" not in data:
+        return
+    from xscholar import assertions
+    assertions.validate(data, problems)
 
 
 def _validate_graph_shape(data, problems):
@@ -936,7 +1176,50 @@ def load(source):
             raise ConfigError("%s is not valid JSON: %s" % (path, exc)) from exc
     else:
         data = parse_yaml(text)
-    return Instance(validate(data), source=path)
+    inst = Instance(validate(data), source=path)
+    refuse_unusable_regression_file(inst)       # the evaluator's file must exist and parse (block below)
+    return inst
+
+
+# ---- the evaluator's regression file (xscholar/evaluator.py; docs/TESTING.md s.3) ---------------------
+#
+# `evaluator.regression_file` was required from the first commit, and the demo declared a file that did not
+# exist while no code read the key: the fixed test every improvement must beat had never run. A config
+# loaded from a FILE now refuses a declared regression file that is missing, unreadable or not in the
+# format, by name. The path is resolved against the directory the config file is in (an absolute path is
+# taken as it is). A config loaded from a mapping has no directory, so load() cannot check it there;
+# regression_file_path() then needs `base_dir` and refuses by name without one, rather than guessing the
+# current working directory.
+
+def regression_file_path(inst, base_dir=None):
+    """The regression file an instance declares, as an absolute path. Does not check that it exists."""
+    declared = pathlib.Path(str(inst.evaluator["regression_file"])).expanduser()
+    if declared.is_absolute():
+        return declared
+    if base_dir is None:
+        if not inst.source:
+            raise ConfigError("instance %s was loaded from a mapping, so its evaluator.regression_file %r has no "
+                              "directory to resolve against; load it from its instance.yaml or pass base_dir"
+                              % (inst.id, str(declared)))
+        base_dir = pathlib.Path(inst.source).resolve().parent
+    return (pathlib.Path(base_dir) / declared).resolve()
+
+
+def refuse_unusable_regression_file(inst, base_dir=None):
+    """ConfigError naming the file when the declared regression file is missing or not a valid regression
+    file. The format has one implementation, in xscholar/evaluator.py."""
+    from xscholar import evaluator          # local: evaluator imports this module
+    path = regression_file_path(inst, base_dir)
+    if not path.is_file():
+        raise ConfigError("config invalid:\n  - evaluator.regression_file %s does not exist: the evaluator this "
+                          "config declares has never been written, so it can never run. Create it (format %s; "
+                          "an empty entries list until the first real error is recorded)"
+                          % (path, evaluator.FORMAT))
+    try:
+        evaluator.read_file(path)
+    except evaluator.RegressionFileError as exc:
+        raise ConfigError("config invalid:\n  - evaluator.regression_file: %s" % exc) from exc
+    return path
 
 
 if __name__ == "__main__":

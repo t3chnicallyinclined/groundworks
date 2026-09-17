@@ -1,0 +1,19 @@
+# Every text file checks out with LF on every OS.
+#
+# Measured 2026-09-16: on a Windows checkout with core.autocrlf=true, git rewrote committed eval
+# records with CRLF, so the SHA-256 each record stores over its prereg no longer matched the file
+# (a413a3fa... over LF vs 85fb01fe... over CRLF) and the eval-history check failed. CI runs on
+# Linux, where this never happens, so it could only ever fail on a Windows machine. Anything this
+# repo hashes as bytes -- eval records, panel locks, seat answers -- must not depend on the OS
+# that checked it out.
+* text=auto eol=lf
+
+# Binary: never touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -184,6 +184,265 @@ Regenerate your gate baseline after declaring either rule (step 4), then prove i
 
 ---
 
+## 7d. Your config may now refuse to load: the evaluator's regression file must exist
+
+`evaluator.regression_file` has been required since the first commit, and nothing ever read it. The demo declared a file that did not exist. **Now `config.load(<instance.yaml>)` stops, naming the path, if the declared file is missing, unreadable, or not in the format.** Every tool that loads your config stops with it: the runner, `gates --apply`, the MCP server, `skills`. **A relative `regression_file` resolves against the folder your `instance.yaml` is in**, not the repository root or the working directory, even when every other path in your config was written relative to the repository root; the error names the absolute path it looked at. **Since 2026-09-16 the evaluator also needs `known_errors.ids.json` beside the regression file** (`{"ids": [every entry id]}`): without it `python -m xscholar.evaluator` reports NOT EXECUTED (exit 2), an id pinned there and missing from the file is refused (exit 1), and so is an entry not pinned. Create it once with your current ids; after that, an entry is added to both files in the same change, and removing one takes a human.
+
+- The path is resolved against the directory `instance.yaml` is in, not the current directory.
+- If you have no known errors yet, create the file with an empty list. That is honest: it says the evaluator checks nothing yet.
+  ```json
+  {"format": "xscholar.known_errors/1", "entries": []}
+  ```
+- `xscholar test` now runs the demo's evaluator. An evaluator with no entries reports `NOT EXECUTED`, never a pass.
+- Tests that build a config file in a temporary directory need the file beside it too (`tests/test_config.py` and `tests/test_skills_drift.py` show how).
+
+---
+
+## 7e. Originals: every unit keeps the exact bytes it came from
+
+A unit used to carry only extracted text. **Now every unit links to its original**: the exact bytes it was cut from, kept in a content-addressed store beside `instance.yaml` (`originals/`, git-ignored by the store itself). Every read re-hashes them.
+
+**What your adapter must add.** A `documents()` method that yields the originals, and a `document` key on each unit naming one:
+
+```python
+def documents(self):
+    yield {"key": "app.log", "bytes": b"...",            # or "path": "/exports/app.log"; never both
+           "media_type": "text/plain", "capture": "raw",   # raw | rendered_text | none (a named gap)
+           "source_uri": "https://...", "retrieved_at": "2026-03-04T12:30:00Z", "original_name": "app.log"}
+
+def units(self):
+    yield {"id": "log_0001", ..., "document": "app.log"}   # the key above, or "sha256:<hex>"
+```
+
+The full contract is in `docs/MODULES.md` (intake, adapter `documents()`, `documents.jsonl`).
+
+**Choose a mode.** Declare it, and add `originals` to `human_owned`:
+
+```yaml
+originals:
+  mode: transition        # or required
+  store: originals
+  spans:
+    log_line: {line: line}    # line: <field> | lines: [from, to] | chars: [start, end] | whole: true
+human_owned: [gates, fidelity, status, evaluator, privacy, verdicts, originals]
+```
+
+| Mode | A unit with no original | Use it when |
+|---|---|---|
+| `required` | **Intake refuses it, by name.** | A new instance. `instances/_template` now defaults to this. |
+| `transition` | Kept, and named in every health report. | An existing corpus you are still collecting originals for. |
+| not declared | Behaves as `transition`, and every report says `NOT DECLARED`. | Never on purpose. |
+
+**In every mode, nothing without a verified original can be promoted.** `scripts/run_instance.py` and `gates --apply` apply `originals.enforcement_surql` after their probes. Once it is applied, a gated promotion counts only evidence units whose original is `document.integrity = 'ok'`. So:
+
+- **Your first run after upgrading will refuse promotions on units that have no original yet.** The refusal now says so (`GateRefusal.detail["reason"] == "originals"`, naming each unit as `NO original`, or `original missing` / `corrupt`). Citing the same unit again will never pass. Supply the original.
+- In `transition` mode the units stay loaded and readable. They simply cannot support a promotion.
+- `spans` makes the validator check a label's quote against the original at the unit's locator, as well as against the extracted text. A unit type with no span is counted as `not checkable`, never as checked.
+
+**After any restore or import, run verify:**
+
+```
+python -m xscholar.originals verify <your instance.yaml> --url <url> --ns <ns> --db <db>
+```
+
+`document.integrity` is what the last load or verify found. A restore brings back the rows and says nothing about the store. Verify re-hashes every file, records what it finds, and names every missing or corrupt original.
+
+---
+
+## 7f. Assertions: a promoted row can say what another row's field holds, and the graph checks it
+
+Optional. Use it if your instance has ever confirmed a fact that says, in its text, that some item is usable, while the item's own status says it is not. Nothing caught that before. Now a fact can carry a structured **assertion edge** ("unit u1's status is in_window"), and the check is mechanical.
+
+```yaml
+edges:
+  asserts_state: {from: fact, to: unit}
+assertions:
+  asserts_state: {fields: [status], enforce: false}
+human_owned: [..., assertions]
+```
+
+- Apply `assertions.surql(inst)` after the schema and gates. `scripts/run_instance.py` does.
+- **Report only by default.** `consistency.report` gains an `assertions` key. The runner prints it under its own `assertions` label, never under `DRIFT_gate_no_longer_holds`, because it is a different finding with a different cure. The MCP `health` tool counts contradictions.
+- After every load, the runner prints how many contradictions the load itself caused (`assertions.after_load`).
+- `enforce: true` makes the datastore refuse the write that would create a contradiction. The refusal names the assertion, and the Writer now explains it as a contradiction (`detail["reason"] == "assertion"`), not as missing evidence. **The way through a stale assertion is written in `docs/PATTERNS.md`**: demote the asserting row, correct the target, re-state or retract the assertion, promote again.
+
+---
+
+## 7g. Independence can now require a different principal, or the promoter's own evidence
+
+`independent: true` means "a different credential". That is unchanged. Two stricter forms exist:
+
+```yaml
+independent: {between: principal}                     # a different declared person or process
+independent: {own_evidence: true}                     # the promoter created a counted evidence link itself
+independent: {between: principal, own_evidence: true}
+```
+
+- **`between: principal` changes provisioning.** Every credential must be provisioned with a principal (`access.provision(..., principal="reviewer_b")`). Without one, provisioning refuses by name. A principal is what the provisioner declares; one person provisioned under two principal names is two principals.
+- **`own_evidence`** needs `requires` clauses, and a role that writes both the table and one of its evidence edges. Config refuses the rule otherwise. Links created by someone else do not count, even if the promoter later touched them.
+- `true` is read exactly as before. The mapping form is read through `config.independence_of(rule)`. If your own code reads `rule.get("independent") is True`, it will treat the mapping form as **off**. Change it.
+- Regenerate the gate baseline. It pins the mode, and a downgrade fails it.
+- Known gap (ROADMAP V2-22(g)): the originals-enforcement probes promote as root, so a rule requiring an independent promoter is reported `not_built` by them, and `gates --apply` exits 1 on it.
+
+---
+
+## 7h. Every gate rule now also generates an event
+
+Each rule with clauses is emitted twice: as the field `ASSERT` it always was, and as a privileged event named `<rule>_gate`.
+
+**Why.** An `ASSERT` subquery runs under the caller's row permissions. A credential that may write `conclusion` but cannot read `critique` counted 0 fatal critiques and was accepted (ROADMAP V2-21). The event counts every row, whoever is calling.
+
+**What changes for you:**
+
+- **Hand-loosening a gate now takes two statements.** Redefining the field without its `ASSERT` no longer lets the write through: the event still refuses it. A test or a script that weakened a gate that way has to `REMOVE EVENT <rule>_gate` too. The live-schema check (7i) reports either edit.
+- **A `requires` clause still refuses a caller who cannot read the evidence**, because the `ASSERT` still counts 0 for them. That fails closed: a legitimate write blocked, never a hole. Removing the clauses from the `ASSERT` would fix it and would change every instance's gate text. That is left for the owner.
+- The probes try a **blind caller** (a role that writes the table but cannot read what a `forbids` clause counts), but only where access is applied. `scripts/run_instance.py` now probes a second time after applying access, and prints one `blind caller` line per clause, saying what refused it. **On the demo that is the field ASSERT**: the blind role (`loader`) cannot read the `requires` evidence either. The event itself is proven by `tests/test_tamper_evidence.py`, not by the demo.
+
+---
+
+## 7i. Live-schema drift: the database compared with the config
+
+`python -m xscholar.live_schema <instance.yaml> --url <url> --ns <ns> --db <db>` compares every definition the database holds with what the config generates: tables, fields, events, indexes, accesses, users and params. It reports each by name as missing, altered or unexpected. The expected side is rendered by the same server into a scratch database that is removed afterwards.
+
+- **`scripts/run_instance.py` now runs it after every apply step and stops on any drift** (exit 1, `LIVE SCHEMA DRIFT`). A definition nobody generated survives every re-apply, because `OVERWRITE` replaces only what the config names. So a stray `DEFINE PARAM`, a second `DEFINE USER`, or a hand-added event stops your next run, named. Remove it or put it in the config.
+- It needs a root (or namespace-level) login. Under an agent credential it says `NOT EXECUTED`, and so does the MCP `health` tool.
+- The runner compares the components it applied: schema, gates, temporal, access, provenance, assertions, originals and lens. If your own deployment also applies the change-feed worker, pass `--components` including `changefeed`, or its definitions show as unexpected. That is on purpose.
+- **It sees schema only.** It does not see data, an import, or a rule removed and put back between two runs.
+
+---
+
+## 7j. The promotion log: a hash chain of every promotion, and its limit
+
+Optional. `promotion_log: true`, and add `promotion_log` to `human_owned`. An event appends one hash-chained entry per gated promotion: the rule, the row, the value before and after, the credential and its principal, and the time.
+
+```
+python -m xscholar.promotion_log <instance.yaml> --verify --url <url> --ns <ns> --db <db>
+python -m xscholar.promotion_log <instance.yaml> --export-anchor anchor.checkpoint --url ... # after each batch
+python -m xscholar.promotion_log <instance.yaml> --verify --anchor anchor.checkpoint --url ...
+python -m xscholar.promotion_log <instance.yaml> --late --url ...
+```
+
+- **The limit, stated plainly: root can rebuild the whole chain, or truncate it and rewrite the head, and `--verify` alone still passes.** Only a verify against an anchor you exported earlier, and kept where root on the database host cannot reach, catches that. Entries after your last anchor are only as trustworthy as the database. A test asserts this limit.
+- `late` flags a promotion by a credential provisioned after a writer first wrote the row. It is a heuristic: it is what "make a second login to get past the rule" looks like, and also what an honest reviewer who joined later looks like. It never blocks.
+- **Promotions are serialised.** Two promotions at the same instant: one commits, the other gets a retryable "Transaction conflict" and does not happen. Retry it.
+- Every probe run on a log-enabled instance adds a few entries, and they are never removed.
+
+---
+
+## 7k. A restore through `/import` bypasses every gate and every event
+
+Measured on SurrealDB 3.1.6: `POST /import` and `OPTION IMPORT` write rows **without running any ASSERT or any event**. A backup restored that way can hold a confirmed fact with no citation, a unit pointing at a document row that does not exist, and a log entry rewritten past its append-only guard. Nothing refuses it, and nothing says so.
+
+**After every restore or import, run all of these, as root:**
+
+```
+python -m xscholar.originals verify <instance.yaml> --url <url> --ns <ns> --db <db>
+python -m xscholar.live_schema <instance.yaml> --url <url> --ns <ns> --db <db>
+python -m xscholar.promotion_log <instance.yaml> --verify --anchor <your last anchor> --url ...   # if the log is on
+python -m xscholar.gates <instance.yaml> --apply --url <url> --ns <ns> --db <db> --baseline <your baseline>
+```
+
+Then read `consistency.report` (every row standing at a gated value its gate no longer supports) and the assertions report. `gates --apply` re-probes the gates in a scratch database when originals enforcement is already applied, and says so, because its probe units carry no originals.
+
+---
+
+## 7l. Smaller behaviour changes
+
+- **Answering the same critique again revises the answer** instead of failing with "record already exists". One answer row per critique, one `answers` edge. The revision is on the record: `answer.text_history` is append-only, written by an event, and names who changed it and when. Apply `temporal.temporal_surql(inst)` again to get it. If your code relied on a second `answer()` raising, it no longer does.
+- **The Writer words two more refusals correctly.** An originals refusal and an assertion refusal used to be explained as "needs at least one cited unit whose grade is in ...", which sent agents round an endless retry. `GateRefusal.detail["reason"]` is now `originals` or `assertion`.
+- **A gate on a built-in field keeps that field's own list.** A gate on `unit.status` or `unit.grade` used to replace the field's definition and drop `$value IN [...]`, so the field accepted any string once gated (ROADMAP V2-22(a)). Re-apply your gates if you gate either. A gate on a field the engine cannot restate (neither built in nor declared) now refuses to generate, by name.
+- **MCP:** a new read tool, `document_get`, returns a unit's original, re-hashed. `health` gains `live_schema`, `promotion_log`, `assertions` and `originals.gap_units_without_verified_original`. A check the server's connection cannot run says `NOT_EXECUTED`, never 0. Regenerate your role skills: the tool table changed.
+- **One throwaway-server start.** `xscholar/surreal_bin.py start_memory` is the only implementation. `scripts/run_instance.py` and the evaluator both call it. If you copied `start_memory` into your own scripts, call this one instead.
+
+---
+
+## 7m. The MCP server refuses writes from unverified engine code, and `health` changed shape
+
+From real use: a live MCP server served write tools from a work-in-progress branch someone had checked out in the engine checkout, and kept serving that code after the checkout was switched back (a process keeps what it imported).
+
+| What | Used to | Now | What to do |
+|---|---|---|---|
+| Any write tool (`critique_add`, `critique_answer`, `claim_propose`, `claim_confirm`, `claim_rule_out`, `claim_support`, `conclusion_mark_ready`, `panel_submit`) | Ran from whatever engine code the server loaded | **`rejected_by_gate`** unless the server started from branch `main` with no uncommitted changes, and the checkout is still that commit and branch with none now. `missing` names the cure | Launch the server from a clean `main` checkout of the engine. **If writes are refused with `STALE`, restart the server**: the checkout moved under it |
+| An engine that is not a git checkout (an installed copy, an archive) | Served writes | `engine_code.verdict` `UNKNOWN`, **writes refused** | Run from a checkout, or a human sets `XSCHOLAR_ALLOW_UNVERIFIED=1` in the launch entry; `health` then leads with a `WARNING` and every write result carries `engine_code_warning` |
+| `health` result | `{"instance", "server"}` | `{["WARNING"], "engine_code", "summary", "instance", "server"}`, in that order. `instance` is unchanged; `server` gains `write_tools` | A caller that reads `data["instance"]` keeps working. Read `data["summary"]["headline"]` and `attention` first |
+| `health(detail=false)` | (did not exist) | Same, with `instance` replaced by a one-line note; the summary is still derived from the full detail | Use it for the pre-write check |
+| `health` when the datastore is down | `db_unreachable` and nothing else | Also carries `engine_code` | Nothing |
+| Generic adapter `health` counts under a provisioned (record) credential | **Read 0**: an unfiltered `count() GROUP ALL` returns 0 to a record credential even when it can read the rows (SurrealDB 3.1.6, measured), and a table it cannot read also counted 0 | True counts; a count over a table the credential's role cannot read is the string `NOT_EXECUTED: ...`. **A count may now be a string** | Launch agent servers with `XSCHOLAR_ROLE` equal to the credential's access role (what `--provision` prints). Without it a zero count under a record credential reads `NOT_EXECUTED` |
+| `xscholar.mcp.server.build_server(adapter, provenance, panel_root)` | No guard | Takes `guard=`; without one it reads the real engine checkout | Tests that exercise writes pass `guard=code_state.CodeGuard(reader=lambda: code_state.git_state(<sha>, "main"))` |
+
+**Check your own adapter against the contract** (read-only, safe against a live graph): `python -m xscholar.mcp.conformance --query "<words a unit contains>" --claim <an id>`, with your launch environment set. It names every missing, empty or mistyped field and every wrong status. `--write --scratch NS/DB` adds the write methods, only against the database named. Measured on the engine's own generic adapter over the demo: it FAILS the contract docstring on `unit_search` (no `method`), `unit_get` (returns one unit, not `{locator, units}`), `eliminated_claims` (`claims`, not `eliminated_claims`; no `about` / `failed_approaches`) and `claim_explain` (`blocking_now`, not `blocking`; no `support` / `adverse` / `critiques` / `ready`; kind `fact`). Not changed in this release: it is recorded in `docs/DECISIONS.md` as open.
+
+---
+
+## 7n. Links to missing records are refused, gated fields need a list, and a schema re-apply keeps permissions
+
+Measured on SurrealDB 3.1.6; `notes/2026-09-16_gates_lane_enforced_edges_and_domains.md` has the tables.
+
+- **Every relation table is now `ENFORCED`.** `RELATE` to a record that does not exist is refused (`The record
+  'x:y' does not exist`) instead of storing a link to nothing. **ENFORCED does not check links already stored.** After
+  re-applying the schema, `gates --apply` prints `DANGLING: <n> <edge> edge(s)` for each edge table holding links to a
+  missing record and **exits 1**. Repair or delete them, then run it again. A load or a `Writer.cite`/`relate` that names
+  a record not written yet now fails loudly; write the endpoint first.
+- **Re-applying the schema is now safe after access and the change feed.** Tables are `DEFINE TABLE IF NOT EXISTS`
+  then `ALTER TABLE`, so PERMISSIONS and CHANGEFEED survive (before: 14 of 20 demo tables reset to PERMISSIONS NONE, 5
+  changefeeds dropped). Step 3's "re-apply the changefeed after every schema re-apply" is no longer needed for that
+  reason, and harmless. The flip side: a schema re-apply no longer resets a hand-widened PERMISSIONS clause; re-apply
+  access for that, and run `python -m xscholar.live_schema`.
+- **Your config may refuse to load:** a gate rule whose field has no enumerated domain (no vocabulary list, no
+  `one_of`, not a bool), a gate `value` outside the field's values, or a clause `where` term (`field = literal`,
+  `field IN [...]`) on such a field or with a value outside its list. Each is named. Give the field `one_of`. A
+  misspelt value there was being stored and silently dropped the row out of evidence, or, in a `forbids` clause,
+  let the forbidden row through.
+- **A rule that only forbids no longer reports as misbehaving** when it is correct. If you had learnt to ignore that
+  line, stop: it now means something.
+- **Rules that used to report MISSING PROBE now run:** staged evidence behind an independence rule, and the originals
+  probes of a rule that needs an independent promoter, run on provisioned probe credentials. They need access applied
+  (they say so by name when it is not). Your baseline's report may gain flags; regenerate and review it (step 4).
+
+---
+
+## 7o. A label's quote must say enough to carry its reason
+
+Reported from two instances on 2026-09-16. A tier-3 label quoting just `the` passed the validator with 0 errors: the
+quote was verbatim, and `the` is in almost every unit. Verbatim proves the words exist, not that they carry the reason.
+
+| What | Used to | Now | What to do |
+|---|---|---|---|
+| A tier >= 2 quote of fewer than 3 words **cut from a longer unit** (`the`, `A. Yes.` out of a Q-and-A turn) | PASS | `FAIL <unit> quote ... under 3 words a quote must be the whole unit` | Quote the words that carry the reason, or the whole unit |
+| A short quote that **is the whole unit** (a witness's whole answer `Yes.`, whitespace collapsed) | PASS | PASS, unchanged | Nothing |
+| `labels:` in instance.yaml | Refused (unknown key) | Optional, **human-owned when present**: `quote_min_words: <n>` (default 3; `1` is the old rule) and `quote_distinct_units: {<unit type>: <n>}` | See below |
+| `quote_distinct_units` (off unless declared) | (did not exist) | For a declared unit type, a quote found in more than n units of the slice is refused, unless it is the whole unit | Declare it for prose units (document sections). **Do not** declare it for transcript turns: `Yes.` is in every slice |
+| Validator report | | Gains `quote_rules`: the rules it applied | Nothing |
+
+**Why not a length floor or distinctiveness by default:** measured on the appeal instance's 2,471 tier >= 2 labels,
+331 of the 340 quotes under four words were a witness's entire sworn answer, some of the most important evidence
+there. Either rule would have refused them. A short fragment of a longer unit is the degenerate case; a short whole
+unit is not.
+
+**Before you upgrade, measure it:** run the validator over your existing labels. Every new `quote` error names its
+unit. Fix the quote, or, if the owner decides your short fragments are sound, set `labels: {quote_min_words: 2}` (or
+`1`) and add `labels` to `human_owned`. What cannot be caught: a real, long, distinctive quote pasted under the wrong
+reason. That still takes a reader.
+
+---
+
+## 7p. The agreement report lists every unit to adjudicate
+
+`python -m xscholar.pipeline.agreement` capped its adjudication list: the relevance splits plus the first 20 other
+units, and a tier split that did not cross tier 2 (3 vs 2, 1 vs 0) was never listed. Measured on another instance:
+90 double-labelled units, 51 needing a human, printed "27 unit(s) to adjudicate".
+
+| What | Used to | Now |
+|---|---|---|
+| `adjudicate` | Relevance splits + at most 20 others; tier-only splits missing; a unit could appear twice | **Every** unit with any disagreement, once: relevance splits, then 2 vs 3, then a direction flip on a unit both rated tier 2+, then other tier splits, then other fields only. Always `len(adjudicate) == units_with_any_disagreement` |
+| `adjudicate_groups` | (did not exist) | Counts per group |
+| CLI line | `N unit(s) to adjudicate` (N was capped) | The true N, with the per-group counts |
+
+**If you adjudicated from an earlier report, re-run it:** compare `units_with_any_disagreement` with the length of
+the list you worked from. The raw `disagreements` list was always complete.
+
+---
+
 ## 8. What this release does NOT give you
 
 - **No container.** Deliberate, see step 2.

@@ -12,6 +12,7 @@ GateRefusal naming the rule and exactly what is missing, in words an agent can a
 Standard library only.
 """
 import pathlib
+import re
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -75,6 +76,7 @@ class Writer:
         if ok:
             return rid("fact", slug)
         _raise_if_not_independent(message, rid("fact", slug))
+        _raise_if_not_about_evidence(self.db, self.inst, message, rid("fact", slug))
         cited =self.db.sql("SELECT grade, status, record::id(id) AS unit FROM %s->cites->unit" % rid("fact", slug),
                             expect=1)[0]
         good = [c for c in cited if c["grade"] in self.inst.confirming_grades() and c["status"] in self.inst.usable_statuses()]
@@ -146,9 +148,18 @@ class Writer:
         return rid("critique", cid)
 
     def answer(self, critique_id, text):
+        """The answer to a critique. Answering the same critique again REVISES its answer.
+
+        One answer per critique, on a deterministic id: `answer:ans_<critique>`. Until 2026-09-16 this was a
+        CREATE, so a second answer to the same critique hard-errored ("record already exists") -- a demo re-run,
+        or revising an answer after the head's verdict was downgraded, which is the flow critique() above was
+        changed to open (ROADMAP V2-22(f)). It is an UPSERT now, and the `answers` edge id no longer comes from
+        the per-session Keyer (which would add a second edge on a repeat in one session). A revision is not
+        silent: `text_history` on answer is append-only and written by a datastore event (xscholar/temporal.py),
+        naming the author and the time, exactly as a verdict change is."""
         aid = "ans_" + critique_id.split(":", 1)[1].strip("⟨⟩")
-        self.db.sql("CREATE %s SET text=%s, author=%s" % (rid("answer", aid), q(text), q(self.author)), expect=1)
-        eid = self.keyer("write", "answers", aid, critique_id)
+        self.db.sql("UPSERT %s SET text=%s, author=%s" % (rid("answer", aid), q(text), q(self.author)), expect=1)
+        eid = edge_ids.edge_id("write", "answers", aid, critique_id)
         self.db.sql("RELATE %s->answers:%s->%s; UPDATE %s SET answered=true"
                     % (rid("answer", aid), eid, critique_id, critique_id), expect=2)
         return rid("answer", aid)
@@ -159,6 +170,7 @@ class Writer:
         if ok:
             return target
         _raise_if_not_independent(message, target)
+        _raise_if_not_about_evidence(self.db, self.inst, message, target)
         problems, counts = readiness_problems(self.db, conclusion, self.inst)
         raise GateRefusal("conclusion_ready", "; ".join(problems) or message, {"counts": counts, "db": message})
 
@@ -169,9 +181,62 @@ def _raise_if_not_independent(message, target):
     from xscholar import gates            # local: gates imports config, not this module
     rule = gates.independence_rule_in(message)
     if rule:
-        raise GateRefusal(rule, "%s may only be promoted by a signed-in credential that has not written it "
-                                "(not its proposer, not root); hand it to another agent to review and promote"
-                          % target, {"db": message})
+        reason = gates.independence_reason_in(message)
+        if reason == "principal":
+            text = ("%s may only be promoted by a credential acting for a different principal than every writer "
+                    "of it; another login of the same person or process does not count. Hand it to a reviewer "
+                    "provisioned for a different principal" % target)
+        elif reason == "own_evidence":
+            text = ("%s may only be promoted by a credential that itself created at least one of the evidence "
+                    "links the rule counts; check the evidence and link it yourself, then promote" % target)
+        else:
+            text = ("%s may only be promoted by a signed-in credential that has not written it (not its proposer, "
+                    "not root); hand it to another agent to review and promote" % target)
+        raise GateRefusal(rule, text, {"db": message})
+
+
+def _raise_if_not_about_evidence(db, inst, message, target):
+    """Two refusals that are not "cite more evidence of the right grade", each recognised by its marker.
+
+    An originals refusal (xscholar/originals.py) means the evidence units are there but their ORIGINALS are
+    not verified: citing the same units again, or more units of the same grade, can never pass. An assertion
+    refusal (xscholar/assertions.py) means the row would stand promoted while one of its structured
+    assertions contradicts the row it is about: no evidence of any grade resolves that, a correction does.
+    Explained as a missing grade, either one sends an agent round a retry loop that cannot end."""
+    from xscholar import assertions, originals, gates     # local: those import config, not this module
+    text = str(message or "")
+    found = re.search(re.escape(originals.MARKER) + r" ([A-Za-z0-9_]+):", text)
+    if found:
+        rule_id = found.group(1)
+        rule = next((r for r in inst.gate_rules() if r["id"] == rule_id), None) if inst is not None else None
+        linked = []
+        for _, clause in (originals.enforced_clauses(rule, inst) if rule else []):
+            path, _ = gates._edge_path(rule["table"], clause, inst)
+            rows = db.sql("SELECT record::id(id) AS unit, document, document.integrity AS integrity FROM %s%s"
+                          % (target, path), expect=1)[0] or []
+            for row in rows:
+                state = ("NO original" if row.get("document") is None
+                         else "original %s" % row["integrity"] if row.get("integrity")
+                         else "original not readable under this credential")
+                linked.append("%s (%s)" % (row["unit"], state))
+        raise GateRefusal(rule_id, (
+            "%s is refused by rule %s because its evidence units lack a verified original: a unit counts toward a "
+            "promotion only when the exact bytes it was extracted from are in the store and verified "
+            "(document.integrity = 'ok'); a unit with no original, or a missing, corrupt or never-captured one, "
+            "does not count. Linked now: %s. Citing the same units again, or more units of the same grade, will "
+            "not help: restore the original to the store and run `python -m xscholar.originals verify "
+            "INSTANCE.yaml`, or cite units whose original is verified"
+            % (target, rule_id, ", ".join(linked) or "no units reachable by this rule's clauses")),
+            {"db": text, "reason": "originals", "units": linked})
+    if assertions.MARKER in text:
+        detail = text.split(assertions.MARKER, 1)[1].lstrip(": ").strip()
+        raise GateRefusal("assertions", (
+            "%s is refused because it would stand promoted while a structured assertion contradicts the row it is "
+            "about (%s). This is not missing evidence: no citation of any grade resolves it. Either the assertion "
+            "is stale or its target is wrong, and a human decides which. The way through: re-state or retract the "
+            "assertion, or have the target corrected, then promote again (docs/PATTERNS.md, Assertions)"
+            % (target, detail[:300] or "the datastore named no row")),
+            {"db": text, "reason": "assertion"})
 
 
 # The two edges whose refusal this module words by hand. Every other requires clause on readiness --

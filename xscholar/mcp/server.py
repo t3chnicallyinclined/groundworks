@@ -14,6 +14,13 @@ Launch configuration (environment):
   XSCHOLAR_ROLE         required. For example coordinator, critic, seat
   XSCHOLAR_LENS         optional. When set, critiques use this lens and a different lens is refused
   XSCHOLAR_PANEL_ROOT   optional. When set, panel run directories must be inside it
+  XSCHOLAR_ALLOW_UNVERIFIED  optional. "1" lets write tools run from engine code that is not a verified, current
+                        commit (code_state.py); health then says so first. Set only by a human, deliberately.
+
+Engine code guard (code_state.py). At startup the server records the engine checkout's commit, branch and
+uncommitted changes. Every write tool is refused (rejected_by_gate, `missing` naming the cure) unless the server
+started from branch main with no uncommitted changes AND the checkout on disk is still that commit and branch
+with none now. A server whose checkout moved under it is STALE: restart it. Reads are never refused.
 
     python engine/mcp/server.py               # serve over stdio
     python engine/mcp/server.py --list-tools  # load config and adapter, print tools to stderr, exit
@@ -37,6 +44,8 @@ import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
 from xscholar.mcp import adapter as contract  # noqa: E402
+from xscholar.mcp import code_state  # noqa: E402
+from xscholar.mcp import health_summary  # noqa: E402
 from xscholar.mcp import panel_io  # noqa: E402
 
 from xscholar.present import render as present_render, features as present_features, policy as present_policy
@@ -44,9 +53,11 @@ from xscholar.present import render as present_render, features as present_featu
 TOOL_NAMES = ("unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
               "critique_add", "critique_answer", "panel_submit", "panel_status",
               "claim_propose", "claim_confirm", "claim_rule_out", "claim_support", "conclusion_mark_ready",
-              "lens_view")
+              "lens_view", "document_get")
 IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 MAX_LIMIT = 200
+WRITE_TOOLS = ("critique_add", "critique_answer", "panel_submit", "claim_propose", "claim_confirm", "claim_rule_out",
+               "claim_support", "conclusion_mark_ready")
 VIEWS = ("data",) + tuple(present_render.MODES)
 VIEW_TOOLS = ("unit_get", "unit_search", "claim_explain", "eliminated_claims", "health")
 RENDERED_NOTICE = ("'rendered' is Markdown built from 'data' for a human reader and may quote verbatim source text, "
@@ -231,11 +242,44 @@ def _required(name, value):
     return value
 
 
-def build_server(adapter, provenance, panel_root=None):
+def guarded_call(guard, tool, fn):
+    """call() for a write tool: the engine code guard runs first, before any argument reaches the adapter."""
+    seen = {}
+
+    def run():
+        seen["found"] = guard.check_write(tool)
+        return fn()
+    out = call(tool, run)
+    warning = guard.override_warning(seen["found"]) if "found" in seen else None
+    if warning:
+        out["engine_code_warning"] = warning
+    return out
+
+
+def health_data(adapter, provenance, panel_root, engine, detail=True):
+    """What the health tool returns: the engine code state (guard.report()) first, then a summary, then the detail."""
+    instance = adapter.health()
+    out = {}
+    if engine.get("WARNING"):
+        out["WARNING"] = engine["WARNING"]
+    out["engine_code"] = engine
+    out["summary"] = health_summary.summarize(instance, engine)
+    out["instance"] = instance if detail else ("omitted: health was called with detail=false; the summary above is "
+                                               "derived from the full detail, which health returns by default")
+    out["server"] = {"adapter": getattr(adapter, "name", type(adapter).__name__),
+                     "identity": provenance.as_dict(), "tools": list(TOOL_NAMES), "write_tools": list(WRITE_TOOLS),
+                     "panel_root": str(panel_root) if panel_root else None}
+    return out
+
+
+def build_server(adapter, provenance, panel_root=None, guard=None):
+    """`guard` is the engine code guard (code_state.CodeGuard). None reads the real engine checkout and the
+    XSCHOLAR_ALLOW_UNVERIFIED environment: an embedding that forgets it gets the guard, not a server without one."""
     from mcp.server.fastmcp import FastMCP
     from mcp.types import ToolAnnotations
 
     check_adapter(adapter)
+    guard = guard if guard is not None else code_state.CodeGuard.from_environment()
     server = FastMCP("xscholar", instructions=INSTRUCTIONS)
     read = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
@@ -272,15 +316,32 @@ def build_server(adapter, provenance, panel_root=None):
                          adapter, view)
 
     @server.tool(name="health", annotations=read, description=(
-        "The graph audit: flattering and unflattering numbers side by side (unsupported promotions, drift, "
-        "open review items, one-sided conclusions), plus this server's launch identity." + VIEW_HELP))
-    def health(view: str = "data") -> dict:
-        def run():
-            return {"instance": adapter.health(),
-                    "server": {"adapter": getattr(adapter, "name", type(adapter).__name__),
-                               "identity": provenance.as_dict(), "tools": list(TOOL_NAMES),
-                               "panel_root": str(panel_root) if panel_root else None}}
-        return call_view("health", run, adapter, view)
+        "The graph audit. First 'engine_code': whether this server's engine code is a verified, current commit and "
+        "so whether write tools are served (STALE means restart the server). Then 'summary': every NOT_EXECUTED "
+        "check, failing flag and drift number, non-zero counts and list lengths, derived from the detail. Then "
+        "'instance', the detail: flattering and unflattering numbers side by side (unsupported promotions, drift, "
+        "open review items, one-sided conclusions; the originals gap; live-schema drift against the config; the "
+        "promotion log verified, with its `late` count; promoted assertions that contradict their target), and this "
+        "server's launch identity. detail=false omits the detail and keeps the summary. A check that cannot run "
+        "under this server's connection says NOT_EXECUTED, never 0." + VIEW_HELP))
+    def health(view: str = "data", detail: bool = True) -> dict:
+        engine = guard.report()
+        out = call_view("health", lambda: health_data(adapter, provenance, panel_root, engine, bool(detail)),
+                        adapter, view)
+        if out["status"] != contract.STATUS_OK:   # the datastore is down: the engine code state is still known
+            out["engine_code"] = engine
+        return out
+
+    @server.tool(name="document_get", annotations=read, description=(
+        "The original a unit was extracted from (ref: a unit id), or an original by its sha256 (ref: document:<sha256> "
+        "or the hex). Returns its metadata (sha256, media_type, bytes, capture, source_uri, retrieved_at, "
+        "original_name, integrity, how many units point at it), the unit's locator into it, and for a text original "
+        "the whole original under untrusted_source_text. The bytes are re-hashed on every read: a missing or corrupt "
+        "original is status error naming it, never served. Binary content (a scan, an image) is refused as "
+        "invalid_argument; call with include_content=false for its metadata. not_found: no such unit or document, "
+        "or the unit links to no retrievable original."))
+    def document_get(ref: str, include_content: bool = True) -> dict:
+        return call("document_get", lambda: adapter.document_get(_required("ref", ref), bool(include_content)))
 
     @server.tool(name="lens_view", annotations=read, description=(
         "The graph through one configured lens (health lists the lens names, kinds and backing grades). Returns "
@@ -296,7 +357,7 @@ def build_server(adapter, provenance, panel_root=None):
         "the instance vocabulary. The author is this server's launch identity. lens defaults to the launch "
         "lens. Gates decide: on rejected_by_gate read 'error' and 'missing'. Returns what still blocks the target."))
     def critique_add(target: str, head: str, verdict: str, lens: str | None = None, text: str | None = None) -> dict:
-        return call("critique_add", lambda: adapter.critique_add(
+        return guarded_call(guard, "critique_add", lambda: adapter.critique_add(
             provenance, _required("target", target), _effective_lens(provenance, lens), _required("head", head),
             _required("verdict", verdict), (text or None)))
 
@@ -304,7 +365,7 @@ def build_server(adapter, provenance, panel_root=None):
         "Record the answer to a critique. The author is this server's launch identity. Returns what still "
         "blocks the critique's target."))
     def critique_answer(critique: str, answer: str) -> dict:
-        return call("critique_answer", lambda: adapter.critique_answer(
+        return guarded_call(guard, "critique_answer", lambda: adapter.critique_answer(
             provenance, _required("critique", critique), _required("answer", answer)))
 
     @server.tool(name="claim_propose", annotations=write, description=(
@@ -312,40 +373,40 @@ def build_server(adapter, provenance, panel_root=None):
         "direct_quote, inference, structural_analogy, statistical, expert_judgment. Nothing is established by "
         "proposing; cite units and call claim_confirm, or record what the source shows with claim_rule_out."))
     def claim_propose(slug: str, claim: str, reasoning_type: str = "inference", note: str | None = None) -> dict:
-        return call("claim_propose", lambda: adapter.claim_propose(
+        return guarded_call(guard, "claim_propose", lambda: adapter.claim_propose(
             provenance, _required("slug", slug), _required("claim", claim), reasoning_type, note or None))
 
     @server.tool(name="claim_confirm", annotations=write, description=(
         "Cite units (by id) for a proposed claim and ask the datastore to confirm it. The gate decides: on "
         "rejected_by_gate, 'missing' says which grade and status a cited unit must have and what is cited now."))
     def claim_confirm(slug: str, unit_ids: list[str] | None = None, note: str | None = None) -> dict:
-        return call("claim_confirm", lambda: adapter.claim_confirm(provenance, _required("slug", slug), unit_ids or [], note or None))
+        return guarded_call(guard, "claim_confirm", lambda: adapter.claim_confirm(provenance, _required("slug", slug), unit_ids or [], note or None))
 
     @server.tool(name="claim_rule_out", annotations=write, description=(
         "Record an ELIMINATED claim: the statement that turned out false, what was tried, and what the source "
         "actually shows. Never gated, and cheaper than a fact on purpose. Agents are shown these before repeating them."))
     def claim_rule_out(slug: str, claim: str, tried: str, evidence: str) -> dict:
-        return call("claim_rule_out", lambda: adapter.claim_rule_out(
+        return guarded_call(guard, "claim_rule_out", lambda: adapter.claim_rule_out(
             provenance, _required("slug", slug), _required("claim", claim), _required("tried", tried),
             _required("evidence", evidence)))
 
     @server.tool(name="claim_support", annotations=write, description=(
         "Link a fact as support for a conclusion. Returns what still blocks the conclusion from being ready."))
     def claim_support(slug: str, conclusion: str) -> dict:
-        return call("claim_support", lambda: adapter.claim_support(provenance, _required("slug", slug), _required("conclusion", conclusion)))
+        return guarded_call(guard, "claim_support", lambda: adapter.claim_support(provenance, _required("slug", slug), _required("conclusion", conclusion)))
 
     @server.tool(name="conclusion_mark_ready", annotations=write, description=(
         "Ask the datastore to mark a conclusion ready. Refused unless it has a confirmed supporting fact, has been "
         "attacked, has no fatal head standing and no damaging head unanswered; 'missing' says which."))
     def conclusion_mark_ready(conclusion: str) -> dict:
-        return call("conclusion_mark_ready", lambda: adapter.conclusion_mark_ready(provenance, _required("conclusion", conclusion)))
+        return guarded_call(guard, "conclusion_mark_ready", lambda: adapter.conclusion_mark_ready(provenance, _required("conclusion", conclusion)))
 
     @server.tool(name="panel_submit", annotations=write, description=(
         "Save one panel seat's answer verbatim to round1/<seat>.md or round2/<seat>.md in a locked panel run "
         "directory. Refused when round 1 was already anonymized, before anonymization for round 2, or when "
         "this server was launched as a different seat. The text is never edited."))
     def panel_submit(run_dir: str, round: int, seat: str, text: str) -> dict:
-        return call("panel_submit", lambda: panel_io.submit(provenance, run_dir, round, seat, text, panel_root))
+        return guarded_call(guard, "panel_submit", lambda: panel_io.submit(provenance, run_dir, round, seat, text, panel_root))
 
     @server.tool(name="panel_status", annotations=read, description=(
         "A panel run's phase and every re-prompt still owed, by seat, with the exact prompt to send. "
@@ -365,7 +426,13 @@ def main(argv=None):
     except ConfigError as exc:
         print("xscholar-mcp NOT STARTED: %s" % exc, file=sys.stderr)
         return 2
-    server = build_server(adapter, provenance, os.environ.get("XSCHOLAR_PANEL_ROOT") or None)
+    guard = code_state.CodeGuard.from_environment()
+    engine = guard.report()
+    print("xscholar-mcp engine code: %s; writes %s%s" % (
+        engine["verdict"], engine["writes"], "".join("\n  - " + p for p in engine["problems"])), file=sys.stderr)
+    if engine.get("WARNING"):
+        print("xscholar-mcp WARNING: %s" % engine["WARNING"], file=sys.stderr)
+    server = build_server(adapter, provenance, os.environ.get("XSCHOLAR_PANEL_ROOT") or None, guard=guard)
     if "--list-tools" in argv:
         import asyncio
         for tool in asyncio.run(server.list_tools()):

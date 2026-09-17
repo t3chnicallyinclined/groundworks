@@ -194,6 +194,23 @@ class InstanceAdapter(abc.ABC):
         """
         raise InvalidArgument("lens_view is not supported by adapter %s" % self.name)
 
+    # ---- originals (OPTIONAL; the generic adapter implements it from xscholar/originals.py) --------
+
+    def document_get(self, ref, include_content=True):
+        """The original a unit was extracted from, or an original by its sha256.
+
+        `ref` is a unit id (the original that unit links to) or a document reference (`document:<sha256>`,
+        `sha256:<sha256>`, or the hex). Returns {"document": {id, sha256, media_type, bytes, capture,
+        source_uri, retrieved_at, original_name, integrity, units}, "unit": id or None, "locator": the
+        unit's locator into the original or None, "content": "returned" | "not requested"} and, for a text
+        original with include_content, the whole original under UNTRUSTED_TEXT_KEY. The bytes are re-hashed
+        on every read. Raise NotFound when there is no such unit or document, or the unit links to no
+        retrievable original; InvalidArgument for binary content requested as text (ask again with
+        include_content=false for its metadata); an error naming the original when it is missing or corrupt.
+        """
+        raise InvalidArgument("document_get is not supported by adapter %s: it keeps no originals" % self.name,
+                              missing=["an adapter that implements document_get"])
+
     # ---- presentation (OPTIONAL; engine/present renders what these return) ---------------------
 
     def present_rows(self, tool_name, result):
