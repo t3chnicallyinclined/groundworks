@@ -159,7 +159,8 @@ class ServerTests(unittest.TestCase):
         tables = conn.sql("INFO FOR DB")[0]["tables"]
         for table in ("unit", "fact", "conclusion", "critique"):
             self.assertIn("SCHEMAFULL CHANGEFEED 1w INCLUDE ORIGINAL", tables[table], tables[table])
-        self.assertIn("TYPE RELATION IN fact OUT unit SCHEMALESS CHANGEFEED 1w INCLUDE ORIGINAL", tables["cites"])
+        # ENFORCED since the gates lane (B-011): a link to a missing record is refused
+        self.assertIn("TYPE RELATION IN fact OUT unit ENFORCED SCHEMALESS CHANGEFEED 1w INCLUDE ORIGINAL", tables["cites"])
         self.assertIn("ASSERT", conn.sql("INFO FOR TABLE fact")[0]["fields"]["status"])
         report = gates.run_probes(self.inst, conn)
         self.assertEqual(report["misbehaved"], 0, report)

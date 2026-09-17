@@ -895,14 +895,20 @@ class ProbeShapeTests(unittest.TestCase):
         """A wrong-evidence row exists only where the engine knows another value for the field the
         clause pins. Where it does not -- a predicate it cannot read, or a field with no known set of
         values -- the probe must be REPORTED untested, never treated as not applicable."""
-        for where, expected in (("string::len(statement) > 3", "field = literal"),
-                                ("author = 'someone'", "knows no other value for author")):
+        def moved_to(where):
+            data = json.loads(json.dumps(self.inst.data))
+            for clause in data["gates"][1]["requires"]:
+                if clause["edge"] == "supports":
+                    clause["where"] = where
+            return data
+        # A field with no known set of values no longer reaches the probes: since the gates lane (B-014) the
+        # config is refused at load, by name, which is earlier and louder than a probe reported untested.
+        with self.assertRaises(config.ConfigError) as refused:
+            config.load(moved_to("author = 'someone'"))
+        self.assertIn("fact.author, which has no enumerated domain", str(refused.exception))
+        for where, expected in (("string::len(statement) > 3", "field = literal"),):
             with self.subTest(where=where):
-                data = json.loads(json.dumps(self.inst.data))
-                for clause in data["gates"][1]["requires"]:
-                    if clause["edge"] == "supports":
-                        clause["where"] = where
-                moved = config.load(data)
+                moved = config.load(moved_to(where))
                 probe = [p for p in gates.probes(moved)
                          if p["rule"] == "root_cause_needs_support_and_attack"][0]
                 self.assertTrue(probe["constrained"], "a requires clause with a where constrains the evidence")
