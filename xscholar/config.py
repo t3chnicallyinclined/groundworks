@@ -27,7 +27,7 @@ ID_RE = re.compile(r"^[a-z0-9_]+$")
 TOP_KEYS = {"instance", "units", "fidelity", "status", "vocabulary", "gates",
             "lenses", "roles", "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access",
             "authority", "staleness", "discovery", "tables", "edges", "verdicts", "unique",
-            "assertions", "promotion_log"}
+            "assertions", "promotion_log", "labels"}
 REQUIRED_TOP = ["instance", "units", "fidelity", "status", "vocabulary", "gates",
                 "evaluator", "human_owned", "privacy"]
 MUST_BE_HUMAN_OWNED = ["gates", "fidelity", "status", "evaluator", "privacy"]
@@ -79,6 +79,8 @@ BUILT_IN_FIELDS = {
 # must carry an original is a bar the owner sets.
 TOP_KEYS = TOP_KEYS | {"originals"}
 HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + ["originals"]
+# `labels:` (pipeline/validator.py): how much a label's quote must say. A bar the owner sets.
+HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + ["labels"]
 BUILT_IN_NODE_TABLES = BUILT_IN_NODE_TABLES + ("document",)
 BUILT_IN_FIELDS["unit"]["document"] = "record"
 BUILT_IN_FIELDS["document"] = {"sha256": "string", "media_type": "string", "bytes": "int", "capture": "string",
@@ -677,6 +679,7 @@ def validate(data):
     _validate_assertions(data, problems)
     _validate_audit_tables(data, problems)
     _validate_originals(data, problems)
+    _validate_labels(data, problems)
 
     ev = data["evaluator"]
     if not isinstance(ev, dict) or not ev.get("regression_file"):
@@ -687,6 +690,38 @@ def validate(data):
     if problems:
         raise ConfigError("config invalid:\n  - " + "\n  - ".join(problems))
     return data
+
+
+def _whole_number(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _validate_labels(data, problems):
+    """`labels: {quote_min_words, quote_distinct_units}` -- how much a label's quote must say (pipeline/validator.py)."""
+    if "labels" not in data:
+        return
+    section = data["labels"]
+    if not isinstance(section, dict):
+        problems.append("labels must be a mapping: {quote_min_words: <int>, quote_distinct_units: {<unit type>: <int>}}")
+        return
+    unknown = sorted(set(section) - {"quote_min_words", "quote_distinct_units"})
+    if unknown:
+        problems.append("labels: unknown key(s) %s; allowed: quote_min_words, quote_distinct_units" % ", ".join(unknown))
+    if "quote_min_words" in section and not _whole_number(section["quote_min_words"]):
+        problems.append("labels.quote_min_words must be a whole number of at least 1, not %r" % section["quote_min_words"])
+    distinct = section.get("quote_distinct_units")
+    if distinct is not None:
+        if not isinstance(distinct, dict):
+            problems.append("labels.quote_distinct_units must map a unit type to a whole number")
+        else:
+            types = [u.get("name") for u in data.get("units") or [] if isinstance(u, dict)]
+            for name, limit in distinct.items():
+                if name not in types:
+                    problems.append("labels.quote_distinct_units names unit type %r; known: %s"
+                                    % (name, ", ".join(map(str, types))))
+                if not _whole_number(limit):
+                    problems.append("labels.quote_distinct_units.%s must be a whole number of at least 1, not %r"
+                                    % (name, limit))
 
 
 def _validate_independent(data, rule, problems):

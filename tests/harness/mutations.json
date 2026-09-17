@@ -1594,12 +1594,13 @@
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
    "file": "xscholar/pipeline/validator.py",
-   "anchor": "            elif quote not in _norm(units[uid][\"text\"]):",
+   "anchor": "            elif quote not in normed[uid]:",
    "replacement": "            elif False:",
    "must_fail": [
     "tests.test_invariants.ValidatorInvariantTests.test_oracle_labels_pass_and_every_planted_defect_names_its_unit"
    ],
-   "needs_db": false
+   "needs_db": false,
+   "note": "Re-anchored 2026-09-16: the unit text is normalised once per slice (normed[uid]) for the quote-anchoring rules."
   },
   {
    "id": "M113",
@@ -3347,6 +3348,76 @@
    ],
    "commit": "uncommitted",
    "source": "2026-09-16 checks lane (proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M350",
+   "guard": "a quote under quote_min_words cut from a longer unit is refused",
+   "defect": "trivial quote passes the validator",
+   "file": "xscholar/pipeline/validator.py",
+   "anchor": "            elif quote != normed[uid] and len(quote.split()) < rules[\"quote_min_words\"]:\n",
+   "replacement": "            elif False:\n",
+   "must_fail": [
+    "tests.test_pipeline.QuoteAnchoringTests.test_a_trivial_fragment_of_a_longer_unit_fails_naming_the_unit_and_field"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 validator quote anchoring (B-017 appeal / SUPERGUN report; proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M351",
+   "guard": "a short quote that is the whole unit is not refused by the floor",
+   "defect": "trivial quote passes the validator",
+   "file": "xscholar/pipeline/validator.py",
+   "anchor": "            elif quote != normed[uid] and len(quote.split()) < rules[\"quote_min_words\"]:\n",
+   "replacement": "            elif len(quote.split()) < rules[\"quote_min_words\"]:\n",
+   "must_fail": [
+    "tests.test_pipeline.QuoteAnchoringTests.test_a_short_quote_that_is_the_whole_unit_passes"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 validator quote anchoring (B-017 appeal / SUPERGUN report; proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M352",
+   "guard": "quote_distinct_units, when declared for a unit type, refuses a quote common to the slice",
+   "defect": "trivial quote passes the validator",
+   "file": "xscholar/pipeline/validator.py",
+   "anchor": "            elif (quote != normed[uid] and units[uid].get(\"type\") in rules[\"quote_distinct_units\"]\n",
+   "replacement": "            elif (False and units[uid].get(\"type\") in rules[\"quote_distinct_units\"]\n",
+   "must_fail": [
+    "tests.test_pipeline.QuoteAnchoringTests.test_distinctiveness_is_off_by_default_and_per_unit_type_when_declared"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 validator quote anchoring (B-017 appeal / SUPERGUN report; proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M353",
+   "guard": "labels.quote_min_words is read from the instance, not ignored",
+   "defect": "trivial quote passes the validator",
+   "file": "xscholar/pipeline/validator.py",
+   "anchor": "    return {\"quote_min_words\": int(section.get(\"quote_min_words\", QUOTE_MIN_WORDS)),\n",
+   "replacement": "    return {\"quote_min_words\": QUOTE_MIN_WORDS,\n",
+   "must_fail": [
+    "tests.test_pipeline.QuoteAnchoringTests.test_a_quote_at_the_floor_passes_and_the_floor_is_the_owners_knob"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 validator quote anchoring (B-017 appeal / SUPERGUN report; proven by the runner on a worktree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M354",
+   "guard": "a labels: section must be human-owned",
+   "defect": "trivial quote passes the validator",
+   "file": "xscholar/config.py",
+   "anchor": "HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + [\"labels\"]\n",
+   "replacement": "HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + []\n",
+   "must_fail": [
+    "tests.test_pipeline.QuoteAnchoringTests.test_config_refuses_a_malformed_or_unowned_labels_section"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 validator quote anchoring (B-017 appeal / SUPERGUN report; proven by the runner on a worktree copy)",
    "needs_db": false
   }
  ]

@@ -157,9 +157,9 @@ class ValidatorTests(Base):
         self.slice = self.dir / "slices" / "log_line_0000.jsonl"
         self.good = [
             {"id": "log_001", "tier": 3, "dir": "for_goal", "issues": ["saturation"], "targets": ["rc_pool_exhaustion"],
-             "role": "error", "reason": "Direct evidence of pool exhaustion.", "quote": "pool exhausted"},
+             "role": "error", "reason": "Direct evidence of pool exhaustion.", "quote": "pool exhausted: waited 30000ms"},
             {"id": "log_002", "tier": 2, "dir": "mixed", "issues": ["deploy"], "targets": [], "role": "change",
-             "reason": "A deploy in the window.", "quote": "deploy   v2.14.0"},
+             "reason": "A deploy in the window.", "quote": "deploy   v2.14.0   started"},
             {"id": "log_003", "tier": 0, "dir": None, "issues": [], "targets": [], "role": "note"},
             {"id": "log_004", "tier": 1, "dir": "neutral", "issues": [], "targets": [], "role": "warning"},
         ]
@@ -224,6 +224,101 @@ class ValidatorTests(Base):
         self.assertTrue(good["ok"], good["errors"])
         self.assertEqual(good["checks_run"], good["units"])
 
+
+
+class QuoteAnchoringTests(Base):
+    """A verbatim quote must also carry the reason (validator.py, anchoring and distinct).
+
+    Reported twice on 2026-09-16 from real instances. SUPERGUN (45 real doc_section units, honest labels): a tier-3
+    quote replaced by `the` still PASSED, 0 errors, because `the` is in almost every unit. The appeal instance
+    (2,471 tier>=2 labels): 331 of its 340 quotes under four words are a witness's WHOLE answer ("Yes."), so a length
+    floor or a distinctiveness default would have refused real evidence. The rule that fits both: a short quote is
+    valid only when it is the whole unit."""
+
+    UNITS = [("t1", "Q. Did you keep every weekend? A. Yes."),
+             ("t2", "Yes."),
+             ("t3", "the witness said the report was filed on the fifth"),
+             ("t4", "the court adjourned the matter to the next morning"),
+             ("t5", "the court adjourned the matter to the next morning at ten")]
+
+    def slice_of(self, units=None):
+        path = self.dir / "slice.jsonl"
+        path.write_text("".join(json.dumps({"id": uid, "type": "log_line", "text": text,
+                                            "locator": {"host": "h", "file": "f", "line": i, "ts": "t"},
+                                            "status": "in_window", "grade": "original_log", "hash": uid}) + "\n"
+                                for i, (uid, text) in enumerate(units or self.UNITS)), encoding="utf-8")
+        return path
+
+    def labels_for(self, quotes):
+        path = self.dir / "labels.jsonl"
+        rows = []
+        for uid, _ in self.UNITS:
+            if uid in quotes:
+                rows.append({"id": uid, "tier": 3, "dir": "for_goal", "issues": ["saturation"], "targets": [],
+                             "role": "error", "reason": "the reason this unit matters", "quote": quotes[uid]})
+            else:
+                rows.append({"id": uid, "tier": 0, "dir": None, "issues": [], "targets": [], "role": "note"})
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        return path
+
+    def check(self, quotes, labels_section=None):
+        data = json.loads(json.dumps(self.inst.data))
+        if labels_section is not None:
+            data["labels"] = labels_section
+            data["human_owned"] = list(data["human_owned"]) + ["labels"]
+        return validator.validate(self.slice_of(), self.labels_for(quotes), config.load(data))
+
+    def errors(self, report):
+        return [(e["unit"], e["field"]) for e in report["errors"]]
+
+    def test_a_trivial_fragment_of_a_longer_unit_fails_naming_the_unit_and_field(self):
+        report = self.check({"t3": "the"})
+        self.assertFalse(report["ok"], "a quote of `the` anchored a tier-3 reason and PASSED")
+        self.assertEqual(self.errors(report), [("t3", "quote")])
+        self.assertIn("whole unit", report["errors"][0]["error"])
+        self.assertEqual(self.errors(self.check({"t1": "A. Yes."})), [("t1", "quote")], "two words cut from a longer unit")
+
+    def test_a_short_quote_that_is_the_whole_unit_passes(self):
+        report = self.check({"t2": "Yes."})
+        self.assertTrue(report["ok"], report["errors"])
+        self.assertTrue(self.check({"t2": "  Yes.  "})["ok"], "whole-unit comparison collapses whitespace like verbatim")
+
+    def test_a_quote_at_the_floor_passes_and_the_floor_is_the_owners_knob(self):
+        self.assertTrue(self.check({"t3": "report was filed"})["ok"])
+        self.assertEqual(self.errors(self.check({"t3": "report was filed"}, {"quote_min_words": 4})), [("t3", "quote")])
+        self.assertTrue(self.check({"t3": "the"}, {"quote_min_words": 1})["ok"], "the knob, set to 1, is the old rule")
+        self.assertEqual(validator.quote_rules(self.inst)["quote_min_words"], validator.QUOTE_MIN_WORDS)
+
+    def test_distinctiveness_is_off_by_default_and_per_unit_type_when_declared(self):
+        common = {"t4": "the court adjourned the matter"}
+        self.assertTrue(self.check(common)["ok"], "distinctiveness is opt-in: transcript turns repeat by nature")
+        report = self.check(common, {"quote_distinct_units": {"log_line": 1}})
+        self.assertEqual(self.errors(report), [("t4", "quote")])
+        self.assertIn("2 units", report["errors"][0]["error"])
+        self.assertTrue(self.check(common, {"quote_distinct_units": {"log_line": 2}})["ok"], "N is how many units may share it")
+        self.assertTrue(self.check(common, {"quote_distinct_units": {"change": 1}})["ok"], "declared for another type only")
+        whole = {"t4": "the court adjourned the matter to the next morning"}   # also inside t5, but it is all of t4
+        self.assertTrue(self.check(whole, {"quote_distinct_units": {"log_line": 1}})["ok"], "a whole unit is exempt")
+
+    def test_the_report_says_which_quote_rules_it_applied(self):
+        self.assertEqual(self.check({"t2": "Yes."})["quote_rules"],
+                         {"quote_min_words": validator.QUOTE_MIN_WORDS, "quote_distinct_units": {}})
+
+    def test_config_refuses_a_malformed_or_unowned_labels_section(self):
+        def refused(section, owned=True):
+            data = json.loads(json.dumps(self.inst.data))
+            data["labels"] = section
+            if owned:
+                data["human_owned"] = list(data["human_owned"]) + ["labels"]
+            with self.assertRaises(config.ConfigError) as raised:
+                config.load(data)
+            return str(raised.exception)
+        self.assertIn("human_owned must include labels", refused({"quote_min_words": 3}, owned=False))
+        self.assertIn("quote_min_words must be a whole number", refused({"quote_min_words": 0}))
+        self.assertIn("quote_min_words must be a whole number", refused({"quote_min_words": True}))
+        self.assertIn("names unit type 'transcript'", refused({"quote_distinct_units": {"transcript": 2}}))
+        self.assertIn("quote_distinct_units.log_line must be a whole number", refused({"quote_distinct_units": {"log_line": "2"}}))
+        self.assertIn("unknown key(s) quote_min_chars", refused({"quote_min_chars": 8}))
 
 if __name__ == "__main__":
     unittest.main()
