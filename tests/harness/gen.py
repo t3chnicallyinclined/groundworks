@@ -202,6 +202,8 @@ def gen_labels(rng, cfg, units):
                           "issues": rng.sample(vocab["issues"], rng.randint(1, len(vocab["issues"]))),
                           "reason": "because %s" % rng.choice(words),
                           "quote": " ".join(words[start:start + rng.randint(1, 4)])})
+            if len(label["quote"].split()) < 3:   # validator: a quote under 3 words must be the whole unit
+                label["quote"] = unit["text"]
         labels.append(label)
     return labels
 

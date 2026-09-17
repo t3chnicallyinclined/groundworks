@@ -38,7 +38,7 @@ def a_file(**changes):
                    "labels": [{"id": "u1", "tier": 2, "dir": "for_goal", "issues": ["saturation"], "targets": [],
                                "role": "error", "reason": "r", "quote": "pool drained at noon"}],
                    "control_labels": [{"id": "u1", "tier": 2, "dir": "for_goal", "issues": ["saturation"],
-                                       "targets": [], "role": "error", "reason": "r", "quote": "pool exhausted"}],
+                                       "targets": [], "role": "error", "reason": "r", "quote": "pool exhausted at"}],
                    "expect_errors": [{"unit": "u1", "field": "quote"}]}}]}
     data.update(changes)
     return data

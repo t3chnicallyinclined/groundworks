@@ -244,11 +244,11 @@ class ValidatorTests(Base):
 
     def test_a_quote_in_the_extraction_but_not_in_the_original_at_the_locator_fails(self):
         doc = [{"key": "app.log", "bytes": LOG, "media_type": "text/plain"}]
-        good = self.run_labels(doc, [unit(1, "pool exhausted: waited 30000ms")], [self.label("u1", "pool exhausted")])
+        good = self.run_labels(doc, [unit(1, "pool exhausted: waited 30000ms")], [self.label("u1", "pool exhausted: waited")])
         self.assertTrue(good["ok"], good["errors"])
         self.assertEqual(good["original_checked"], 1)
         # the extraction says something line 1 of the original does not (it is line 2's text)
-        bad = self.run_labels(doc, [unit(1, "retrying upstream call")], [self.label("u1", "retrying upstream")])
+        bad = self.run_labels(doc, [unit(1, "retrying upstream call")], [self.label("u1", "retrying upstream call")])
         self.assertFalse(bad["ok"])
         self.assertEqual([(e["unit"], e["field"]) for e in bad["errors"]], [("u1", "original")])
         self.assertIn("not found word for word in the original", bad["errors"][0]["error"])

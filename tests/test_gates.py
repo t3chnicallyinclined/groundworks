@@ -702,9 +702,16 @@ class BaselineBlindSpotTests(unittest.TestCase):
         self.assertTrue(any("value" in f and "confirmed_needs_source_grade" in f for f in failures), failures)
 
     def test_moving_a_rule_to_another_field_or_table_is_a_weakening(self):
+        # A config can no longer gate a field with no enumerated domain (fact.note), and fact has no second
+        # enumerated field, so the move is made on the spec the baseline is compared with.
         def field(data):
             data["gates"][0]["field"] = "note"
-        self.assertTrue(any("field" in f for f in self.failures(field)), "a rule moved to another field")
+        with self.assertRaises(config.ConfigError):
+            self.mutated(field)
+        moved = json.loads(json.dumps(self.baseline["spec"]))
+        moved["rules"][self.inst.data["gates"][0]["id"]]["field"] = "note"
+        self.assertTrue(any("field" in f for f in gates.compare_baseline(self.baseline, None, moved)),
+                        "a rule moved to another field")
 
         def table(data):
             data["gates"][0].update({"table": "authority", "field": "verified", "value": True})
@@ -888,14 +895,20 @@ class ProbeShapeTests(unittest.TestCase):
         """A wrong-evidence row exists only where the engine knows another value for the field the
         clause pins. Where it does not -- a predicate it cannot read, or a field with no known set of
         values -- the probe must be REPORTED untested, never treated as not applicable."""
-        for where, expected in (("string::len(statement) > 3", "field = literal"),
-                                ("author = 'someone'", "knows no other value for author")):
+        def moved_to(where):
+            data = json.loads(json.dumps(self.inst.data))
+            for clause in data["gates"][1]["requires"]:
+                if clause["edge"] == "supports":
+                    clause["where"] = where
+            return data
+        # A field with no known set of values no longer reaches the probes: since the gates lane (B-014) the
+        # config is refused at load, by name, which is earlier and louder than a probe reported untested.
+        with self.assertRaises(config.ConfigError) as refused:
+            config.load(moved_to("author = 'someone'"))
+        self.assertIn("fact.author, which has no enumerated domain", str(refused.exception))
+        for where, expected in (("string::len(statement) > 3", "field = literal"),):
             with self.subTest(where=where):
-                data = json.loads(json.dumps(self.inst.data))
-                for clause in data["gates"][1]["requires"]:
-                    if clause["edge"] == "supports":
-                        clause["where"] = where
-                moved = config.load(data)
+                moved = config.load(moved_to(where))
                 probe = [p for p in gates.probes(moved)
                          if p["rule"] == "root_cause_needs_support_and_attack"][0]
                 self.assertTrue(probe["constrained"], "a requires clause with a where constrains the evidence")

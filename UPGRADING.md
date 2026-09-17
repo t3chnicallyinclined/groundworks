@@ -401,6 +401,31 @@ Measured on SurrealDB 3.1.6; `notes/2026-09-16_gates_lane_enforced_edges_and_dom
 
 ---
 
+## 7o. A label's quote must say enough to carry its reason
+
+Reported from two instances on 2026-09-16. A tier-3 label quoting just `the` passed the validator with 0 errors: the
+quote was verbatim, and `the` is in almost every unit. Verbatim proves the words exist, not that they carry the reason.
+
+| What | Used to | Now | What to do |
+|---|---|---|---|
+| A tier >= 2 quote of fewer than 3 words **cut from a longer unit** (`the`, `A. Yes.` out of a Q-and-A turn) | PASS | `FAIL <unit> quote ... under 3 words a quote must be the whole unit` | Quote the words that carry the reason, or the whole unit |
+| A short quote that **is the whole unit** (a witness's whole answer `Yes.`, whitespace collapsed) | PASS | PASS, unchanged | Nothing |
+| `labels:` in instance.yaml | Refused (unknown key) | Optional, **human-owned when present**: `quote_min_words: <n>` (default 3; `1` is the old rule) and `quote_distinct_units: {<unit type>: <n>}` | See below |
+| `quote_distinct_units` (off unless declared) | (did not exist) | For a declared unit type, a quote found in more than n units of the slice is refused, unless it is the whole unit | Declare it for prose units (document sections). **Do not** declare it for transcript turns: `Yes.` is in every slice |
+| Validator report | | Gains `quote_rules`: the rules it applied | Nothing |
+
+**Why not a length floor or distinctiveness by default:** measured on the appeal instance's 2,471 tier >= 2 labels,
+331 of the 340 quotes under four words were a witness's entire sworn answer, some of the most important evidence
+there. Either rule would have refused them. A short fragment of a longer unit is the degenerate case; a short whole
+unit is not.
+
+**Before you upgrade, measure it:** run the validator over your existing labels. Every new `quote` error names its
+unit. Fix the quote, or, if the owner decides your short fragments are sound, set `labels: {quote_min_words: 2}` (or
+`1`) and add `labels` to `human_owned`. What cannot be caught: a real, long, distinctive quote pasted under the wrong
+reason. That still takes a reader.
+
+---
+
 ## 8. What this release does NOT give you
 
 - **No container.** Deliberate, see step 2.

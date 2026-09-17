@@ -128,8 +128,17 @@ class LiveSchemaTests(unittest.TestCase):
         statements are replayed here by hand."""
         root = deploy(self.inst)
         self.assertEqual(rows(live_schema.check(self.inst, root)), [])
+        # The schema alone restates every built-in field, so on its own it strips the gate ASSERTs until gate_surql
+        # runs again; every applier (gates --apply, run_instance, the evaluator) runs the two together, and the check
+        # names exactly the gated fields when someone does not.
         root.script(gates.schema_surql(self.inst))
-        self.assertEqual(rows(live_schema.check(self.inst, root)), [], "re-applying the schema must change nothing")
+        self.assertEqual({(s, k) for s, k, _ in rows(live_schema.check(self.inst, root))}, {("altered", "field")})
+        self.assertEqual({n for _, _, n in rows(live_schema.check(self.inst, root))},
+                         {"%s.%s" % (r["table"], r["field"]) for r in self.inst.gate_rules()
+                          if r.get("requires") or r.get("forbids")})
+        root.script(gates.gate_surql(self.inst))
+        self.assertEqual(rows(live_schema.check(self.inst, root)), [],
+                         "re-applying the schema and the gates, as every applier does, must change nothing")
         root.script("DEFINE TABLE OVERWRITE fact SCHEMAFULL; DEFINE TABLE OVERWRITE critique SCHEMAFULL;")
         report = live_schema.check(self.inst, root)
         altered = {name for status, kind, name in rows(report) if status == "altered" and kind == "table"}
