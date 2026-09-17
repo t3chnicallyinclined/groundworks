@@ -3425,8 +3425,8 @@
    "guard": "the adjudication list is never capped",
    "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
    "file": "xscholar/pipeline/agreement.py",
-   "anchor": "    return sorted(units, key=lambda u: (_group(units[u]), str(u)))\n",
-   "replacement": "    return sorted(units, key=lambda u: (_group(units[u]), str(u)))[:20]\n",
+   "anchor": "    return sorted(units, key=lambda u: (_group(units[u], tiers.get(u)), str(u)))\n",
+   "replacement": "    return sorted(units, key=lambda u: (_group(units[u], tiers.get(u)), str(u)))[:20]\n",
    "must_fail": [
     "tests.test_agreement.AgreementTests.test_every_unit_with_a_disagreement_is_adjudicated_once_most_consequential_first"
    ],
@@ -3460,6 +3460,20 @@
    ],
    "commit": "uncommitted",
    "source": "2026-09-16 agreement adjudication list (reported by the SUPERGUN instance; proven by hand on a tree copy)",
+   "needs_db": false
+  },
+  {
+   "id": "M363",
+   "guard": "a direction flip on a unit both labellers rated relevant is adjudicated before other tier splits",
+   "defect": "adjudication order",
+   "file": "xscholar/pipeline/agreement.py",
+   "anchor": "    if tiers and all(isinstance(t, int) and t >= 2 for t in tiers) and any(d[\"field\"] == \"dir\" for d in unit_disagreements):\n        return 2\n",
+   "replacement": "    if tiers and all(isinstance(t, int) and t >= 2 for t in tiers) and any(d[\"field\"] == \"dir\" for d in unit_disagreements):\n        return 4\n",
+   "must_fail": [
+    "tests.test_agreement.AgreementTests.test_every_unit_with_a_disagreement_is_adjudicated_once_most_consequential_first"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-16 agreement direction group (suggested by the SUPERGUN instance; proven by hand on a tree copy)",
    "needs_db": false
   }
  ]

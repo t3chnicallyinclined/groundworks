@@ -434,7 +434,7 @@ units, and a tier split that did not cross tier 2 (3 vs 2, 1 vs 0) was never lis
 
 | What | Used to | Now |
 |---|---|---|
-| `adjudicate` | Relevance splits + at most 20 others; tier-only splits missing; a unit could appear twice | **Every** unit with any disagreement, once: relevance splits, then 2 vs 3, then other tier splits, then other fields only. Always `len(adjudicate) == units_with_any_disagreement` |
+| `adjudicate` | Relevance splits + at most 20 others; tier-only splits missing; a unit could appear twice | **Every** unit with any disagreement, once: relevance splits, then 2 vs 3, then a direction flip on a unit both rated tier 2+, then other tier splits, then other fields only. Always `len(adjudicate) == units_with_any_disagreement` |
 | `adjudicate_groups` | (did not exist) | Counts per group |
 | CLI line | `N unit(s) to adjudicate` (N was capped) | The true N, with the per-group counts |
 

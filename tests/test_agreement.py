@@ -73,20 +73,22 @@ class AgreementTests(unittest.TestCase):
         b.append(dict(a[-1], tier=1))
         a.append({"id": "split", "tier": 3, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
         b.append(dict(a[-1], tier=0, dir="neutral"))   # a relevance split that also disagrees on direction
+        a.append({"id": "flip", "tier": 2, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
+        b.append(dict(a[-1], dir="against_goal"))   # both relevant, opposite readings: ahead of a 0-vs-1 split
         a.append({"id": "same", "tier": 2, "dir": "for_goal", "issues": ["x"], "targets": [], "role": "note"})
         b.append(dict(a[-1]))
         r = agreement.compare(self.write("a.jsonl", a), self.write("b.jsonl", b))
-        self.assertEqual(r["units_with_any_disagreement"], 33)
-        self.assertEqual(len(r["adjudicate"]), 33, "every unit with a disagreement is listed")
+        self.assertEqual(r["units_with_any_disagreement"], 34)
+        self.assertEqual(len(r["adjudicate"]), 34, "every unit with a disagreement is listed")
         self.assertEqual(len(set(r["adjudicate"])), len(r["adjudicate"]), "no unit twice")
-        self.assertEqual(r["adjudicate"][:3], ["split", "t3v2", "t0v1"])
+        self.assertEqual(r["adjudicate"][:4], ["split", "t3v2", "flip", "t0v1"])
         self.assertNotIn("same", r["adjudicate"])
         self.assertEqual(r["adjudicate_groups"], {"relevance_split": 1, "within_relevant_tiers": 1,
-                                                  "other_tier": 1, "other_fields": 30})
+                                                  "direction_on_relevant": 1, "other_tier": 1, "other_fields": 30})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             agreement.main([str(self.dir / "a.jsonl"), str(self.dir / "b.jsonl")])
-        self.assertIn("33 unit(s) to adjudicate", out.getvalue())
+        self.assertIn("34 unit(s) to adjudicate", out.getvalue())
 
     def test_kappa_is_chance_corrected(self):
         # One value across the whole sample is NOT perfect agreement: chance agreement is already
