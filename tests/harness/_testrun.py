@@ -10,8 +10,8 @@ replaces read any non-zero exit as "red", so a mutant that stopped the module im
 catch. Here an import failure is its own outcome, and a skip is never a pass.
 
 The tree root goes FIRST on sys.path, and every module that ran is checked to have been imported from
-inside that root. Measured on the development machine: xscholar is installed editable, so
-`import xscholar` from any other directory resolves to the LIVE tree -- a mutant in the copy would never
+inside that root. Measured on the development machine: groundworks is installed editable, so
+`import groundworks` from any other directory resolves to the LIVE tree -- a mutant in the copy would never
 be imported and every mutation would "survive" against unmutated code.
 """
 import importlib
@@ -102,7 +102,7 @@ def main(argv):
             continue
         by_class.setdefault((module_name, class_name), []).append(cls(rest))
 
-    for name in ["xscholar"] + sorted({m for m, _ in by_class}):
+    for name in ["groundworks"] + sorted({m for m, _ in by_class}):
         module = sys.modules.get(name)
         where = getattr(module, "__file__", None)
         if module is not None and where and root not in pathlib.Path(where).resolve().parents:

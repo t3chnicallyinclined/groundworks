@@ -16,9 +16,9 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import access, config, gates, live_schema, promotion_log, surreal_bin, temporal  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar.pipeline import loader  # noqa: E402
+from groundworks import access, config, gates, live_schema, promotion_log, surreal_bin, temporal  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks.pipeline import loader  # noqa: E402
 from tests.test_independence_modes import RULE, mode_instance  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -471,8 +471,8 @@ class PromotionLogTests(unittest.TestCase):
         refused = []
         conns = []
         for _ in range(count):        # sign in first, so the promotions themselves start together
-            conn = access.connect({"XSCHOLAR_DB_URL": URL, "XSCHOLAR_NS": "t", "XSCHOLAR_DB": self.root.db,
-                                   "XSCHOLAR_DB_USER": "b_1", "XSCHOLAR_DB_PASS": b._password})
+            conn = access.connect({"GROUNDWORKS_DB_URL": URL, "GROUNDWORKS_NS": "t", "GROUNDWORKS_DB": self.root.db,
+                                   "GROUNDWORKS_DB_USER": "b_1", "GROUNDWORKS_DB_PASS": b._password})
             conn.ping(check_version=False)
             conns.append(conn)
         barrier = threading.Barrier(count)
@@ -502,8 +502,8 @@ class McpHealthTests(unittest.TestCase):
     cannot run says NOT_EXECUTED instead of reading 0."""
 
     def setUp(self):
-        from xscholar import lens, originals
-        from xscholar.mcp import instance_adapter
+        from groundworks import lens, originals
+        from groundworks.mcp import instance_adapter
         self.inst = mode_instance(True, log=True)
         self.root = deploy(self.inst, ("schema", "gates", "temporal", "access", "provenance"))
         self.root.script(originals.enforcement_surql(self.inst))

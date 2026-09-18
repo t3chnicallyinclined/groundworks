@@ -5,5 +5,5 @@
     gen.py         the seed-reproducible generator of valid configs and corpora (TESTING s.6)
     props.py       the standard-library property runner with shrinking and saved failures (TESTING s.6)
 
-Nothing under xscholar/ imports this package. Standard library only.
+Nothing under groundworks/ imports this package. Standard library only.
 """

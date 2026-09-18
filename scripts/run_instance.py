@@ -23,24 +23,24 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import access  # noqa: E402
-from xscholar import assertions  # noqa: E402
-from xscholar import config  # noqa: E402
-from xscholar import consistency  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import lens as lensmod  # noqa: E402
-from xscholar import live_schema  # noqa: E402
-from xscholar import originals  # noqa: E402
-from xscholar import store as storemod  # noqa: E402
-from xscholar import temporal  # noqa: E402
-from xscholar.pipeline import intake  # noqa: E402
-from xscholar.pipeline import chunker  # noqa: E402
-from xscholar.pipeline import validator  # noqa: E402
-from xscholar.pipeline import loader  # noqa: E402
-from xscholar.pipeline import write  # noqa: E402
+from groundworks import access  # noqa: E402
+from groundworks import assertions  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import consistency  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import lens as lensmod  # noqa: E402
+from groundworks import live_schema  # noqa: E402
+from groundworks import originals  # noqa: E402
+from groundworks import store as storemod  # noqa: E402
+from groundworks import temporal  # noqa: E402
+from groundworks.pipeline import intake  # noqa: E402
+from groundworks.pipeline import chunker  # noqa: E402
+from groundworks.pipeline import validator  # noqa: E402
+from groundworks.pipeline import loader  # noqa: E402
+from groundworks.pipeline import write  # noqa: E402
 
-from xscholar import surreal_bin  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
 
 
@@ -53,7 +53,7 @@ def load_module(path):
 
 def start_memory(port):
     """A throwaway in-memory SurrealDB this run owns, or SystemExit saying NOT EXECUTED. The guards live in
-    xscholar/surreal_bin.py (one implementation, shared with the evaluator); `SURREAL` is read at call time."""
+    groundworks/surreal_bin.py (one implementation, shared with the evaluator); `SURREAL` is read at call time."""
     try:
         return surreal_bin.start_memory(port, binary=SURREAL)
     except surreal_bin.NotStarted as exc:
@@ -321,8 +321,8 @@ def main(argv=None):
                 creds = access.provision(conn, inst, agent_id, role, lens=lens)
                 agent_db = access.connect(creds)
                 agent_db.ping()
-                say("provision", "%s as %s%s -> XSCHOLAR_DB_USER=%s XSCHOLAR_DB_ACCESS=%s (signed in, not root)"
-                    % (agent_id, role, " lens " + lens if lens else "", agent_id, creds["XSCHOLAR_DB_ACCESS"]))
+                say("provision", "%s as %s%s -> GROUNDWORKS_DB_USER=%s GROUNDWORKS_DB_ACCESS=%s (signed in, not root)"
+                    % (agent_id, role, " lens " + lens if lens else "", agent_id, creds["GROUNDWORKS_DB_ACCESS"]))
             else:
                 agent_db = conn
             writers[role] = Counted(write.Writer(agent_db, inst, {"agent_id": agent_id, "role": role, "lens": lens}))

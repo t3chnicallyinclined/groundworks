@@ -1,6 +1,6 @@
 # 2026-09-16: marker wording (C20), measured on the demo instance
 
-Generic; no matter content. Module: `xscholar/present`. Roadmap V2-7, following C17
+Generic; no matter content. Module: `groundworks/present`. Roadmap V2-7, following C17
 (`notes/2026-09-15_reading_layer_evaluation.md`) and C18 (`notes/2026-09-15_inline_rule_recheck.md`).
 
 ## The answer first
@@ -21,12 +21,12 @@ At n = 12 that is a hypothesis, not a result.
 ## What was tested
 
 Material: the demo corpus `synthetic.REVIEW` ("Payments rewrite: design review", 43 rows, 5 groups),
-rendered `speedread` with that corpus's own four declared `rules` (`xscholar/present/synthetic.py:145`).
+rendered `speedread` with that corpus's own four declared `rules` (`groundworks/present/synthetic.py:145`).
 Two seeded copies, `plant.py --per-type 2`, seeds 7 and 23: **10 planted errors each, 2 of every
 mutation type, 20 planted errors in total**. The rule re-check's behaviour is identical in all three
 arms — wording was the only variable.
 
-**Arm A, control** — the shipped wording (`xscholar/present/render.py:57`, `:175`, `:216`):
+**Arm A, control** — the shipped wording (`groundworks/present/render.py:57`, `:175`, `:216`):
 
 ```
 ## Fails its own rule (5)
@@ -211,7 +211,7 @@ Lookup behaviour, the one place the arms separate:
 ## What this changes
 
 - **Nothing is adopted.** Neither the C20 marker wording nor the hand-checkable counts block goes into
-  `xscholar/present`. `render.py`, `features.py` and `policy.py` are untouched; the variants live only in
+  `groundworks/present`. `render.py`, `features.py` and `policy.py` are untouched; the variants live only in
   the experiment harness, which is not committed.
 - **The C20 row of `docs/TUNING.md` is corrected.** The recommendation "say what the label claims, what
   the evidence supports and the single action that resolves it" was written from the earlier rounds as a

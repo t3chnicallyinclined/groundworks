@@ -2,7 +2,7 @@
 """The evaluator's regression file: refused when missing or malformed, executed, and able to go red.
 
 No server. The database-backed kinds are exercised with a stand-in Writer through the runner's own seam,
-and against a real server by `xscholar test` (the evaluator step), not here: every suite port is taken.
+and against a real server by `groundworks test` (the evaluator step), not here: every suite port is taken.
 
 Found 2026-09-16: config required `evaluator.regression_file`, the demo declared `evals/known_errors.json`,
 the file did not exist, and no code read the key. The evaluator every improvement must beat had never run.
@@ -18,8 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import cli, config, evaluator  # noqa: E402
-from xscholar.pipeline.write import GateRefusal  # noqa: E402
+from groundworks import cli, config, evaluator  # noqa: E402
+from groundworks.pipeline.write import GateRefusal  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEMO_DIR = ROOT / "instances" / "demo-incident"
@@ -165,7 +165,7 @@ class RunTests(unittest.TestCase):
 
     def test_a_planted_misquote_is_caught_and_a_validator_that_stopped_checking_quotes_regresses(self):
         self.assertEqual([r["verdict"] for r in self.run_file(a_file())], [evaluator.CAUGHT])
-        from xscholar.pipeline import validator
+        from groundworks.pipeline import validator
         with mock.patch.object(validator, "_norm", side_effect=lambda text: "" if text is None else "x") as norm:
             results = self.run_file(a_file())
         self.assertTrue(norm.called, "the stand-in for a validator that stopped checking quotes never ran")
@@ -244,7 +244,7 @@ class RunTests(unittest.TestCase):
     def test_nothing_in_the_evaluator_can_write_the_regression_file(self):
         """Human-owned: the runner opens the file read-only. Writes it makes go to a temporary directory
         or to --json, and --json may not name the regression file."""
-        tree = ast.parse((ROOT / "xscholar" / "evaluator.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "groundworks" / "evaluator.py").read_text(encoding="utf-8"))
         writers = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and getattr(node.func, "attr", "") in ("write_text", "write_bytes"):
@@ -306,7 +306,7 @@ class PinnedIdTests(unittest.TestCase):
 
 
 class TestCommandWiringTests(unittest.TestCase):
-    """`xscholar test` RUNS the evaluator and the mutation lint, and a skipped evaluator is never a pass.
+    """`groundworks test` RUNS the evaluator and the mutation lint, and a skipped evaluator is never a pass.
     Behaviour, not text: the commands are captured, not grepped for (D8)."""
 
     def run_test(self, args, codes):
@@ -328,17 +328,17 @@ class TestCommandWiringTests(unittest.TestCase):
     def test_the_evaluator_and_the_mutation_lint_are_run(self):
         rc, calls = self.run_test([], {})
         joined = [" ".join(map(str, c)) for c in calls]
-        self.assertTrue(any("xscholar.evaluator" in c and "instances/demo-incident" in c for c in joined), joined)
+        self.assertTrue(any("groundworks.evaluator" in c and "instances/demo-incident" in c for c in joined), joined)
         self.assertTrue(any("tests.harness.mutate lint" in c for c in joined), joined)
         self.assertEqual(rc, 0)
 
     def test_an_evaluator_that_could_not_run_fails_under_require_db_and_is_named_otherwise(self):
-        codes = {"xscholar.evaluator": (2, "EVALUATOR  NOT EXECUTED: no server\n")}
+        codes = {"groundworks.evaluator": (2, "EVALUATOR  NOT EXECUTED: no server\n")}
         self.assertEqual(self.run_test(["--require-db"], codes)[0], 1)
         self.assertEqual(self.run_test([], codes)[0], 0)
 
     def test_a_regressed_known_error_or_a_stale_mutation_anchor_fails_the_run(self):
-        self.assertEqual(self.run_test([], {"xscholar.evaluator": (1, "EVALUATOR ... 1 REGRESSED\n")})[0], 1)
+        self.assertEqual(self.run_test([], {"groundworks.evaluator": (1, "EVALUATOR ... 1 REGRESSED\n")})[0], 1)
         self.assertEqual(self.run_test([], {"tests.harness.mutate": (1, "MUTATION LINT ... 1 problem(s)\n")})[0], 1)
 
 

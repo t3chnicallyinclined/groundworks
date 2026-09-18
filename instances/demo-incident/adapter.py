@@ -113,8 +113,8 @@ def scenario(writers, report):
     provisioned credential (or all on root when the instance has no access: section).
     `report(who, step, outcome)` records each line for the runner. Every refusal here is the point:
     a GateRefusal is the gate; a PermissionDenied is the datastore's per-agent permissions."""
-    from xscholar.pipeline.write import GateRefusal
-    from xscholar.db import PermissionDenied
+    from groundworks.pipeline.write import GateRefusal
+    from groundworks.db import PermissionDenied
 
     reader, seat, coord = writers["reader"], writers["seat"], writers["coordinator"]
 

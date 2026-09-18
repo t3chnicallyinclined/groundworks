@@ -137,7 +137,7 @@ class PrivacyScanTests(unittest.TestCase):
             path.write_text(body, encoding="utf-8")
         subprocess.run(["git", "init", "-q"], cwd=repo, capture_output=True)
         subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
-        env = dict(os.environ, XSCHOLAR_DENYLIST=str(self.deny))
+        env = dict(os.environ, GROUNDWORKS_DENYLIST=str(self.deny))
         return subprocess.run([sys.executable, "scripts/privacy_scan.py"] + list(args),
                               cwd=repo, capture_output=True, text=True, env=env)
 
@@ -162,7 +162,7 @@ class PrivacyScanTests(unittest.TestCase):
             b.write_text("x", encoding="utf-8")
         scan.ROOT = self.work
         scan.files = lambda _all: binaries
-        os.environ["XSCHOLAR_DENYLIST"] = str(self.deny)
+        os.environ["GROUNDWORKS_DENYLIST"] = str(self.deny)
         buf, sys.stdout = sys.stdout, io.StringIO()
         try:
             rc, printed = scan.main([]), sys.stdout.getvalue()
@@ -212,7 +212,7 @@ class CiTests(unittest.TestCase):
         self.assertIn("command -v surreal", self.ci)
 
     def test_a_skipped_suite_fails_the_build(self):
-        invocations = [ln for ln in self.run_lines() if "xscholar.cli test" in ln]
+        invocations = [ln for ln in self.run_lines() if "groundworks.cli test" in ln]
         self.assertTrue(invocations, "CI does not run the test command at all")
         self.assertTrue(all("--require-db" in ln for ln in invocations),
                         "unittest exits 0 on a skipped suite ('Ran 0 tests ... OK (skipped=2)'), so "
@@ -222,7 +222,7 @@ class CiTests(unittest.TestCase):
         self.assertIn("kill -0", self.ci, "`&` throws the exit status away")
 
     def test_the_privacy_scan_has_an_automated_caller(self):
-        cli = (ROOT / "xscholar" / "cli.py").read_text(encoding="utf-8")
+        cli = (ROOT / "groundworks" / "cli.py").read_text(encoding="utf-8")
         self.assertIn("privacy_scan.py", cli,
                       "the repo's most important guard ran only when a human remembered")
 

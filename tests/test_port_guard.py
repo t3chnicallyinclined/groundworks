@@ -23,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import surreal_bin  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -213,23 +213,23 @@ class PortGuardTests(unittest.TestCase):
 
 class OneStartImplementationTests(unittest.TestCase):
     """docs/TUNING.md, third lane rule: one rule, one implementation. The throwaway-server start and its guards
-    were copied into xscholar/evaluator.py from scripts/run_instance.py; a copy is where a later fix to one
-    silently misses the other. Both now call xscholar/surreal_bin.py."""
+    were copied into groundworks/evaluator.py from scripts/run_instance.py; a copy is where a later fix to one
+    silently misses the other. Both now call groundworks/surreal_bin.py."""
 
     def test_only_surreal_bin_starts_a_throwaway_server_in_engine_and_script_code(self):
         starters = []
-        for path in sorted(list(ROOT.glob("xscholar/**/*.py")) + list(ROOT.glob("scripts/*.py"))):
+        for path in sorted(list(ROOT.glob("groundworks/**/*.py")) + list(ROOT.glob("scripts/*.py"))):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", None)) == "Popen":
                     words = {n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
                     if {"start", "memory"} <= words:
                         starters.append(path.relative_to(ROOT).as_posix())
-        self.assertEqual(starters, ["xscholar/surreal_bin.py"],
+        self.assertEqual(starters, ["groundworks/surreal_bin.py"],
                          "a second implementation of the throwaway-server start: %s" % starters)
 
     def test_the_evaluator_and_the_demo_runner_both_go_through_it(self):
-        from xscholar import evaluator
+        from groundworks import evaluator
         run_instance = load_run_instance()
         calls = []
 
@@ -247,7 +247,7 @@ class OneStartImplementationTests(unittest.TestCase):
         self.assertEqual(calls, [DOOMED, DOOMED])
 
     def test_the_evaluator_refuses_an_occupied_port_through_the_shared_guard(self):
-        from xscholar import evaluator
+        from groundworks import evaluator
         with occupied_port() as port:
             with self.assertRaises(evaluator.NotExecuted) as raised:
                 evaluator.start_server(port)

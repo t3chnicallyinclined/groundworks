@@ -15,7 +15,7 @@ import unittest
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar.pipeline import agreement  # noqa: E402
+from groundworks.pipeline import agreement  # noqa: E402
 
 BASE = [
     {"id": "u1", "tier": 3, "dir": "for_goal", "issues": ["saturation"], "targets": ["t1"], "role": "error"},

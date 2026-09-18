@@ -22,8 +22,8 @@ from unittest import mock
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar.mcp import adapter as contract  # noqa: E402
-from xscholar.mcp import code_state, health_summary, server  # noqa: E402
+from groundworks.mcp import adapter as contract  # noqa: E402
+from groundworks.mcp import code_state, health_summary, server  # noqa: E402
 try:  # discovery puts tests/ on the path; `python -m unittest tests.x` does not
     from test_mcp_server import FakeAdapter, INCIDENT, PROV, run_tool  # noqa: E402
 except ImportError:  # pragma: no cover
@@ -115,16 +115,16 @@ class GuardTests(unittest.TestCase):
                                 "UNVERIFIED", "wip/five-lanes", "check out branch main")
 
     def test_uncommitted_changes_at_startup_refuse_every_write(self):
-        self.refused_everywhere(self.serve(Disk(code_state.git_state(A, MAIN, ["M xscholar/gates.py"]))),
-                                "uncommitted", "xscholar/gates.py", "commit or discard")
+        self.refused_everywhere(self.serve(Disk(code_state.git_state(A, MAIN, ["M groundworks/gates.py"]))),
+                                "uncommitted", "groundworks/gates.py", "commit or discard")
 
     def test_changes_made_after_startup_refuse_writes(self):
         disk = Disk(code_state.git_state(A, MAIN))
         srv = self.serve(disk)
         self.assertEqual(run_tool(srv, "claim_propose", write_calls()["claim_propose"])["status"], "invalid_argument")
-        disk.state = code_state.git_state(A, MAIN, ["?? xscholar/new_module.py"])
+        disk.state = code_state.git_state(A, MAIN, ["?? groundworks/new_module.py"])
         self.adapter.reached.clear()
-        self.refused_everywhere(srv, "made after this server started", "xscholar/new_module.py")
+        self.refused_everywhere(srv, "made after this server started", "groundworks/new_module.py")
 
     def test_the_real_case_a_server_started_on_a_branch_that_was_switched_back_is_stale(self):
         """Started on the WIP branch; the checkout was switched back to main. Main on disk is verified, the process
@@ -213,8 +213,8 @@ class RealGitTests(unittest.TestCase):
         self.root = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, True)
         git(self.root, "init", "-q", "-b", MAIN)
-        (self.root / "xscholar").mkdir()
-        (self.root / "xscholar" / "engine.py").write_bytes(b"X = 1\n")
+        (self.root / "groundworks").mkdir()
+        (self.root / "groundworks" / "engine.py").write_bytes(b"X = 1\n")
         (self.root / "README.md").write_bytes(b"readme\n")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "one")
@@ -236,7 +236,7 @@ class RealGitTests(unittest.TestCase):
         self.assertIn("restart this MCP server so it loads the code that is on disk", err.exception.missing)
 
     def test_a_new_commit_after_startup_makes_the_process_stale(self):
-        (self.root / "xscholar" / "engine.py").write_bytes(b"X = 2\n")
+        (self.root / "groundworks" / "engine.py").write_bytes(b"X = 2\n")
         git(self.root, "commit", "-q", "-am", "two")
         with self.assertRaises(contract.GateRejected) as err:
             self.guard.check_write("claim_confirm")
@@ -245,10 +245,10 @@ class RealGitTests(unittest.TestCase):
     def test_uncommitted_changes_count_tracked_anywhere_and_untracked_only_in_the_package(self):
         (self.root / "notes.txt").write_bytes(b"scratch\n")                       # untracked, outside the package
         self.assertFalse(code_state.read_state(self.root)["dirty"])
-        (self.root / "xscholar" / "new.py").write_bytes(b"Y = 1\n")               # untracked, in the package
+        (self.root / "groundworks" / "new.py").write_bytes(b"Y = 1\n")               # untracked, in the package
         state = code_state.read_state(self.root)
-        self.assertEqual(state["dirty_files"], ["?? xscholar/new.py"])
-        (self.root / "xscholar" / "new.py").unlink()
+        self.assertEqual(state["dirty_files"], ["?? groundworks/new.py"])
+        (self.root / "groundworks" / "new.py").unlink()
         (self.root / "README.md").write_bytes(b"changed\n")                       # tracked, outside the package
         self.assertEqual(code_state.read_state(self.root)["dirty_files"], ["M README.md"])
         with self.assertRaises(contract.GateRejected) as err:
@@ -257,8 +257,8 @@ class RealGitTests(unittest.TestCase):
 
     def test_a_staged_rename_is_listed_once_and_does_not_shift_the_next_entry(self):
         git(self.root, "mv", "README.md", "READ.md")
-        (self.root / "xscholar" / "engine.py").write_bytes(b"X = 3\n")
-        self.assertEqual(sorted(code_state.read_state(self.root)["dirty_files"]), ["M xscholar/engine.py", "R READ.md"])
+        (self.root / "groundworks" / "engine.py").write_bytes(b"X = 3\n")
+        self.assertEqual(sorted(code_state.read_state(self.root)["dirty_files"]), ["M groundworks/engine.py", "R READ.md"])
 
     def test_a_directory_that_is_not_a_checkout_is_unknown_and_refused(self):
         plain = pathlib.Path(tempfile.mkdtemp())
@@ -272,12 +272,12 @@ class RealGitTests(unittest.TestCase):
             guard.check_write("claim_confirm")
 
     def test_an_engine_inside_someone_elses_repository_does_not_borrow_its_history(self):
-        state = code_state.read_state(self.root / "xscholar")
+        state = code_state.read_state(self.root / "groundworks")
         self.assertEqual(state["kind"], "UNKNOWN", state)
         self.assertIn("not the top of a git checkout", state["reason"])
 
     def test_the_engine_root_is_the_directory_holding_the_package(self):
-        self.assertTrue((code_state.engine_root() / "xscholar" / "mcp" / "code_state.py").is_file())
+        self.assertTrue((code_state.engine_root() / "groundworks" / "mcp" / "code_state.py").is_file())
 
 
 # ---- the health summary ----------------------------------------------------------------------------------

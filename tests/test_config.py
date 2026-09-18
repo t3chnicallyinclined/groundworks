@@ -13,8 +13,8 @@ import unittest
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config
-from xscholar import gates  # noqa: E402
+from groundworks import config
+from groundworks import gates  # noqa: E402
 
 DEMO = pathlib.Path(__file__).resolve().parents[1] / "instances" / "demo-incident" / "instance.yaml"
 
@@ -114,7 +114,7 @@ class DemoInstanceTests(unittest.TestCase):
             # a config loaded from a file must have its declared regression file beside it
             (pathlib.Path(tmp) / "evals").mkdir()
             (pathlib.Path(tmp) / "evals" / "known_errors.json").write_text(
-                '{"format": "xscholar.known_errors/1", "entries": []}', encoding="utf-8")
+                '{"format": "groundworks.known_errors/1", "entries": []}', encoding="utf-8")
             self.assertEqual(config.load(path).id, "toy")
 
 
@@ -249,7 +249,7 @@ class VerdictDefinitionTests(unittest.TestCase):
     def test_a_new_instance_starts_from_required_originals_owned_by_a_human(self):
         """instances/_template is what a new instance is copied from. Its default is the strict one: a unit with no
         original is refused at intake, and whether that bar holds is the owner's, not a role's."""
-        from xscholar import originals
+        from groundworks import originals
         inst = config.load(DEMO.parents[1] / "_template" / "instance.yaml")
         self.assertEqual(originals.mode(inst), "required")
         self.assertIn("originals", inst.data["human_owned"])

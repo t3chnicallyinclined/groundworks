@@ -26,19 +26,19 @@ import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from xscholar import access  # noqa: E402
-from xscholar import config  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import originals  # noqa: E402
-from xscholar import store as storemod  # noqa: E402
-from xscholar import surreal_bin  # noqa: E402
-from xscholar import temporal  # noqa: E402
-from xscholar.mcp import adapter as contract  # noqa: E402
-from xscholar.mcp import instance_adapter  # noqa: E402
-from xscholar.pipeline import intake  # noqa: E402
-from xscholar.pipeline import loader  # noqa: E402
-from xscholar.pipeline import write  # noqa: E402
+from groundworks import access  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import originals  # noqa: E402
+from groundworks import store as storemod  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
+from groundworks import temporal  # noqa: E402
+from groundworks.mcp import adapter as contract  # noqa: E402
+from groundworks.mcp import instance_adapter  # noqa: E402
+from groundworks.pipeline import intake  # noqa: E402
+from groundworks.pipeline import loader  # noqa: E402
+from groundworks.pipeline import write  # noqa: E402
 
 ROOT = HERE.parent
 DEMO_DIR = ROOT / "instances" / "demo-incident"
@@ -267,7 +267,7 @@ class EnforcementTests(ServerCase):
         self.assertEqual(err.exception.rule, "confirmed_needs_source_grade")
         self.assertEqual(err.exception.detail.get("reason"), "originals", err.exception.missing)
         self.assertIn("log_0043 (NO original)", err.exception.missing)
-        self.assertIn("xscholar.originals verify", err.exception.missing)
+        self.assertIn("groundworks.originals verify", err.exception.missing)
         self.assertNotIn("whose grade is in", err.exception.missing)
         self.db.sql("UPDATE unit:log_0043 SET document = %s" % originals.doc_rid(self.sha_of(DEMO_ADAPTER.app_log())))
         self.db.sql("UPDATE document SET integrity = 'corrupt' WHERE original_name = 'app.log'")
@@ -313,7 +313,7 @@ class McpTests(ServerCase):
 
     def srv(self):
         try:
-            from xscholar.mcp import server
+            from groundworks.mcp import server
             return server, server.build_server(self.adapter, PROV)
         except ImportError as exc:
             self.skipTest("NOT EXECUTED: the MCP SDK is not installed (%s)" % exc)

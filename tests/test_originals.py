@@ -18,12 +18,12 @@ import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from xscholar import config  # noqa: E402
-from xscholar import originals  # noqa: E402
-from xscholar import store as storemod  # noqa: E402
-from xscholar.pipeline import chunker  # noqa: E402
-from xscholar.pipeline import intake  # noqa: E402
-from xscholar.pipeline import validator  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import originals  # noqa: E402
+from groundworks import store as storemod  # noqa: E402
+from groundworks.pipeline import chunker  # noqa: E402
+from groundworks.pipeline import intake  # noqa: E402
+from groundworks.pipeline import validator  # noqa: E402
 
 DEMO = HERE.parent / "instances" / "demo-incident" / "instance.yaml"
 LOG = b"11:40 api-1 ERROR pool exhausted: waited 30000ms\n11:41 api-2 WARN retrying upstream call\n"
@@ -123,7 +123,7 @@ class StoreTests(Base):
 
     def test_a_store_inside_the_engine_repository_is_refused_outside_instances(self):
         with self.assertRaises(storemod.StoreError) as err:
-            storemod.FileStore(storemod.ENGINE_ROOT / "xscholar" / "originals")
+            storemod.FileStore(storemod.ENGINE_ROOT / "groundworks" / "originals")
         self.assertIn("inside the engine repository", str(err.exception))
         storemod.refuse_engine_repo(storemod.ENGINE_ROOT / "instances" / "demo-incident" / "originals")
 

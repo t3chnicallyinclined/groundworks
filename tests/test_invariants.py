@@ -19,8 +19,8 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from tests.harness import gen, props  # noqa: E402
-from xscholar import config, gates  # noqa: E402
-from xscholar.pipeline import agreement, chunker, loader, validator  # noqa: E402
+from groundworks import config, gates  # noqa: E402
+from groundworks.pipeline import agreement, chunker, loader, validator  # noqa: E402
 
 N = 150          # generated cases per property; every one is seed-reproducible
 SEED = 20260916

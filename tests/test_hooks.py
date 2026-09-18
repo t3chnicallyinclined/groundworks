@@ -16,11 +16,11 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, gates, surreal_bin  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar.hooks import health, lookup  # noqa: E402
-from xscholar.mcp import adapter as contract, instance_adapter  # noqa: E402
-from xscholar.pipeline import chunker, intake, loader  # noqa: E402
+from groundworks import config, gates, surreal_bin  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks.hooks import health, lookup  # noqa: E402
+from groundworks.mcp import adapter as contract, instance_adapter  # noqa: E402
+from groundworks.pipeline import chunker, intake, loader  # noqa: E402
 try:
     from test_pipeline import Adapter, CORPUS  # noqa: E402
     from test_pipeline_db import LABELS  # noqa: E402
@@ -40,12 +40,12 @@ class HealthHookTests(unittest.TestCase):
         ok, line = health.check({})
         self.assertFalse(ok)
         self.assertTrue(line.startswith("WARNING"))
-        ok, line = health.check({"XSCHOLAR_INSTANCE": str(DEMO), "XSCHOLAR_DB_URL": "http://127.0.0.1:9/sql",
-                                 "XSCHOLAR_HOOK_TIMEOUT": "1"})
+        ok, line = health.check({"GROUNDWORKS_INSTANCE": str(DEMO), "GROUNDWORKS_DB_URL": "http://127.0.0.1:9/sql",
+                                 "GROUNDWORKS_HOOK_TIMEOUT": "1"})
         self.assertFalse(ok)
         self.assertIn("NOT reachable", line)
         self.assertIn("database is off, not that nothing is known", line)
-        ok, line = health.check({"XSCHOLAR_INSTANCE": str(HERE / "nope.yaml")})
+        ok, line = health.check({"GROUNDWORKS_INSTANCE": str(HERE / "nope.yaml")})
         self.assertFalse(ok)
         self.assertIn("unusable", line)
 
@@ -92,8 +92,8 @@ class LookupHookTests(unittest.TestCase):
             cls.proc.kill()
 
     def test_health_line_when_up(self):
-        ok, line = health.check({"XSCHOLAR_INSTANCE": str(DEMO), "XSCHOLAR_DB_URL": self.db.url,
-                                 "XSCHOLAR_NS": self.db.ns, "XSCHOLAR_DB": self.db.db})
+        ok, line = health.check({"GROUNDWORKS_INSTANCE": str(DEMO), "GROUNDWORKS_DB_URL": self.db.url,
+                                 "GROUNDWORKS_NS": self.db.ns, "GROUNDWORKS_DB": self.db.db})
         self.assertTrue(ok, line)
         self.assertIn("4 units", line)
         self.assertNotIn("WARNING", line)

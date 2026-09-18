@@ -2,7 +2,7 @@
 """privacy_scan.py -- refuse to commit matter identifiers.
 
 The deny list lives OUTSIDE the repository (it would itself leak identifiers):
-  $XSCHOLAR_DENYLIST, or ~/.xscholar/denylist.txt
+  $GROUNDWORKS_DENYLIST, or ~/.groundworks/denylist.txt
 One case-insensitive regular expression per line; blank lines and lines starting with # are ignored.
 
 Fails CLOSED: a missing or empty deny list is exit 2 ("scan NOT EXECUTED"), never a pass.
@@ -32,7 +32,7 @@ BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".avif", ".ico",
 
 
 def deny_patterns():
-    path = pathlib.Path(os.environ.get("XSCHOLAR_DENYLIST", pathlib.Path.home() / ".xscholar" / "denylist.txt"))
+    path = pathlib.Path(os.environ.get("GROUNDWORKS_DENYLIST", pathlib.Path.home() / ".groundworks" / "denylist.txt"))
     if not path.exists():
         print("privacy scan NOT EXECUTED: deny list missing at %s" % path)
         sys.exit(2)

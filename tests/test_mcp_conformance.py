@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The adapter conformance checker (xscholar/mcp/conformance.py): it must catch a degraded adapter by name, and it
+"""The adapter conformance checker (groundworks/mcp/conformance.py): it must catch a degraded adapter by name, and it
 must never write unless told to, against a database named as scratch.
 
 Fake adapters need no datastore; the real generic adapter runs on a throwaway in-memory SurrealDB (never a live
@@ -21,12 +21,12 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, gates, lens, originals, surreal_bin, temporal  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import store as storemod  # noqa: E402
-from xscholar.mcp import adapter as contract  # noqa: E402
-from xscholar.mcp import conformance, instance_adapter  # noqa: E402
-from xscholar.pipeline import intake, loader, write  # noqa: E402
+from groundworks import config, gates, lens, originals, surreal_bin, temporal  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import store as storemod  # noqa: E402
+from groundworks.mcp import adapter as contract  # noqa: E402
+from groundworks.mcp import conformance, instance_adapter  # noqa: E402
+from groundworks.pipeline import intake, loader, write  # noqa: E402
 try:  # discovery puts tests/ on the path; `python -m unittest tests.x` does not
     from test_mcp_server import FakeAdapter, INCIDENT  # noqa: E402
     from test_originals_db import DEMO_ADAPTER  # noqa: E402

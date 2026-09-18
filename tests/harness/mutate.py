@@ -2,7 +2,7 @@
 """mutate.py -- the mutation runner: one named break per guard, and the test that must go red on it.
 
     python -m tests.harness.mutate lint  [--from worktree|HEAD|REV]
-    python -m tests.harness.mutate run   [--ids M001,M002] [--files xscholar/gates.py] [--changed-since REV]
+    python -m tests.harness.mutate run   [--ids M001,M002] [--files groundworks/gates.py] [--changed-since REV]
                                          [--no-db] [--from HEAD|worktree|REV] [--json OUT]
     python -m tests.harness.mutate canaries
 
@@ -22,7 +22,7 @@ live tree. This makes that a program, and closes every trap those scripts had:
     NOT EXECUTED -- never a catch (CI once went green with every database suite skipped, D5).
   - A break whose named test still passes SURVIVED: a failure of the run, reported by name.
   - Tests run in a subprocess with a JSON reporter, the tree copy first on sys.path, and every imported
-    module checked to come from inside the copy (xscholar is installed editable on the development
+    module checked to come from inside the copy (groundworks is installed editable on the development
     machine, so a plain import from elsewhere reads the live, unmutated tree).
   - Bytecode is never written in the copy, so a restored file can never be shadowed by a mutant's .pyc
     written in the same second at the same size.
@@ -369,7 +369,7 @@ def _kill_tree(proc):
 
 def run_tests(tree, test_ids, timeout):
     """{"tests": {id: outcome}, "detail": {...}, "timed_out": bool, "harness_error": str|None}."""
-    fd, out_name = tempfile.mkstemp(prefix="xscholar-mutate-result-", suffix=".json")
+    fd, out_name = tempfile.mkstemp(prefix="groundworks-mutate-result-", suffix=".json")
     os.close(fd)
     out_path = pathlib.Path(out_name)
     out_path.unlink()
@@ -446,7 +446,7 @@ def classify(entry, run):
 @contextlib.contextmanager
 def machine_lock():
     """One mutation run per machine: server suites use fixed ports, so two runs would collide."""
-    path = pathlib.Path(tempfile.gettempdir()) / "xscholar-mutate.lock"
+    path = pathlib.Path(tempfile.gettempdir()) / "groundworks-mutate.lock"
     handle = open(path, "a+b")
     try:
         try:
@@ -476,7 +476,7 @@ def port_in_use(port):
 
 
 def surreal_available():
-    candidates = [os.environ.get("XSCHOLAR_SURREAL"), shutil.which("surreal"),
+    candidates = [os.environ.get("GROUNDWORKS_SURREAL"), shutil.which("surreal"),
                   str(pathlib.Path.home() / "AppData" / "Local" / "SurrealDB" / "surreal.exe")]
     return any(p and pathlib.Path(p).exists() for p in candidates)
 
@@ -701,7 +701,7 @@ def main(argv=None):
         if args.command == "lint":
             entries = load_registry()
             pinned = json.loads(PINNED.read_text(encoding="utf-8"))["ids"]
-            with tempfile.TemporaryDirectory(prefix="xscholar-mutate-lint-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="groundworks-mutate-lint-") as tmp:
                 tree = pathlib.Path(tmp) / "tree"
                 digest = build_tree(args.source, tree)
                 problems = lint(tree, entries, pinned)
@@ -712,7 +712,7 @@ def main(argv=None):
             return 1 if problems else 0
 
         if args.command == "canaries":
-            with machine_lock(), tempfile.TemporaryDirectory(prefix="xscholar-mutate-") as tmp:
+            with machine_lock(), tempfile.TemporaryDirectory(prefix="groundworks-mutate-") as tmp:
                 tree = pathlib.Path(tmp) / "tree"
                 build_tree("worktree", tree)
                 behaved, problems = run_canaries(tree)
@@ -731,7 +731,7 @@ def main(argv=None):
                 return 0
             print("MUTATIONS  %d declared | 0 selected | NOT EXECUTED: the selection matched nothing" % len(entries))
             return 2
-        with machine_lock(), tempfile.TemporaryDirectory(prefix="xscholar-mutate-") as tmp:
+        with machine_lock(), tempfile.TemporaryDirectory(prefix="groundworks-mutate-") as tmp:
             tree = pathlib.Path(tmp) / "tree"
             digest = build_tree(args.source, tree)
             before = tree_snapshot(tree)

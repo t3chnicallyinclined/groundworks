@@ -23,13 +23,13 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import config  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import surreal_bin  # noqa: E402
-from xscholar.pipeline import chunker  # noqa: E402
-from xscholar.pipeline import intake  # noqa: E402
-from xscholar.pipeline import loader  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
+from groundworks.pipeline import chunker  # noqa: E402
+from groundworks.pipeline import intake  # noqa: E402
+from groundworks.pipeline import loader  # noqa: E402
 
 
 def _load(path):

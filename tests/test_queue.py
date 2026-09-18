@@ -16,11 +16,11 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import queue  # noqa: E402
-from xscholar import surreal_bin  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import queue  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
@@ -114,7 +114,7 @@ class ServerTests(unittest.TestCase):
             cls.proc.kill()
             raise unittest.SkipTest("NOT EXECUTED: throwaway SurrealDB did not start on %d" % PORT)
         cls.inst = config.load(DEMO)
-        cls.tmp = tempfile.mkdtemp(prefix="xscholar_queue_")
+        cls.tmp = tempfile.mkdtemp(prefix="groundworks_queue_")
 
     @classmethod
     def tearDownClass(cls):

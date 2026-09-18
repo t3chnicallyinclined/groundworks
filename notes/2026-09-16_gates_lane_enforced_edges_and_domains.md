@@ -1,6 +1,6 @@
 # 2026-09-16: links to nothing, gates on free text, and a schema re-apply that locked everyone out
 
-Generic; no matter content. Modules: `xscholar/gates.py`, `xscholar/config.py`, `xscholar/originals.py`.
+Generic; no matter content. Modules: `groundworks/gates.py`, `groundworks/config.py`, `groundworks/originals.py`.
 Two defects were found in real use (edges to records that did not exist; a gated status field with no list of
 values). The rest came from the previous lane's review. All measurements on SurrealDB 3.1.6, on throwaway
 in-memory servers.
@@ -22,7 +22,7 @@ existing graph stored before enforcement and exits 1 when there are any (`gates.
 
 Writers checked for ordering (each relates only rows it has already written or read):
 - loader: upserts every `vocabulary.targets` conclusion before any `bears_on`; a label naming a target outside
-  the vocabulary (which the validator already refuses, `xscholar/pipeline/validator.py`) would now make the load
+  the vocabulary (which the validator already refuses, `groundworks/pipeline/validator.py`) would now make the load
   **fail** instead of storing a link to nothing (INFERRED from the code, not separately tested).
 - write.py: `cite`/`support`/`relate`/`critique`/`answer` relate to rows the caller names. A cite of a unit not
   loaded yet now raises `DbError` (tested through `Writer.cite` and `Writer.relate`).

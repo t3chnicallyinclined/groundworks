@@ -141,7 +141,7 @@ class SeparationTests(unittest.TestCase):
         """TESTING s.3 rule 1: an engine that can read its evaluator or its generator can be fitted to them."""
         import ast
         offenders = []
-        for path in sorted((ROOT / "xscholar").rglob("*.py")):
+        for path in sorted((ROOT / "groundworks").rglob("*.py")):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 names = ([a.name for a in node.names] if isinstance(node, ast.Import)
                          else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])

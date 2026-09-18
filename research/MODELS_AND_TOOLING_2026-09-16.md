@@ -16,7 +16,7 @@ Desk research by the scholar-architect, in research mode. **Nothing here was run
 2. **Make every hold-back step fail closed, and measure lane reliability over repeated runs.** *High confidence in the diagnosis, medium in the fixes.* The beta failures (a verifier dying, so 50 promotions went through) fit a known pattern: in a multi-agent failure study, missing or incomplete verification was 8.2% of failures and incorrect verification 9.1% [mast-002]. Claude Code's own documentation says a hook that exits 1, crashes, is mistyped or times out **does not block**: "a mistyped path in settings.json leaves the gate silently disabled" [claude-code-hooks-002, -001, -003]. So hooks are advice, and holds belong in the datastore, as V2-20 already did. Measure a lane with pass^k, the chance that **all** k runs succeed [taubench-001].
 3. **Cut labelling cost without touching quality: batch plus a cached guide, then a cheap first reader that escalates.** *High confidence on batch and caching savings (vendor prices); low confidence on routing until measured.* The Batch API is **50% off input and output** [anthropic-pricing-004], and a cache hit costs **10% of the input price** [anthropic-pricing-005]. Haiku 4.5 costs **$1 / $5** per million input/output tokens against Opus 5's **$5 / $25** [anthropic-pricing-001, -003]. Routing needs a guard: a cheap judge first, escalating to a stronger model when unsure, can carry a provable human-agreement guarantee, and pays for it by handing about a fifth of items on [trust-or-escalate-001, -002].
 
-**On retrieval, the answer is no change yet.** Nothing found overturns the bake-off. BM25 is "a robust baseline" on public benchmarks too [beir-001], and test sets built from lexical hits are biased toward it [beir-002], which is exactly the repo's own caveat (`xscholar/embed/README.md:95`). **Build a reworded query set first.** Then test two cheap candidates that keep BM25 as the ranker: LLM query expansion, and a reranker trained on permissively licensed data.
+**On retrieval, the answer is no change yet.** Nothing found overturns the bake-off. BM25 is "a robust baseline" on public benchmarks too [beir-001], and test sets built from lexical hits are biased toward it [beir-002], which is exactly the repo's own caveat (`groundworks/embed/README.md:95`). **Build a reworded query set first.** Then test two cheap candidates that keep BM25 as the ranker: LLM query expansion, and a reranker trained on permissively licensed data.
 
 ## 2. Ranked recommendations
 
@@ -39,7 +39,7 @@ Ranked by expected effect against cost.
 
 ### 3.1 Labelling and extraction quality (the #1 lever)
 
-**Where it stands.** Validation passed 77 of 77 chunks while accuracy stayed unmeasured (`docs/TUNING.md:39`). The only agreement run so far was agents against a stub on the demo instance (tier kappa 0.93, direction kappa 0.88), which the roadmap records as a harness proof, not a label-accuracy measurement (`docs/ROADMAP.md:14`). `agreement.py` already reports kappa and returns None on a degenerate sample (`xscholar/pipeline/agreement.py:15`).
+**Where it stands.** Validation passed 77 of 77 chunks while accuracy stayed unmeasured (`docs/TUNING.md:39`). The only agreement run so far was agents against a stub on the demo instance (tier kappa 0.93, direction kappa 0.88), which the roadmap records as a harness proof, not a label-accuracy measurement (`docs/ROADMAP.md:14`). `agreement.py` already reports kappa and returns None on a degenerate sample (`groundworks/pipeline/agreement.py:15`).
 
 **What the evidence says.**
 - **Agent labels are not gold.** Treating model predictions as gold-standard measurements (the "imputation approach") can give invalid conclusions "because the predictions may have biases" [ppi-002, ppi-003]. In social-science tasks, treating LLM annotations as human data led to "highly inaccurate estimates and poor coverage" [cdi-001]. CONFIRMED.
@@ -64,7 +64,7 @@ Ranked by expected effect against cost.
 
 ### 3.2 Retrieval
 
-**Where it stands.** BM25 nDCG@10 0.470 [0.398, 0.549] against best hybrid 0.376 over 92 queries, 69 of which quote the source verbatim; on the 23 non-quoting queries the methods were not separable (`xscholar/embed/README.md:89-95`).
+**Where it stands.** BM25 nDCG@10 0.470 [0.398, 0.549] against best hybrid 0.376 over 92 queries, 69 of which quote the source verbatim; on the 23 non-quoting queries the methods were not separable (`groundworks/embed/README.md:89-95`).
 
 **What the evidence says.**
 - BM25 is "a robust baseline", and "re-ranking and late-interaction based models on average achieve the best zeroshot performances, however, at high computational costs" [beir-001]. CONFIRMED.
@@ -75,7 +75,7 @@ Ranked by expected effect against cost.
 - **Learned sparse.** SPLADE-v3 is "statistically significantly more effective than" BM25 on public sets [splade-v3-001], but the library is **CC BY-NC-SA 4.0** [lic-splade-001]: banned.
 - **The training-data trap.** Many permissively tagged retrievers are trained on MS MARCO, whose terms say "non-commercial research purposes only" [msmarco-terms-001]. The weights are tagged MIT or Apache-2.0, yet: the ColBERTv2 checkpoint "has been trained on the MS MARCO Passage Ranking task" [card-colbertv2-001]; GTE-ModernColBERT was distilled on MS MARCO [card-gte-moderncolbert-001]; the OpenSearch sparse v3 training list includes it [card-opensearch-sparse-v3-distill-002]; and the cross-encoder `ms-marco-MiniLM-L6-v2` names it. IBM states its Granite R2 embedding model does **not** use MS MARCO "due to its non-commercial license" [card-granite-embedding-r2-001], and that its reranker used only permissively licensed pairs plus IBM data [card-granite-reranker-r2-001]. That is a vendor claim, not verified. **Whether a weight licence clears non-commercial training data is a LAWYER question**; add it to `docs/LICENSING.md`'s list.
 
-**Local running.** All rerankers and encoders named here can run locally on the RTX 3090 already used for the bake-off (`xscholar/embed/README.md:97`). Sizes where stated: Granite reranker 149M [card-granite-reranker-r2-001], answerai-colbert-small 33M [card-answerai-colbert-small-002]. Query expansion with Claude sends queries, not units, to the API. Queries can still carry matter content, so on a confidential corpus that needs the client's approval of the provider (METHOD s.16; INFERRED).
+**Local running.** All rerankers and encoders named here can run locally on the RTX 3090 already used for the bake-off (`groundworks/embed/README.md:97`). Sizes where stated: Granite reranker 149M [card-granite-reranker-r2-001], answerai-colbert-small 33M [card-answerai-colbert-small-002]. Query expansion with Claude sends queries, not units, to the API. Queries can still carry matter content, so on a confidential corpus that needs the client's approval of the provider (METHOD s.16; INFERRED).
 
 **Recommendation.** **Prototype and measure (P2):** a reworded query set, then (a) BM25 plus query expansion and (b) BM25 top-100 plus a permissive-data reranker (Granite R2 first). Adopt only under the existing bake-off verdict rule. **Watch** ColBERT. **Avoid** SPLADE and jina rerankers.
 
@@ -104,7 +104,7 @@ Ranked by expected effect against cost.
 
 ### 3.4 Structured assertions from free text
 
-**Context.** `xscholar/assertions.py` asks a fact to assert a field value on a target row through an edge; a pluggable judge proposes those assertions. This is classification into a small declared domain, grounded in the fact's text (INFERRED from the module docstring).
+**Context.** `groundworks/assertions.py` asks a fact to assert a field value on a target row through an edge; a pluggable judge proposes those assertions. This is classification into a small declared domain, grounded in the fact's text (INFERRED from the module docstring).
 
 **What the evidence says.**
 - **Decompose, then verify each piece.** FActScore breaks text into atomic facts and checks each against a source; its automated estimator had "less than a 2% error rate" on the aggregate score [factscore-001, -002].
@@ -171,7 +171,7 @@ Decided by planted-failure tests: a dead verifier, a killed lane mid-write, a fo
 
 | Tool | Licence (tag) | Fits a stdlib core? | Where it would sit | Verdict |
 |---|---|---|---|---|
-| MCP spec 2025-11-25 | Apache-2.0 for spec contributions, older MIT, docs CC-BY-4.0 [lic-mcp-spec-001] (CONFIRMED) | Protocol, already used | `xscholar/mcp` | **Adopt as is.** The spec says tools are "arbitrary code execution" and tool annotations are untrusted [mcp-spec-2025-11-25-001, -002], which matches the existing `untrusted_source_text` envelope |
+| MCP spec 2025-11-25 | Apache-2.0 for spec contributions, older MIT, docs CC-BY-4.0 [lic-mcp-spec-001] (CONFIRMED) | Protocol, already used | `groundworks/mcp` | **Adopt as is.** The spec says tools are "arbitrary code execution" and tool annotations are untrusted [mcp-spec-2025-11-25-001, -002], which matches the existing `untrusted_source_text` envelope |
 | MCP Python SDK | MIT (CONFIRMED) | A dependency | Adapter edge only | Watch; the current adapter works without it (INFERRED) |
 | Inspect (UK AISI) | MIT (CONFIRMED) | No: Python package with dependencies | Outside the core, a separate eval venv | Watch. It has model-graded evals [readme-inspect-ai-001]; our evaluator must stay human-owned |
 | promptfoo | MIT (CONFIRMED) | No: Node | Outside | Watch |
@@ -180,7 +180,7 @@ Decided by planted-failure tests: a dead verifier, a killed lane mid-write, a fo
 | Arize Phoenix | **Elastic License 2.0**: no hosted or managed service [lic-phoenix-001] (CONFIRMED) | No | — | **Avoid in the product** (source-available class) |
 | OpenTelemetry GenAI conventions | Core semantic-conventions repo Apache-2.0 [lic-otel-semconv-001] (CONFIRMED); the new GenAI repo's licence not read (UNKNOWN) | Yes, as **names only** | Write JSONL traces with GenAI attribute names, no SDK | **Watch**: moved to a new repo whose schema URL is still "TODO" [readme-otel-semconv-genai-002] |
 | RouteLLM | Apache-2.0 (CONFIRMED) | No | Outside | Watch; the cascade rule is simple enough to write in stdlib |
-| ColBERT, PyLate | MIT (CONFIRMED) | No (torch) | GPU venv beside `xscholar/embed` | Watch |
+| ColBERT, PyLate | MIT (CONFIRMED) | No (torch) | GPU venv beside `groundworks/embed` | Watch |
 | MiniCheck code, AlignScore, FActScore | Apache-2.0, MIT, MIT (CONFIRMED) | No | GPU venv | Watch (3.4) |
 
 ## 4. Public datasets with ground truth

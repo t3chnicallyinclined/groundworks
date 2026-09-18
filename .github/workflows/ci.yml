@@ -45,7 +45,7 @@ jobs:
       - name: Every suite, the license check, the drift check, the mutation lint, the evaluator and the privacy scan
         # --require-db turns a skipped suite, or an evaluator that could not reach a server, into a failure
         # instead of "OK (skipped=N)".
-        run: python -m xscholar.cli test --require-db
+        run: python -m groundworks.cli test --require-db
 
       - name: The registered breaks for the files this change touched
         # Each break is applied to a COPY of the tree and its named test must go red. Only the breaks whose
@@ -64,7 +64,7 @@ jobs:
 
       - name: Role skills still match the config they came from
         # the docs arm (check c) needs a doc to read: without one it checks nothing and still exits 0
-        run: python -m xscholar.drift instances/demo-incident/instance.yaml instances/demo-incident/skills instances/demo-incident/README.md instances/demo-incident/skills/red-team/SKILL.md
+        run: python -m groundworks.drift instances/demo-incident/instance.yaml instances/demo-incident/skills instances/demo-incident/README.md instances/demo-incident/skills/red-team/SKILL.md
 
       - name: Gates are no weaker than the committed baseline
         run: |
@@ -78,7 +78,7 @@ jobs:
             sleep 0.25
           done
           curl -sf http://127.0.0.1:8040/health >/dev/null || { echo "NOT EXECUTED: nothing answered on 8040"; exit 1; }
-          python -m xscholar.gates instances/demo-incident/instance.yaml --apply --url http://127.0.0.1:8040/sql --baseline instances/demo-incident/gate_baseline.json
+          python -m groundworks.gates instances/demo-incident/instance.yaml --apply --url http://127.0.0.1:8040/sql --baseline instances/demo-incident/gate_baseline.json
           kill "$server"
 
       - name: Demo instance end to end

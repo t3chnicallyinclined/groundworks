@@ -3,10 +3,10 @@
 This runs without a database on purpose: the half of the check that catches a weakened gate
 (a rule deleted, a clause dropped, a minimum lowered) reads the config alone, so it runs
 everywhere the suite runs. The flag half (`wrong_evidence_reject` was true, now is not) needs a
-live probe run and happens in `xscholar.gates --apply --baseline`, which CI runs.
+live probe run and happens in `groundworks.gates --apply --baseline`, which CI runs.
 
 Deliberate change to a gate: re-run
-    python -m xscholar.gates <instance> --apply --write-baseline <baseline>
+    python -m groundworks.gates <instance> --apply --write-baseline <baseline>
 and review the diff in the pull request. That review is the point of the file.
 """
 import json
@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import config, gates  # noqa: E402
+from groundworks import config, gates  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -54,7 +54,7 @@ class BaselineTests(unittest.TestCase):
         "unchanged or stronger" for every future weakening, and the diff a human is meant to read
         would never appear in a pull request. Only the tool that takes the flag may name it."""
         watched = (sorted(ROOT.glob(".github/workflows/*.yml")) + sorted(ROOT.glob("scripts/*.py"))
-                   + [ROOT / "xscholar" / "cli.py"])
+                   + [ROOT / "groundworks" / "cli.py"])
         self.assertTrue(watched)
         for path in watched:
             with self.subTest(file=path.name):

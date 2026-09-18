@@ -16,15 +16,15 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import temporal  # noqa: E402
-from xscholar.pipeline import write  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import temporal  # noqa: E402
+from groundworks.pipeline import write  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
-from xscholar import surreal_bin  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
 PORT = surreal_bin.free_port()   # OS-assigned (was 8031): suites no longer share a registry of fixed ports
 UTC = _dt.timezone.utc

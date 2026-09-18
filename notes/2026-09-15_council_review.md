@@ -9,7 +9,7 @@ Generic; no matter data.
 Different job. The council deliberates over one question with no corpus and no persistent state; its checks are instructions to the coordinator model, and FACT labels are self-assigned. The Scholar reads a corpus into a gated graph. The council is further along on one thing the Scholar was thin on: **how several model seats disagree without converging socially.** That belongs in L6 roles.
 
 ## Decision (owner, 2026-09-15)
-- **Adopted now (module `xscholar/panel`):** 1 blind then anonymized; 2 anti-conformity; 3 locked before answers; 4 stance line never inferred; 5 dissent quota, novelty, agreement check.
+- **Adopted now (module `groundworks/panel`):** 1 blind then anonymized; 2 anti-conformity; 3 locked before answers; 4 stance line never inferred; 5 dissent quota, novelty, agreement check.
 - **Roadmap:** 6 distinct reasoning method per seat, validated; 7 lens charters with sees and misses plus counterweight lenses; 8 drift guard between config, generated skills and prose; 9 enforcement counts in every stage's report.
 - **Not adopted:** personas, deciding by vote as truth, cross-provider seats where the instance's privacy rules forbid them, self-labeled facts.
 

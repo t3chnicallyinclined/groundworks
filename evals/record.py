@@ -40,7 +40,7 @@ from evals import stats  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 HISTORY = HERE / "history"
-RECORD_FORMAT = "xscholar.eval_record/1"
+RECORD_FORMAT = "groundworks.eval_record/1"
 PREREG_KEYS = ("eval_id", "written_at", "hypothesis", "arms", "baseline_arm", "primary_metric", "unit_of_analysis",
                "smallest_effect", "min_n_per_arm", "direction", "decision_rule")
 DECISIONS = ("adopted", "not adopted", "no evidence")

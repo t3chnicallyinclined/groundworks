@@ -24,12 +24,12 @@ HERE = pathlib.Path(__file__).resolve().parent
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar.mcp import adapter as contract  # noqa: E402
-from xscholar.panel import panel  # noqa: E402
-from xscholar.mcp import server  # noqa: E402
-from xscholar.mcp import code_state  # noqa: E402
+from groundworks.mcp import adapter as contract  # noqa: E402
+from groundworks.panel import panel  # noqa: E402
+from groundworks.mcp import server  # noqa: E402
+from groundworks.mcp import code_state  # noqa: E402
 
-from xscholar.present import metrics  # noqa: E402
+from groundworks.present import metrics  # noqa: E402
 
 EXPECTED_TOOLS = {"unit_get", "unit_search", "claim_explain", "eliminated_claims", "health",
                   "critique_add", "critique_answer", "panel_submit", "panel_status",
@@ -537,12 +537,12 @@ class Envelope(unittest.TestCase):
 
     def test_identity_is_required_and_plain(self):
         with self.assertRaises(server.ConfigError):
-            server.identity_from_env({"XSCHOLAR_ROLE": "critic"})
+            server.identity_from_env({"GROUNDWORKS_ROLE": "critic"})
         with self.assertRaises(server.ConfigError):
-            server.identity_from_env({"XSCHOLAR_AGENT_ID": "a", "XSCHOLAR_ROLE": ""})
+            server.identity_from_env({"GROUNDWORKS_AGENT_ID": "a", "GROUNDWORKS_ROLE": ""})
         with self.assertRaises(server.ConfigError):
-            server.identity_from_env({"XSCHOLAR_AGENT_ID": "a|role=coordinator", "XSCHOLAR_ROLE": "critic"})
-        prov = server.identity_from_env({"XSCHOLAR_AGENT_ID": "a1", "XSCHOLAR_ROLE": "critic", "XSCHOLAR_LENS": "skeptic"})
+            server.identity_from_env({"GROUNDWORKS_AGENT_ID": "a|role=coordinator", "GROUNDWORKS_ROLE": "critic"})
+        prov = server.identity_from_env({"GROUNDWORKS_AGENT_ID": "a1", "GROUNDWORKS_ROLE": "critic", "GROUNDWORKS_LENS": "skeptic"})
         self.assertEqual(prov.by(), "a1|role=critic|lens=skeptic")
 
     def test_adapter_loading_by_file_and_contract_check(self):
@@ -564,7 +564,7 @@ class Envelope(unittest.TestCase):
             server.load_adapter(str(tmp / "missing.py"))
 
     def test_main_refuses_to_start_without_identity(self):
-        saved = {k: os.environ.pop(k, None) for k in ("XSCHOLAR_AGENT_ID", "XSCHOLAR_ROLE", "XSCHOLAR_ADAPTER")}
+        saved = {k: os.environ.pop(k, None) for k in ("GROUNDWORKS_AGENT_ID", "GROUNDWORKS_ROLE", "GROUNDWORKS_ADAPTER")}
         self.addCleanup(lambda: [os.environ.__setitem__(k, v) for k, v in saved.items() if v is not None])
         import contextlib
         import io

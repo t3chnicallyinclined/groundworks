@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Role skills from config (xscholar/skills.py) and the drift guard over them (xscholar/drift.py).
+"""Role skills from config (groundworks/skills.py) and the drift guard over them (groundworks/drift.py).
 
 Pure Python: no datastore, no server, no network. Both ways throughout -- every guard is shown to
 pass on a clean tree and to FAIL, naming the file and the item, on a planted mismatch:
@@ -24,7 +24,7 @@ import unittest
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, drift, gates, skills  # noqa: E402
+from groundworks import config, drift, gates, skills  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -64,10 +64,10 @@ class Base(unittest.TestCase):
         import json
         path = self.tmp / name
         path.write_text(json.dumps(data), encoding="utf-8")
-        # a config loaded from a file must have its declared regression file beside it (xscholar/config.py)
+        # a config loaded from a file must have its declared regression file beside it (groundworks/config.py)
         regression = self.tmp / data["evaluator"]["regression_file"]
         regression.parent.mkdir(parents=True, exist_ok=True)
-        regression.write_text('{"format": "xscholar.known_errors/1", "entries": []}', encoding="utf-8")
+        regression.write_text('{"format": "groundworks.known_errors/1", "entries": []}', encoding="utf-8")
         return path
 
     def build(self, data=None, sub="skills"):
@@ -117,12 +117,12 @@ class GenerateTests(Base):
 
     def test_tool_tables_cover_every_mcp_tool(self):
         """Read TOOL_NAMES out of the server source, so this test needs no MCP SDK installed."""
-        source = (ROOT / "xscholar" / "mcp" / "server.py").read_text(encoding="utf-8")
+        source = (ROOT / "groundworks" / "mcp" / "server.py").read_text(encoding="utf-8")
         block = re.search(r"TOOL_NAMES = \((.*?)\)\n", source, re.S).group(1)
         declared = set(re.findall(r'"([a-z_]+)"', block))
         self.assertTrue(declared)
         self.assertEqual(declared, set(skills.TOOL_TABLES),
-                         "xscholar/mcp/server.py TOOL_NAMES and skills.TOOL_TABLES disagree")
+                         "groundworks/mcp/server.py TOOL_NAMES and skills.TOOL_TABLES disagree")
         self.assertEqual(declared, set(skills.TOOL_PURPOSE))
 
 
@@ -195,10 +195,10 @@ class ContentTests(Base):
 
     def test_the_panel_command_sequence_is_exact_and_carries_settings(self):
         text = self.text["red-team"]
-        self.assertIn("python xscholar/panel/panel.py lock      runs/<panel_id> "
+        self.assertIn("python groundworks/panel/panel.py lock      runs/<panel_id> "
                       "--settings <instance dir>/panel_settings.json", text)
         for command in ("anonymize", "check", "tally"):
-            self.assertIn("python xscholar/panel/panel.py %-9s runs/<panel_id>" % command, text)
+            self.assertIn("python groundworks/panel/panel.py %-9s runs/<panel_id>" % command, text)
 
     def test_tools_are_filtered_by_the_access_grant(self):
         seat = self.text["red-team"]          # access role `seat`: writes critique, attacks, answer, answers
@@ -226,7 +226,7 @@ class ContentTests(Base):
 
     def test_privacy_rules_land_in_every_skill(self):
         for name, text in self.text.items():
-            self.assertIn("~/.xscholar/denylist.txt", text, name)
+            self.assertIn("~/.groundworks/denylist.txt", text, name)
             self.assertIn("the model provider the owner approved", text, name)
             self.assertIn("`privacy` is human-owned", text, name)
 
@@ -422,7 +422,7 @@ class DocTests(Base):
 
 class DemoTreeTests(unittest.TestCase):
     def test_the_committed_demo_skills_are_current(self):
-        """The exact check CI and `xscholar test` run."""
+        """The exact check CI and `groundworks test` run."""
         report = drift.check(DEMO, DEMO_SKILLS)
         self.assertTrue(report.ok, str(report))
 
@@ -434,24 +434,24 @@ class DemoTreeTests(unittest.TestCase):
 
 
 class DemoDocsArmTests(Base):
-    """Check (c) runs on real documents in `xscholar test` and CI, and it can fail there. Before 2026-09-16 both
+    """Check (c) runs on real documents in `groundworks test` and CI, and it can fail there. Before 2026-09-16 both
     passed no doc, so the arm never ran; its first run on the generated skill failed on `lens_view`."""
 
     def test_the_test_command_passes_the_demo_docs_and_a_drifted_doc_fails_the_run(self):
         from unittest import mock
-        from xscholar import cli
+        from groundworks import cli
         calls, state = [], {"drift": False}
 
         def stream(cmd):
             calls.append([str(c) for c in cmd])
-            if "xscholar.drift" in calls[-1] and state["drift"]:
+            if "groundworks.drift" in calls[-1] and state["drift"]:
                 return 1, "DRIFT README.md: lens_x\ndrift check FAILED\n"
             return 0, "Ran 5 tests in 0.1s\n\nOK\n"
 
         with mock.patch.object(cli, "_stream", side_effect=stream), \
                 mock.patch.object(cli, "_module", return_value=0), mock.patch("builtins.print"):
             self.assertEqual(cli._test([]), 0)
-            drift_calls = [c for c in calls if "xscholar.drift" in c]
+            drift_calls = [c for c in calls if "groundworks.drift" in c]
             self.assertEqual(len(drift_calls), 1, calls)
             docs = [a for a in drift_calls[0] if a.endswith(".md")]
             self.assertIn("instances/demo-incident/README.md", docs)
@@ -463,12 +463,12 @@ class DemoDocsArmTests(Base):
     def test_ci_passes_the_demo_readme_to_the_drift_check(self):
         raw = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         runs = [ln.split("#", 1)[0].strip() for ln in raw.splitlines()]
-        drift_runs = [ln for ln in runs if "xscholar.drift" in ln]
+        drift_runs = [ln for ln in runs if "groundworks.drift" in ln]
         self.assertTrue(drift_runs, "CI does not run the drift check")
         self.assertTrue(all("instances/demo-incident/README.md" in ln for ln in drift_runs), drift_runs)
 
     def test_the_real_demo_docs_are_clean_and_a_renamed_lens_in_them_is_drift(self):
-        from xscholar import cli
+        from groundworks import cli
         docs = [ROOT / d for d in cli.DEMO_DOCS]
         report = drift.check(DEMO, DEMO_SKILLS, docs)
         self.assertTrue(report.ok, str(report))

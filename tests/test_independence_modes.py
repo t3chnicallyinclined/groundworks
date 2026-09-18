@@ -13,8 +13,8 @@ import unittest
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, gates, live_schema, promotion_log, skills  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
+from groundworks import config, gates, live_schema, promotion_log, skills  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
@@ -262,7 +262,7 @@ class CheckpointTests(unittest.TestCase):
             promotion_log.export_anchor(db, inst, path)
             text = path.read_text(encoding="utf-8")
             lines = text.split("\n")
-            self.assertEqual(lines[0], "xscholar/promotion_log/%s/t/d sha256-chain" % inst.id)
+            self.assertEqual(lines[0], "groundworks/promotion_log/%s/t/d sha256-chain" % inst.id)
             self.assertEqual(lines[1], "3")
             self.assertEqual(lines[3:], ["", ""], "a checkpoint body ends with a blank line")
             anchor = promotion_log.load_anchor(path)

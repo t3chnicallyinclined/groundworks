@@ -1,5 +1,5 @@
 {
- "format": "xscholar.known_errors/1",
- "doc": "HUMAN-OWNED. The errors this instance has actually made, each with a check that runs again on every `xscholar test`. Empty until the first real error is recorded; an evaluator with no entries reports NOT EXECUTED, never a pass. Kinds: writes, loads, validator (see xscholar/evaluator.py).",
+ "format": "groundworks.known_errors/1",
+ "doc": "HUMAN-OWNED. The errors this instance has actually made, each with a check that runs again on every `groundworks test`. Empty until the first real error is recorded; an evaluator with no entries reports NOT EXECUTED, never a pass. Kinds: writes, loads, validator (see groundworks/evaluator.py).",
  "entries": []
 }

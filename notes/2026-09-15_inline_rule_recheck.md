@@ -1,6 +1,6 @@
 # 2026-09-15: inline rule re-check (C18), measured on the same three documents
 
-Generic; no matter content. Module: `xscholar/present`. Roadmap C18, following C17
+Generic; no matter content. Module: `groundworks/present`. Roadmap C18, following C17
 (`notes/2026-09-15_reading_layer_evaluation.md`).
 
 ## Why

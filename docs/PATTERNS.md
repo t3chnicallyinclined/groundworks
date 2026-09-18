@@ -82,7 +82,7 @@ About one in five of what the person insisted on was fully borne out. **Two thir
 
 ### Limits
 
-- A contention's `said` is only as good as whoever extracted it. The table records a claim; it does not validate the extraction. A harvest benefits from the same label-agreement measurement as any other labelling (`xscholar labels agreement`).
+- A contention's `said` is only as good as whoever extracted it. The table records a claim; it does not validate the extraction. A harvest benefits from the same label-agreement measurement as any other labelling (`groundworks labels agreement`).
 - `partly` covers a wide range. Consider whether your instance needs it split.
 
 ---
@@ -95,7 +95,7 @@ About one in five of what the person insisted on was fully borne out. **Two thir
 
 From beta testing on a real instance, in neutral words. An item's status was an **unusable** value. A **promoted** fact in the same graph said, in its text, that the item **was usable**. A second, **ruled-out** fact said the same. The person the graph served insisted for weeks that the item was usable, and was right. Nothing detected the contradiction.
 
-`xscholar/consistency.py` already catches one kind: a promoted row whose own gate no longer holds over its evidence. It could not catch this one. Comparing a status with what a fact's **text** says means reading free text, and free text means domain words in engine code.
+`groundworks/consistency.py` already catches one kind: a promoted row whose own gate no longer holds over its evidence. It could not catch this one. Comparing a status with what a fact's **text** says means reading free text, and free text means domain words in engine code.
 
 The fix is to **make the claim structured**. A fact can carry an **assertion**: "row R's field F holds value V". Comparing that with R.F is mechanical and needs no domain word.
 

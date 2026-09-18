@@ -1,6 +1,6 @@
 {
- "format": "xscholar.known_errors/1",
- "doc": "HUMAN-OWNED (instance.yaml human_owned: evaluator). The errors this instance has actually made, each checked again by `python -m xscholar.evaluator instances/demo-incident --memory 0` and by `xscholar test`. Entries may be added; removing, weakening or editing one takes a human. Every entry is a defect CONFIRMED in a commit message as measured on this instance's own corpus, labels, vocabulary or config -- none is invented to fill the file. Synthetic data only.",
+ "format": "groundworks.known_errors/1",
+ "doc": "HUMAN-OWNED (instance.yaml human_owned: evaluator). The errors this instance has actually made, each checked again by `python -m groundworks.evaluator instances/demo-incident --memory 0` and by `groundworks test`. Entries may be added; removing, weakening or editing one takes a human. Every entry is a defect CONFIRMED in a commit message as measured on this instance's own corpus, labels, vocabulary or config -- none is invented to fill the file. Synthetic data only.",
  "entries": [
   {
    "id": "KE001",

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""A graph that contradicts itself must say so: structured assertions (xscholar/assertions.py).
+"""A graph that contradicts itself must say so: structured assertions (groundworks/assertions.py).
 
 From beta testing on a real instance, in neutral words: a unit's status was an UNUSABLE value while a
 PROMOTED fact in the same graph said, in its text, that the unit was usable. A second, ruled-out fact said
@@ -23,15 +23,15 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import assertions  # noqa: E402
-from xscholar import config  # noqa: E402
-from xscholar import consistency  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import surreal_bin  # noqa: E402
-from xscholar import temporal  # noqa: E402
-from xscholar.pipeline import loader  # noqa: E402
-from xscholar.pipeline import write  # noqa: E402
+from groundworks import assertions  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import consistency  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
+from groundworks import temporal  # noqa: E402
+from groundworks.pipeline import loader  # noqa: E402
+from groundworks.pipeline import write  # noqa: E402
 
 PORT = surreal_bin.free_port()   # OS-assigned (was 8038): suites no longer share a registry of fixed ports
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -152,7 +152,7 @@ class ContractTests(unittest.TestCase):
         words = set(gates.FACT_STATUSES) - {"open", "stale", "superseded"}   # plain English besides
         words |= set(inst.status_values()) | set(inst.grades())
         found = sorted(w for w in words if re.search(r"\b%s\b" % re.escape(w), source))
-        self.assertEqual(found, [], "domain words in xscholar/assertions.py")
+        self.assertEqual(found, [], "domain words in groundworks/assertions.py")
 
     def test_tracked_history_is_emitted_exactly_as_temporal_emits_it(self):
         """Both modules may be applied in either order only because they emit the same statements."""
@@ -353,7 +353,7 @@ class ReportTests(_Server):
         self.assertEqual((c["current"], c["changed_last"], c["target_last_change"]["before"]), ("unusable", "target", "usable"))
 
     def test_mcp_health_counts_a_contradicting_assertion(self):
-        from xscholar.mcp import instance_adapter
+        from groundworks.mcp import instance_adapter
         self.source()
         self.load()
         adapter = instance_adapter.create_adapter_for(self.inst, self.conn)

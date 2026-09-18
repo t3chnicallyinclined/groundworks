@@ -237,21 +237,21 @@ class RunOnAToyTreeTests(unittest.TestCase):
 class ReporterTests(unittest.TestCase):
 
     def test_a_module_imported_from_outside_the_tree_copy_is_reported_so_the_break_is_never_judged(self):
-        """Measured on the development machine: xscholar is installed editable, so an import that does not
+        """Measured on the development machine: groundworks is installed editable, so an import that does not
         find the copy's own package silently tests the LIVE, unmutated code."""
         import os
         import subprocess
         with tempfile.TemporaryDirectory() as tmp:
             outside, tree = pathlib.Path(tmp) / "outside", pathlib.Path(tmp) / "tree"
-            write_tree(outside, {"xscholar/__init__.py": "VALUE = 1"})
+            write_tree(outside, {"groundworks/__init__.py": "VALUE = 1"})
             write_tree(tree, {"tests/__init__.py": "", "tests/test_x.py": """
                 import unittest
-                import xscholar
+                import groundworks
 
 
                 class X(unittest.TestCase):
                     def test_x(self):
-                        self.assertEqual(xscholar.VALUE, 1)
+                        self.assertEqual(groundworks.VALUE, 1)
 
 
                 if __name__ == "__main__":
@@ -262,7 +262,7 @@ class ReporterTests(unittest.TestCase):
                            cwd=str(tree), env=dict(os.environ, PYTHONPATH=str(outside)), check=True,
                            capture_output=True)
             report = json.loads(out.read_text(encoding="utf-8"))
-        self.assertTrue(any(entry.startswith("xscholar from") for entry in report["imported_outside_root"]), report)
+        self.assertTrue(any(entry.startswith("groundworks from") for entry in report["imported_outside_root"]), report)
         self.assertEqual(report["tests"]["tests.test_x.X.test_x"], "not_run", "a test run against code outside the copy")
 
 
@@ -298,7 +298,7 @@ class RegistryTests(unittest.TestCase):
             self.assertIn("anchor+replacement or edits", str(raised.exception))
 
     def test_a_real_registered_break_is_killed_on_a_copy_and_the_live_tree_is_untouched(self):
-        entries = [e for e in mutate.load_registry() if e["file"] == "xscholar/pipeline/agreement.py"]
+        entries = [e for e in mutate.load_registry() if e["file"] == "groundworks/pipeline/agreement.py"]
         self.assertTrue(entries, "the registry lost its kappa break (D11)")
         live = ROOT / entries[0]["file"]
         before = hashlib.sha256(live.read_bytes()).hexdigest()

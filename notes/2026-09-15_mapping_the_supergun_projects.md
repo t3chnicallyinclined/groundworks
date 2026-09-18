@@ -26,7 +26,7 @@ from the seed files and Python sources on disk, never from the live database.
 | M4 | doc section density | 337 tracked `.md` across supergun / maplecast-flycast / mvc-live-skins-quarters / RetroReceipts-agent hold **4,693** H2–H4 headings = **13.9 sections per file** | `grep -cE '^#{2,4} '` per tracked file |
 | M5 | MapleCast repo vs product | `maplecast-flycast` has **101 commits since 2026-08-29**, but **322 of ~375** path touches are under `tools/` (re_kb seeds); **69 of 93** tracked `docs/**.md` were last touched **before** 2026-08-29 | `git log --since --name-only`; per-file `git log -1 --format=%cs` |
 | M6 | re_kb ladder drift | **301** explicit `strength=` literals across the 321 seed files; **21 (7.0%)** name a grade absent from `ladder.py`'s `ORDER`: `runtime` 6, `gate` 5, `measurement` 4, `doc` 3, `decompile` 2, `bytes` 1 | `grep -rhoE "strength\s*[:=]\s*'[a-z_]+'" *.surql \| sort \| uniq -c` |
-| M7 | template config does not load | `python -m xscholar.config instances/_template/instance.yaml` raises `YamlError` on a flow collection; `instances/demo-incident/instance.yaml` loads: `OK demo_incident: 3 unit type(s), 2 gate rule(s)` | ran both |
+| M7 | template config does not load | `python -m groundworks.config instances/_template/instance.yaml` raises `YamlError` on a flow collection; `instances/demo-incident/instance.yaml` loads: `OK demo_incident: 3 unit type(s), 2 gate rule(s)` | ran both |
 
 All CONFIRMED. M4 extrapolated to the stated 734 unique docs gives **≈10,200 doc-section units**
 (INFERRED — the four sampled repos may not represent the other lanes).
@@ -56,12 +56,12 @@ one instance, one goal, one corpus, one set of rules.
 
 The owner named the hard case: netcode rests on Steam RE facts, and **a retraction must cascade**.
 
-CONFIRMED: the engine's cascade is `xscholar/queue.py` — a change-feed worker whose
+CONFIRMED: the engine's cascade is `groundworks/queue.py` — a change-feed worker whose
 `stale_recheck` handler demotes a `confirmed` fact when the unit it cites loses its confirming grade
-or usable status (`queue.py:400-431`), plus `xscholar/patterns/tms_propagation.surql`. The `Worker`
+or usable status (`queue.py:400-431`), plus `groundworks/patterns/tms_propagation.surql`. The `Worker`
 holds **one** `Db`, and a `Db` is bound to one namespace/database (`queue.py` main, `--ns/--db`).
 There is **no cross-instance propagation anywhere in the engine**: `grep -rn "bridge"` over
-`xscholar/**.py` returns nothing but a mention in `panel/PROTOCOL.md:7`, and `docs/MODULES.md:55`
+`groundworks/**.py` returns nothing but a mention in `panel/PROTOCOL.md:7`, and `docs/MODULES.md:55`
 marks the `discovery` module (which owns bridges) as **"designed"**, not built.
 
 So: split netcode from Steam RE and retracting an arena-carve fact leaves the netcode claim sitting
@@ -93,7 +93,7 @@ What the engine supports, CONFIRMED:
   **reference graph** as "another instance that read that field", used by a *discipline lens* when it
   must supply outside knowledge. `METHOD.md:138` ranks `graph`-backed above `source`-backed.
 - Two instances are two namespaces, optionally on one SurrealDB, and two MCP front doors
-  (`mcp/instance_adapter.py` reads one `XSCHOLAR_INSTANCE`). One agent session can hold both.
+  (`mcp/instance_adapter.py` reads one `GROUNDWORKS_INSTANCE`). One agent session can hold both.
 
 What it does **not** support, CONFIRMED:
 - **A lens never promotes.** `docs/ARCHITECTURE.md:41`: "L5 and L6 never promote anything: a lens
@@ -536,7 +536,7 @@ dedupe is removed.**
 duplicates), and `intake.py:24-26` makes the wrong behaviour the default because it hashes the
 locator too.
 
-**T1 — `instance.yaml` for `supergun`.** *Acceptance:* `python -m xscholar.config <path>` prints OK
+**T1 — `instance.yaml` for `supergun`.** *Acceptance:* `python -m groundworks.config <path>` prints OK
 with 5 unit types and ≥6 gate rules. **Start from `instances/demo-incident/instance.yaml`, not from
 `instances/_template/`** — CONFIRMED (M7) the template does not parse, and it uses top-level `name:`,
 `goal:`, `staleness:`, `discovery:` which are not in `config.py:27-28`'s `TOP_KEYS`; demo-incident
@@ -630,7 +630,7 @@ Per the owner's standing rule, no ETA is given — scope and next step only.
    direction relative to one holder. Two goals in one graph makes for/against meaningless and the
    adversary lens useless.
 2. **Six instances, one per lane.** There is no cross-instance cascade: no bridge code in
-   `xscholar/**.py`, `docs/MODULES.md:55` marks `discovery` "designed", and `queue.py`'s worker is
+   `groundworks/**.py`, `docs/MODULES.md:55` marks `discovery` "designed", and `queue.py`'s worker is
    bound to one namespace. Splitting netcode from Steam RE guarantees a retracted carve fact leaves a
    confirmed netcode claim standing.
 3. **An adapter over the live re_kb graph instead of a migration.** It moves the rule out of the

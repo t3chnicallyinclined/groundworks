@@ -19,6 +19,6 @@ template's headings (trigger, propagation, detection, mitigation, prevention).
 
 ## This file is checked
 
-`xscholar test` and CI pass this file to the drift check (`xscholar/drift.py`, check c). Every
+`groundworks test` and CI pass this file to the drift check (`groundworks/drift.py`, check c). Every
 `lens_<name>` and `seat_<name>` above must name a lens `instance.yaml` defines, so renaming a lens without
 updating this file fails the build.

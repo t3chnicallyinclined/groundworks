@@ -1,6 +1,6 @@
 # The Scholar method
 
-**Working name:** XScholar (naming deferred; see DECISIONS.md).
+**Working name:** Groundworks (naming deferred; see DECISIONS.md).
 **Status:** written 2026-09-15.
 **Contents:** a general, case-free description of the method. The first instance, a New York appeal, is documented separately in `09_appeal/kb/ARCHITECTURE_APPEALS_FIRM.md` and is the source of every measured number below.
 **Rule for this file:** no client data. Examples from the first instance are described generically.
@@ -57,7 +57,7 @@ Descriptive term: an **evidence-gated knowledge graph** built by **exhaustive, v
 ```
  L6  Instruments   hooks (inject known facts/dead ends at tool time; carry state across compaction)
                    skills (roles: red team, cold bench, premortem, claim audit, ...)
-                   panels (several lenses judge one target under a program-checked protocol; xscholar/panel)
+                   panels (several lenses judge one target under a program-checked protocol; groundworks/panel)
                    evals  (regression suite of past errors; gate probe tests; health reports)
  L5  Lenses        computed views + lens-keyed edges (filing under an expert framework, per-reader views)
  L4  Workbench     critiques + attacks{verdict}, answers, events + mentions{stance}, output citations{verdict}
@@ -137,7 +137,7 @@ Change these answers and the machinery serves a new domain.
 
 **Backing grade** (how far to trust a lens): *prompt-backed* (a role with no source; agent grade, never supports promotion) < *source-backed* (Frame transcribed from a source) < *graph-backed* (draws on a reference graph) < *calibrated* (agreement with a human expert or an independent pass measured on a sample).
 
-**Panels.** When several lenses judge one target, they sit as a panel under `xscholar/panel/PROTOCOL.md`: a blind round, then anonymized cross-examination; a changed stance must quote the seat's own earlier words; the panel is locked before any answer; one stance line per seat, never inferred; dissent quota, novelty and agreement checks; a confidence-weighted tally with splits returned to the human. A program enforces all of it. The result is Overlay at agent grade; gates still decide.
+**Panels.** When several lenses judge one target, they sit as a panel under `groundworks/panel/PROTOCOL.md`: a blind round, then anonymized cross-examination; a changed stance must quote the seat's own earlier words; the panel is locked before any answer; one stance line per seat, never inferred; dissent quota, novelty and agreement checks; a confidence-weighted tally with splits returned to the human. A program enforces all of it. The result is Overlay at agent grade; gates still decide.
 
 **Rule.** Lens filings derived by crosswalk are agent-grade filings, not proof; counts are items, not weight.
 

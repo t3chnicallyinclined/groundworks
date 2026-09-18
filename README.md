@@ -1,4 +1,4 @@
-# XScholar (working name)
+# Groundworks (working name)
 
 A method and engine for making AI agents reliably expert in one large body of material with a stated goal:
 - **Agents read all of it, under mechanical checks.** Their judgments go into a knowledge graph whose database refuses to treat anything as established without evidence of sufficient rank.
@@ -10,7 +10,7 @@ Descriptive term: **evidence-gated knowledge graph built by exhaustive, verified
 ## Status (2026-09-16) -- v0.2, feature complete
 
 - **Method written down:** `docs/METHOD.md`. **Upgrading from an older checkout:** [`UPGRADING.md`](UPGRADING.md).
-- **424 tests, 0 skipped**, plus a license check, a config/skills drift check and a privacy scan, all run by `xscholar test` and summarised by name so a check that did NOT run is visible rather than green.
+- **424 tests, 0 skipped**, plus a license check, a config/skills drift check and a privacy scan, all run by `groundworks test` and summarised by name so a check that did NOT run is visible rather than green.
 - **The graph's shape belongs to the instance:** declare your own node tables and edge types in `instance.yaml` and they get schema, gate traversals, all three probe kinds, cleanup, per-role PERMISSIONS and a write path -- with no engine change.
 - **Gates are probed in both directions and pinned to a committed baseline**, so a rule that is quietly loosened fails the run instead of reporting `0 misbehaved`.
 - **First instance built and running privately:** an appellate case record. 9,101 units read by 77 agents; 77 of 77 chunks passed the verbatim validator.
@@ -35,12 +35,12 @@ This repository contains **no client or matter data**, ever:
 | `docs/PATTERNS.md` | Designs from running a real instance that any instance can declare in config, with what was verified and their limits (first: contentions) |
 | `instances/` | 19 domain specs mapping the method (eight answers, evidence model, gates with probes, roles, lenses, evaluator, walkthrough, usage, synthetic worked example, pitfalls, module reuse) plus a template and `instance.yaml` schema |
 | `.claude/skills/design-instance/` | The skill that maps the method onto a new domain |
-| `xscholar/panel/` | Panel module: several lenses judge one target under a program-checked protocol (`PROTOCOL.md`, `panel.py`, tests, `NOTICE.md`) |
+| `groundworks/panel/` | Panel module: several lenses judge one target under a program-checked protocol (`PROTOCOL.md`, `panel.py`, tests, `NOTICE.md`) |
 | `.claude/skills/panel/` | The skill that runs a panel |
-| `xscholar/mcp/` | MCP front door: domain-free tools over an instance adapter, status envelope, launch-stamped provenance, no raw query or delete tools |
-| `xscholar/embed/` | Local embeddings and a retrieval bake-off (keyword, dense, hybrid) with confidence intervals; models adopted only if they beat keyword search |
+| `groundworks/mcp/` | MCP front door: domain-free tools over an instance adapter, status envelope, launch-stamped provenance, no raw query or delete tools |
+| `groundworks/embed/` | Local embeddings and a retrieval bake-off (keyword, dense, hybrid) with confidence intervals; models adopted only if they beat keyword search |
 | `docs/LICENSING.md`, `THIRD_PARTY_NOTICES.md`, `scripts/license_check.py` | Licensing policy, notices, and the commit-time license check |
-| `xscholar/patterns/` | Proven datastore patterns: truth maintenance, archive bin, stable edge ids |
+| `groundworks/patterns/` | Proven datastore patterns: truth maintenance, archive bin, stable edge ids |
 | `scripts/privacy_scan.py` | Deny-list scan (list kept outside the repo); runs as a pre-commit hook; fails closed |
 | `docs/ROADMAP.md` | Tracks for the engine, pilots and product, with acceptance tests |
 | `docs/DECISIONS.md` | Method-level decisions and open questions |
@@ -53,12 +53,12 @@ This repository contains **no client or matter data**, ever:
 
 ## Start here
 
-**Prerequisites:** Python 3.11+ and the SurrealDB binary (`https://surrealdb.com/install`, or set `XSCHOLAR_SURREAL` to its path). Nothing else; the core has no third-party dependencies.
+**Prerequisites:** Python 3.11+ and the SurrealDB binary (`https://surrealdb.com/install`, or set `GROUNDWORKS_SURREAL` to its path). Nothing else; the core has no third-party dependencies.
 
 ```
-git clone https://github.com/t3chnicallyinclined/xscholar.git
-cd xscholar
-python -m xscholar.cli test                                      # every suite + the license check (about 20 s)
+git clone https://github.com/t3chnicallyinclined/groundworks.git
+cd groundworks
+python -m groundworks.cli test                                      # every suite + the license check (about 20 s)
 python scripts/run_instance.py instances/demo-incident --memory 8025   # a whole instance, end to end
 ```
 
@@ -71,7 +71,7 @@ Two things. The engine's `dependencies` are `[]` -- Python standard library only
 | | |
 |---|---|
 | Python | 3.11 or newer |
-| SurrealDB | **3.1.x** ([install](https://surrealdb.com/install)), or set `XSCHOLAR_SURREAL` to the binary |
+| SurrealDB | **3.1.x** ([install](https://surrealdb.com/install)), or set `GROUNDWORKS_SURREAL` to the binary |
 
 **There is no container, and that is deliberate.** There were a `Dockerfile` and a `compose.yaml` here until 2026-09-16, and they had never once been run. This repo's standing rule is that a path nobody has executed is not a working path, however good it looks in a README, so they were deleted rather than left as decoration. One binary and one command is the whole deployment story; if you later need a container for distribution, write it against a real deployment and measure it. The files are in git history.
 
@@ -99,9 +99,9 @@ drops, and how to prove your regenerated gate baseline can still fail.
 ### If you are an agent working in this repository
 
 1. Read `CLAUDE.md` first. Its rules are binding: no instance data here, verify before claiming, gates tested both ways, checks that pass by default are the enemy, the evaluator is human-owned, licensing by class.
-2. Run `python -m xscholar.cli test` before and after any change. Green is the only definition of done.
+2. Run `python -m groundworks.cli test` before and after any change. Green is the only definition of done.
 3. Read `docs/ARCHITECTURE.md` (what the system is, and who is at the gate), then `docs/TUNING.md` (what each layer's knobs do), then `docs/MODULES.md` (the file contracts you will write against).
-4. To add a capability: put generic code under `xscholar/<module>/`, tests under `tests/`, and test it with a non-legal synthetic instance. Domain words never enter engine code.
+4. To add a capability: put generic code under `groundworks/<module>/`, tests under `tests/`, and test it with a non-legal synthetic instance. Domain words never enter engine code.
 5. To map a new domain: use the `design-instance` skill, or copy `instances/demo-incident/`, answer the eight questions in `instance.yaml`, write an adapter that yields units with exact locators, and run the same command. The instance lives in **its own project**, never here.
 6. Record decisions in `docs/DECISIONS.md`, dated reasoning in `notes/`, and every new dependency or adapted item in `THIRD_PARTY_NOTICES.md` (the pre-commit check enforces it).
 7. Report the unflattering number next to the flattering one. Say UNKNOWN rather than guess.
@@ -114,17 +114,17 @@ Read `docs/METHOD.md` section 1 (one paragraph) and section 12 (which domains fi
 
 | Path | What |
 |---|---|
-| `xscholar/config.py` | The instance config: the eight answers, validated, as the single source of truth |
-| `xscholar/gates.py` | Generates the datastore schema, the promotion gates, and a reject-and-accept probe per rule |
-| `xscholar/db.py` | Minimal SurrealDB client that fails loudly |
-| `xscholar/pipeline/` | intake, chunker, validator, loader, and the typed write surface |
-| `xscholar/panel/` | Several lenses judge one target under a program-checked protocol |
-| `xscholar/present/` | Renderings for human verification, with the inline rule re-check |
-| `xscholar/mcp/` | The MCP front door agents use; `instance_adapter.py` gives any `instance.yaml` all tools with no adapter code |
-| `xscholar/hooks/` | Session-start health warning and the pre-tool lookup that speaks before a mistake is made |
-| `xscholar/embed/` | Local embeddings and the retrieval bake-off |
-| `xscholar/patterns/` | Proven datastore patterns |
-| `tests/` | Every suite; `python -m xscholar.cli test` runs them all |
+| `groundworks/config.py` | The instance config: the eight answers, validated, as the single source of truth |
+| `groundworks/gates.py` | Generates the datastore schema, the promotion gates, and a reject-and-accept probe per rule |
+| `groundworks/db.py` | Minimal SurrealDB client that fails loudly |
+| `groundworks/pipeline/` | intake, chunker, validator, loader, and the typed write surface |
+| `groundworks/panel/` | Several lenses judge one target under a program-checked protocol |
+| `groundworks/present/` | Renderings for human verification, with the inline rule re-check |
+| `groundworks/mcp/` | The MCP front door agents use; `instance_adapter.py` gives any `instance.yaml` all tools with no adapter code |
+| `groundworks/hooks/` | Session-start health warning and the pre-tool lookup that speaks before a mistake is made |
+| `groundworks/embed/` | Local embeddings and the retrieval bake-off |
+| `groundworks/patterns/` | Proven datastore patterns |
+| `tests/` | Every suite; `python -m groundworks.cli test` runs them all |
 | `scripts/` | The instance runner, the privacy scan, the license check |
 
 ## License

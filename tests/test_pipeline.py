@@ -16,10 +16,10 @@ HERE = pathlib.Path(__file__).resolve().parent
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config  # noqa: E402
-from xscholar.pipeline import chunker  # noqa: E402
-from xscholar.pipeline import intake  # noqa: E402
-from xscholar.pipeline import validator  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks.pipeline import chunker  # noqa: E402
+from groundworks.pipeline import intake  # noqa: E402
+from groundworks.pipeline import validator  # noqa: E402
 
 DEMO = HERE.parent / "instances" / "demo-incident" / "instance.yaml"
 

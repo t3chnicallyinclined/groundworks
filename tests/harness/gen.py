@@ -102,7 +102,7 @@ def gen_config(rng, rules=None, declared_tables=None, chained=None, forbids=None
             "gates": [],
             "evaluator": {"regression_file": "evals/known_errors.json"},
             "human_owned": ["gates", "fidelity", "status", "evaluator", "privacy"],
-            "privacy": {"deny_list": "~/.xscholar/denylist.txt", "providers_allowed": ["approved"]}}
+            "privacy": {"deny_list": "~/.groundworks/denylist.txt", "providers_allowed": ["approved"]}}
 
     # declared node tables, each with one enumerated field a rule can gate, and an edge from it
     tables, edges = {}, {}

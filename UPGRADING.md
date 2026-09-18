@@ -1,6 +1,6 @@
 # Upgrading to v0.2
 
-**Read this if you have an instance running on an older XScholar.** It is written for the agent doing the upgrade. Work top to bottom; each step says what breaks if you skip it.
+**Read this if you have an instance running on an older Groundworks.** It is written for the agent doing the upgrade. Work top to bottom; each step says what breaks if you skip it.
 
 Nothing here is optional maintenance. Two of the changes fix defects that let a run **report success while doing nothing**, and one fixes **data loss**. If you are on anything before `34960cf`, upgrade before your next load.
 
@@ -9,7 +9,7 @@ Nothing here is optional maintenance. Two of the changes fix defects that let a 
 ## 0. Before you touch anything
 
 ```
-cd <your xscholar checkout>
+cd <your groundworks checkout>
 git log --oneline -1          # write this down: it is what you are on now
 git status --short            # commit or stash your own changes first
 ```
@@ -19,10 +19,10 @@ If you have a running database, **back it up now**: `surreal export --conn <url>
 ```
 git pull
 pip install -e .              # dependencies are still [] -- this only refreshes the console script
-python -m xscholar.cli test   # expect: 424 ran, 0 skipped, four checks passed
+python -m groundworks.cli test   # expect: 424 ran, 0 skipped, four checks passed
 ```
 
-If `xscholar test` does not end with a summary table naming every check, your pull did not land.
+If `groundworks test` does not end with a summary table naming every check, your pull did not land.
 
 ---
 
@@ -64,7 +64,7 @@ Back up with `surreal export` on whatever scheduler the host already has. The da
 Order matters. Run all three against your database, in this order:
 
 ```
-python -m xscholar.gates <your instance.yaml> --apply --url <url> --ns <ns> --db <db>
+python -m groundworks.gates <your instance.yaml> --apply --url <url> --ns <ns> --db <db>
 ```
 
 Then, in your own runner (or copy what `scripts/run_instance.py` does):
@@ -83,14 +83,14 @@ Your `gate_baseline.json` is now stale: the report half gained `forbids`, `forbi
 Until you regenerate, **your runs still pass** — a missing key is never read as a weakening — but your baseline cannot catch a regression in the new probes.
 
 ```
-python -m xscholar.gates <your instance.yaml> --apply --url <url> --write-baseline <your dir>/gate_baseline.json
+python -m groundworks.gates <your instance.yaml> --apply --url <url> --write-baseline <your dir>/gate_baseline.json
 ```
 
 Read the diff. Nothing should be removed or lowered. Then **prove it can still fail**, because a baseline that no longer catches anything is worse than none:
 
 ```
 # delete one clause from a COPY of your config, then:
-python -m xscholar.gates <the copy> --apply --url <url> --db scratch --baseline <your dir>/gate_baseline.json
+python -m groundworks.gates <the copy> --apply --url <url> --db scratch --baseline <your dir>/gate_baseline.json
 # expect exit 1, naming the clause you removed
 ```
 
@@ -117,8 +117,8 @@ human_owned: [gates, fidelity, status, evaluator, privacy, verdicts]
 Define all three or none. `human_owned` must list `verdicts` if you define them. Then regenerate your role skills:
 
 ```
-python -m xscholar.skills <your instance.yaml> <your skills dir>
-python -m xscholar.drift  <your instance.yaml> <your skills dir>
+python -m groundworks.skills <your instance.yaml> <your skills dir>
+python -m groundworks.drift  <your instance.yaml> <your skills dir>
 ```
 
 **Check your own role skills for a positional mapping.** If a skill offers a reviewer three options and hands them to three verdicts in order, that is the defect above. The three-ness is a coincidence, not a translation.
@@ -138,8 +138,8 @@ If your own code writes critiques with its own deterministic id, you never had t
 Not required, but this is what the release is for.
 
 - **Declare your own tables and edges** in `instance.yaml` under `tables:` and `edges:`. They get schema, gate traversals, all three probe types, cleanup, PERMISSIONS and `Writer.relate()` with no engine change. `instances/demo-incident/instance.yaml` is the worked example; `instances/_template/instance.yaml` documents the shape.
-- `xscholar test --require-db` — a skipped suite fails instead of printing `OK (skipped=N)`. Use it in CI.
-- `xscholar test --require-privacy` — on a machine holding real data, a privacy scan that cannot run is a failure.
+- `groundworks test --require-db` — a skipped suite fails instead of printing `OK (skipped=N)`. Use it in CI.
+- `groundworks test --require-privacy` — on a machine holding real data, a privacy scan that cannot run is a failure.
 - The privacy scan now reads **every** extension except known binaries, and names the files it could not read. It used to walk past `.csv`, `.xml`, `.sql` and `.log` and still print "clean".
 
 ---
@@ -165,7 +165,7 @@ corrections  0 followed a source change, 0 held, 12 CONFLICT(S) with the source,
 
 From then on, record corrections with `loader.correct_unit(db, unit_id, field, value, by, note)` so each one is attributed. A raw `UPDATE` is still caught, but it is recorded as `UNATTRIBUTED`.
 
-**If you had facts confirmed on a unit that a past reload reverted to unusable, re-check them.** The reload that undid the correction may also have removed their support without saying so. `xscholar/consistency.py` reports every row that stands at a gated value its gate no longer supports.
+**If you had facts confirmed on a unit that a past reload reverted to unusable, re-check them.** The reload that undid the correction may also have removed their support without saying so. `groundworks/consistency.py` reports every row that stands at a gated value its gate no longer supports.
 
 ---
 
@@ -186,14 +186,14 @@ Regenerate your gate baseline after declaring either rule (step 4), then prove i
 
 ## 7d. Your config may now refuse to load: the evaluator's regression file must exist
 
-`evaluator.regression_file` has been required since the first commit, and nothing ever read it. The demo declared a file that did not exist. **Now `config.load(<instance.yaml>)` stops, naming the path, if the declared file is missing, unreadable, or not in the format.** Every tool that loads your config stops with it: the runner, `gates --apply`, the MCP server, `skills`. **A relative `regression_file` resolves against the folder your `instance.yaml` is in**, not the repository root or the working directory, even when every other path in your config was written relative to the repository root; the error names the absolute path it looked at. **Since 2026-09-16 the evaluator also needs `known_errors.ids.json` beside the regression file** (`{"ids": [every entry id]}`): without it `python -m xscholar.evaluator` reports NOT EXECUTED (exit 2), an id pinned there and missing from the file is refused (exit 1), and so is an entry not pinned. Create it once with your current ids; after that, an entry is added to both files in the same change, and removing one takes a human.
+`evaluator.regression_file` has been required since the first commit, and nothing ever read it. The demo declared a file that did not exist. **Now `config.load(<instance.yaml>)` stops, naming the path, if the declared file is missing, unreadable, or not in the format.** Every tool that loads your config stops with it: the runner, `gates --apply`, the MCP server, `skills`. **A relative `regression_file` resolves against the folder your `instance.yaml` is in**, not the repository root or the working directory, even when every other path in your config was written relative to the repository root; the error names the absolute path it looked at. **Since 2026-09-16 the evaluator also needs `known_errors.ids.json` beside the regression file** (`{"ids": [every entry id]}`): without it `python -m groundworks.evaluator` reports NOT EXECUTED (exit 2), an id pinned there and missing from the file is refused (exit 1), and so is an entry not pinned. Create it once with your current ids; after that, an entry is added to both files in the same change, and removing one takes a human.
 
 - The path is resolved against the directory `instance.yaml` is in, not the current directory.
 - If you have no known errors yet, create the file with an empty list. That is honest: it says the evaluator checks nothing yet.
   ```json
-  {"format": "xscholar.known_errors/1", "entries": []}
+  {"format": "groundworks.known_errors/1", "entries": []}
   ```
-- `xscholar test` now runs the demo's evaluator. An evaluator with no entries reports `NOT EXECUTED`, never a pass.
+- `groundworks test` now runs the demo's evaluator. An evaluator with no entries reports `NOT EXECUTED`, never a pass.
 - Tests that build a config file in a temporary directory need the file beside it too (`tests/test_config.py` and `tests/test_skills_drift.py` show how).
 
 ---
@@ -242,7 +242,7 @@ human_owned: [gates, fidelity, status, evaluator, privacy, verdicts, originals]
 **After any restore or import, run verify:**
 
 ```
-python -m xscholar.originals verify <your instance.yaml> --url <url> --ns <ns> --db <db>
+python -m groundworks.originals verify <your instance.yaml> --url <url> --ns <ns> --db <db>
 ```
 
 `document.integrity` is what the last load or verify found. A restore brings back the rows and says nothing about the store. Verify re-hashes every file, records what it finds, and names every missing or corrupt original.
@@ -302,7 +302,7 @@ Each rule with clauses is emitted twice: as the field `ASSERT` it always was, an
 
 ## 7i. Live-schema drift: the database compared with the config
 
-`python -m xscholar.live_schema <instance.yaml> --url <url> --ns <ns> --db <db>` compares every definition the database holds with what the config generates: tables, fields, events, indexes, accesses, users and params. It reports each by name as missing, altered or unexpected. The expected side is rendered by the same server into a scratch database that is removed afterwards.
+`python -m groundworks.live_schema <instance.yaml> --url <url> --ns <ns> --db <db>` compares every definition the database holds with what the config generates: tables, fields, events, indexes, accesses, users and params. It reports each by name as missing, altered or unexpected. The expected side is rendered by the same server into a scratch database that is removed afterwards.
 
 - **`scripts/run_instance.py` now runs it after every apply step and stops on any drift** (exit 1, `LIVE SCHEMA DRIFT`). A definition nobody generated survives every re-apply, because `OVERWRITE` replaces only what the config names. So a stray `DEFINE PARAM`, a second `DEFINE USER`, or a hand-added event stops your next run, named. Remove it or put it in the config.
 - It needs a root (or namespace-level) login. Under an agent credential it says `NOT EXECUTED`, and so does the MCP `health` tool.
@@ -316,10 +316,10 @@ Each rule with clauses is emitted twice: as the field `ASSERT` it always was, an
 Optional. `promotion_log: true`, and add `promotion_log` to `human_owned`. An event appends one hash-chained entry per gated promotion: the rule, the row, the value before and after, the credential and its principal, and the time.
 
 ```
-python -m xscholar.promotion_log <instance.yaml> --verify --url <url> --ns <ns> --db <db>
-python -m xscholar.promotion_log <instance.yaml> --export-anchor anchor.checkpoint --url ... # after each batch
-python -m xscholar.promotion_log <instance.yaml> --verify --anchor anchor.checkpoint --url ...
-python -m xscholar.promotion_log <instance.yaml> --late --url ...
+python -m groundworks.promotion_log <instance.yaml> --verify --url <url> --ns <ns> --db <db>
+python -m groundworks.promotion_log <instance.yaml> --export-anchor anchor.checkpoint --url ... # after each batch
+python -m groundworks.promotion_log <instance.yaml> --verify --anchor anchor.checkpoint --url ...
+python -m groundworks.promotion_log <instance.yaml> --late --url ...
 ```
 
 - **The limit, stated plainly: root can rebuild the whole chain, or truncate it and rewrite the head, and `--verify` alone still passes.** Only a verify against an anchor you exported earlier, and kept where root on the database host cannot reach, catches that. Entries after your last anchor are only as trustworthy as the database. A test asserts this limit.
@@ -336,10 +336,10 @@ Measured on SurrealDB 3.1.6: `POST /import` and `OPTION IMPORT` write rows **wit
 **After every restore or import, run all of these, as root:**
 
 ```
-python -m xscholar.originals verify <instance.yaml> --url <url> --ns <ns> --db <db>
-python -m xscholar.live_schema <instance.yaml> --url <url> --ns <ns> --db <db>
-python -m xscholar.promotion_log <instance.yaml> --verify --anchor <your last anchor> --url ...   # if the log is on
-python -m xscholar.gates <instance.yaml> --apply --url <url> --ns <ns> --db <db> --baseline <your baseline>
+python -m groundworks.originals verify <instance.yaml> --url <url> --ns <ns> --db <db>
+python -m groundworks.live_schema <instance.yaml> --url <url> --ns <ns> --db <db>
+python -m groundworks.promotion_log <instance.yaml> --verify --anchor <your last anchor> --url ...   # if the log is on
+python -m groundworks.gates <instance.yaml> --apply --url <url> --ns <ns> --db <db> --baseline <your baseline>
 ```
 
 Then read `consistency.report` (every row standing at a gated value its gate no longer supports) and the assertions report. `gates --apply` re-probes the gates in a scratch database when originals enforcement is already applied, and says so, because its probe units carry no originals.
@@ -352,7 +352,7 @@ Then read `consistency.report` (every row standing at a gated value its gate no 
 - **The Writer words two more refusals correctly.** An originals refusal and an assertion refusal used to be explained as "needs at least one cited unit whose grade is in ...", which sent agents round an endless retry. `GateRefusal.detail["reason"]` is now `originals` or `assertion`.
 - **A gate on a built-in field keeps that field's own list.** A gate on `unit.status` or `unit.grade` used to replace the field's definition and drop `$value IN [...]`, so the field accepted any string once gated (ROADMAP V2-22(a)). Re-apply your gates if you gate either. A gate on a field the engine cannot restate (neither built in nor declared) now refuses to generate, by name.
 - **MCP:** a new read tool, `document_get`, returns a unit's original, re-hashed. `health` gains `live_schema`, `promotion_log`, `assertions` and `originals.gap_units_without_verified_original`. A check the server's connection cannot run says `NOT_EXECUTED`, never 0. Regenerate your role skills: the tool table changed.
-- **One throwaway-server start.** `xscholar/surreal_bin.py start_memory` is the only implementation. `scripts/run_instance.py` and the evaluator both call it. If you copied `start_memory` into your own scripts, call this one instead.
+- **One throwaway-server start.** `groundworks/surreal_bin.py start_memory` is the only implementation. `scripts/run_instance.py` and the evaluator both call it. If you copied `start_memory` into your own scripts, call this one instead.
 
 ---
 
@@ -363,14 +363,14 @@ From real use: a live MCP server served write tools from a work-in-progress bran
 | What | Used to | Now | What to do |
 |---|---|---|---|
 | Any write tool (`critique_add`, `critique_answer`, `claim_propose`, `claim_confirm`, `claim_rule_out`, `claim_support`, `conclusion_mark_ready`, `panel_submit`) | Ran from whatever engine code the server loaded | **`rejected_by_gate`** unless the server started from branch `main` with no uncommitted changes, and the checkout is still that commit and branch with none now. `missing` names the cure | Launch the server from a clean `main` checkout of the engine. **If writes are refused with `STALE`, restart the server**: the checkout moved under it |
-| An engine that is not a git checkout (an installed copy, an archive) | Served writes | `engine_code.verdict` `UNKNOWN`, **writes refused** | Run from a checkout, or a human sets `XSCHOLAR_ALLOW_UNVERIFIED=1` in the launch entry; `health` then leads with a `WARNING` and every write result carries `engine_code_warning` |
+| An engine that is not a git checkout (an installed copy, an archive) | Served writes | `engine_code.verdict` `UNKNOWN`, **writes refused** | Run from a checkout, or a human sets `GROUNDWORKS_ALLOW_UNVERIFIED=1` in the launch entry; `health` then leads with a `WARNING` and every write result carries `engine_code_warning` |
 | `health` result | `{"instance", "server"}` | `{["WARNING"], "engine_code", "summary", "instance", "server"}`, in that order. `instance` is unchanged; `server` gains `write_tools` | A caller that reads `data["instance"]` keeps working. Read `data["summary"]["headline"]` and `attention` first |
 | `health(detail=false)` | (did not exist) | Same, with `instance` replaced by a one-line note; the summary is still derived from the full detail | Use it for the pre-write check |
 | `health` when the datastore is down | `db_unreachable` and nothing else | Also carries `engine_code` | Nothing |
-| Generic adapter `health` counts under a provisioned (record) credential | **Read 0**: an unfiltered `count() GROUP ALL` returns 0 to a record credential even when it can read the rows (SurrealDB 3.1.6, measured), and a table it cannot read also counted 0 | True counts; a count over a table the credential's role cannot read is the string `NOT_EXECUTED: ...`. **A count may now be a string** | Launch agent servers with `XSCHOLAR_ROLE` equal to the credential's access role (what `--provision` prints). Without it a zero count under a record credential reads `NOT_EXECUTED` |
-| `xscholar.mcp.server.build_server(adapter, provenance, panel_root)` | No guard | Takes `guard=`; without one it reads the real engine checkout | Tests that exercise writes pass `guard=code_state.CodeGuard(reader=lambda: code_state.git_state(<sha>, "main"))` |
+| Generic adapter `health` counts under a provisioned (record) credential | **Read 0**: an unfiltered `count() GROUP ALL` returns 0 to a record credential even when it can read the rows (SurrealDB 3.1.6, measured), and a table it cannot read also counted 0 | True counts; a count over a table the credential's role cannot read is the string `NOT_EXECUTED: ...`. **A count may now be a string** | Launch agent servers with `GROUNDWORKS_ROLE` equal to the credential's access role (what `--provision` prints). Without it a zero count under a record credential reads `NOT_EXECUTED` |
+| `groundworks.mcp.server.build_server(adapter, provenance, panel_root)` | No guard | Takes `guard=`; without one it reads the real engine checkout | Tests that exercise writes pass `guard=code_state.CodeGuard(reader=lambda: code_state.git_state(<sha>, "main"))` |
 
-**Check your own adapter against the contract** (read-only, safe against a live graph): `python -m xscholar.mcp.conformance --query "<words a unit contains>" --claim <an id>`, with your launch environment set. It names every missing, empty or mistyped field and every wrong status. `--write --scratch NS/DB` adds the write methods, only against the database named. Measured on the engine's own generic adapter over the demo: it FAILS the contract docstring on `unit_search` (no `method`), `unit_get` (returns one unit, not `{locator, units}`), `eliminated_claims` (`claims`, not `eliminated_claims`; no `about` / `failed_approaches`) and `claim_explain` (`blocking_now`, not `blocking`; no `support` / `adverse` / `critiques` / `ready`; kind `fact`). Not changed in this release: it is recorded in `docs/DECISIONS.md` as open.
+**Check your own adapter against the contract** (read-only, safe against a live graph): `python -m groundworks.mcp.conformance --query "<words a unit contains>" --claim <an id>`, with your launch environment set. It names every missing, empty or mistyped field and every wrong status. `--write --scratch NS/DB` adds the write methods, only against the database named. Measured on the engine's own generic adapter over the demo: it FAILS the contract docstring on `unit_search` (no `method`), `unit_get` (returns one unit, not `{locator, units}`), `eliminated_claims` (`claims`, not `eliminated_claims`; no `about` / `failed_approaches`) and `claim_explain` (`blocking_now`, not `blocking`; no `support` / `adverse` / `critiques` / `ready`; kind `fact`). Not changed in this release: it is recorded in `docs/DECISIONS.md` as open.
 
 ---
 
@@ -387,7 +387,7 @@ Measured on SurrealDB 3.1.6; `notes/2026-09-16_gates_lane_enforced_edges_and_dom
   then `ALTER TABLE`, so PERMISSIONS and CHANGEFEED survive (before: 14 of 20 demo tables reset to PERMISSIONS NONE, 5
   changefeeds dropped). Step 3's "re-apply the changefeed after every schema re-apply" is no longer needed for that
   reason, and harmless. The flip side: a schema re-apply no longer resets a hand-widened PERMISSIONS clause; re-apply
-  access for that, and run `python -m xscholar.live_schema`.
+  access for that, and run `python -m groundworks.live_schema`.
 - **Your config may refuse to load:** a gate rule whose field has no enumerated domain (no vocabulary list, no
   `one_of`, not a bool), a gate `value` outside the field's values, or a clause `where` term (`field = literal`,
   `field IN [...]`) on such a field or with a value outside its list. Each is named. Give the field `one_of`. A
@@ -428,7 +428,7 @@ reason. That still takes a reader.
 
 ## 7p. The agreement report lists every unit to adjudicate
 
-`python -m xscholar.pipeline.agreement` capped its adjudication list: the relevance splits plus the first 20 other
+`python -m groundworks.pipeline.agreement` capped its adjudication list: the relevance splits plus the first 20 other
 units, and a tier split that did not cross tier 2 (3 vs 2, 1 vs 0) was never listed. Measured on another instance:
 90 double-labelled units, 51 needing a human, printed "27 unit(s) to adjudicate".
 
@@ -455,7 +455,7 @@ the list you worked from. The raw `disagreements` list was always complete.
 ## Verifying the upgrade landed
 
 ```
-python -m xscholar.cli test --require-db        # 424 ran, 0 skipped, four checks passed
+python -m groundworks.cli test --require-db        # 424 ran, 0 skipped, four checks passed
 python scripts/run_instance.py <your instance> --memory <a free port>
 ```
 

@@ -6,7 +6,7 @@ The only real instance on the engine uses the MCP server and config validation, 
 
 A WIP branch was checked out in the engine checkout a live server launches from. The server served it, writes included, and kept it after the checkout was switched back: a Python process keeps what it imported at startup and imports the rest from whatever is on disk when first needed.
 
-Fix: `xscholar/mcp/code_state.py`; decisions in docs/DECISIONS.md. Measured cost of one state read (`git rev-parse` plus `git status --porcelain -z --untracked-files=all`) on this Windows 11 machine, in this repository: 71-88 ms, averaged over 20 reads. Unthrottled: writes are agent-paced.
+Fix: `groundworks/mcp/code_state.py`; decisions in docs/DECISIONS.md. Measured cost of one state read (`git rev-parse` plus `git status --porcelain -z --untracked-files=all`) on this Windows 11 machine, in this repository: 71-88 ms, averaged over 20 reads. Unthrottled: writes are agent-paced.
 
 Two edges found while writing the reader: a path with a space broke a whitespace split of the `rev-parse` output (it splits lines now); and an engine installed inside another repository (a virtualenv in a project) would have borrowed that repository's commit, so git's top level must be the engine directory or the state is UNKNOWN.
 
@@ -16,7 +16,7 @@ Two edges found while writing the reader: a path with a space broke a whitespace
 
 ## 3. No way to check a real adapter against the contract
 
-`python -m xscholar.mcp.conformance`. Run over the engine's own generic adapter on the demo data: 7 read checks pass, **6 fail**, in four of the five read methods (listed in DECISIONS, Open). The contract docstring and the engine's generic adapter disagree; which one is right is the owner's call.
+`python -m groundworks.mcp.conformance`. Run over the engine's own generic adapter on the demo data: 7 read checks pass, **6 fail**, in four of the five read methods (listed in DECISIONS, Open). The contract docstring and the engine's generic adapter disagree; which one is right is the owner's call.
 
 ## 4. "NOT_EXECUTED, never 0" had never been seen to fire through the tool
 

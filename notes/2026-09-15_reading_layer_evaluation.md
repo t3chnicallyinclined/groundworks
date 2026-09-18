@@ -1,6 +1,6 @@
 # 2026-09-15: reading layer v1.0, measured on a real instance
 
-Generic; no matter content. Module: `xscholar/present`. Roadmap C17.
+Generic; no matter content. Module: `groundworks/present`. Roadmap C17.
 
 ## What was tested
 Three real documents from the first instance (163, 226 and 234 rows; 139 to 185 KB in full mode). Five seeded errors per document, one of each type, planted 3 in rows that render as **established** and 2 in rows that render as **needs check**. Two renderings per document: `full` (the plain baseline) and `speedread` (check-first ordering, bold on numbers, locators, negations, statuses and verdicts). Six reviewer agents, one per document per rendering, each with a budget of 8 source lookups.

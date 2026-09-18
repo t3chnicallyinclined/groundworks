@@ -23,14 +23,14 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import config  # noqa: E402
-from xscholar import consistency  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import surreal_bin  # noqa: E402
-from xscholar import temporal  # noqa: E402
-from xscholar.pipeline import loader  # noqa: E402
-from xscholar.pipeline import write  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import consistency  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
+from groundworks import temporal  # noqa: E402
+from groundworks.pipeline import loader  # noqa: E402
+from groundworks.pipeline import write  # noqa: E402
 
 PORT = surreal_bin.free_port()   # OS-assigned (was 8030): suites no longer share a registry of fixed ports
 ROOT = pathlib.Path(__file__).resolve().parent.parent

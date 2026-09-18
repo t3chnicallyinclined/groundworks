@@ -4,7 +4,7 @@
 
 ## Verdict
 
-Nothing found blocks selling XScholar to law firms. There are conditions, and a few fixes are owed.
+Nothing found blocks selling Groundworks to law firms. There are conditions, and a few fixes are owed.
 
 | | Status |
 |---|---|

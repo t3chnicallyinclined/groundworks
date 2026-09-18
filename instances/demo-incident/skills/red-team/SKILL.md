@@ -2,8 +2,8 @@
 name: red-team
 description: Attack a conclusion, claim or draft section in the demo_incident instance the way each seated lens would, keeping only the heads of attack that survive a one-sentence reply, and record each survivor as a lens-keyed critique. Use before a conclusion is relied on, before it is written up, and after any new evidence lands. Triggers on "red team this", "attack this", "what survives reply", "stress-test this point", "what will the other side say".
 ---
-<!-- GENERATED from demo_incident by xscholar.skills; edit the config, not this file -->
-<!-- content-sha256: 8f57bf24f1fb57ba38c6d362159a89a6141f1c404c2a4d67d0fbe91666d2c315 -->
+<!-- GENERATED from demo_incident by groundworks.skills; edit the config, not this file -->
+<!-- content-sha256: 2168dd49c70c6e4ce5aa6b2f74a48b31e5d787fb99ce3400f778aa33223dda7c -->
 
 # Red team a conclusion in demo_incident
 
@@ -55,7 +55,7 @@ Every lens defined in this instance, including the ones this role does not seat:
 
 ## The panel
 
-The protocol is `xscholar/panel/PROTOCOL.md`; the program decides whether it was followed, not you.
+The protocol is `groundworks/panel/PROTOCOL.md`; the program decides whether it was followed, not you.
 
 - **Options** (the only stances a `STANCE:` line may take, plus `abstain`): `survives`, `damaged`, `fatal`
 - **Objection categories** (the only categories an `OBJECTION:` line may use): `evidence`, `timeline`, `alternative_cause`, `blast_radius`, `prevention`, `monitoring`
@@ -64,10 +64,10 @@ The protocol is `xscholar/panel/PROTOCOL.md`; the program decides whether it was
 Run the panel from the instance's private data area, never inside the engine repository:
 
 ```
-python xscholar/panel/panel.py lock      runs/<panel_id> --settings <instance dir>/panel_settings.json
-python xscholar/panel/panel.py anonymize runs/<panel_id>
-python xscholar/panel/panel.py check     runs/<panel_id>
-python xscholar/panel/panel.py tally     runs/<panel_id>
+python groundworks/panel/panel.py lock      runs/<panel_id> --settings <instance dir>/panel_settings.json
+python groundworks/panel/panel.py anonymize runs/<panel_id>
+python groundworks/panel/panel.py check     runs/<panel_id>
+python groundworks/panel/panel.py tally     runs/<panel_id>
 ```
 
 - `lock` -- freeze panel.json and copy in the owner's thresholds; refuses once any answer exists
@@ -126,7 +126,7 @@ Every result carries a `status`. An empty list with status `ok` is a real answer
 
 ## Privacy
 
-- The deny list is `~/.xscholar/denylist.txt`, outside this repository because it would itself leak identifiers. Run `python scripts/privacy_scan.py` before anything is committed or sent.
+- The deny list is `~/.groundworks/denylist.txt`, outside this repository because it would itself leak identifiers. Run `python scripts/privacy_scan.py` before anything is committed or sent.
 - Model providers allowed for this instance: `the model provider the owner approved`. Sending this instance's text to any other provider is a breach, not an optimisation.
 - Off limits for this instance (`instance.off_limits`): `customer personal data`, `speculation about individuals`. Do not record it, quote it or reason from it, even where the record contains it.
 - `privacy` is human-owned. Nothing generated here may relax it.

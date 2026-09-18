@@ -1,6 +1,6 @@
 # 2026-09-15: a green probe report does not mean a strong gate
 
-Generic; no matter content. Module: `xscholar/gates.py`. Found by a second session using the engine, not by the suite.
+Generic; no matter content. Module: `groundworks/gates.py`. Found by a second session using the engine, not by the suite.
 
 ## What was measured
 

@@ -6,7 +6,7 @@ Synthetic incident-postmortem instance (`instances/demo-incident`), 66 units in 
 - 66 of 66 units labelled exactly once; every tier-2+ quote found word for word. Both agents passed on the **first** validator run.
 - The engine then built the graph from the agents' labels with the same runner (`--labels`), gates probed both ways, walkthrough refused and accepted as before.
 
-## Agreement: agents vs the rule-based stub (`xscholar labels agreement`)
+## Agreement: agents vs the rule-based stub (`groundworks labels agreement`)
 
 | Slice (n) | tier exact | tier within one | tier kappa | dir exact | dir kappa | issues Jaccard | targets Jaccard | role |
 |---|---|---|---|---|---|---|---|---|

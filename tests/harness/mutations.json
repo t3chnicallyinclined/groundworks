@@ -7,7 +7,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B1 (scratch breaks.py)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "            if str(field) not in known:",
    "replacement": "            if False and str(field) not in known:",
    "must_fail": [
@@ -21,7 +21,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B2 (scratch breaks.py)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "\"authority\": {\"citation\": \"string\", \"verified\": \"bool\", \"source_grade\": \"string\"},",
    "replacement": "\"authority\": {\"citation\": \"string\", \"verified\": \"bool\"},",
    "must_fail": [
@@ -35,7 +35,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B3 (scratch breaks.py)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "HUMAN_OWNED_IF_PRESENT = [\"verdicts\", \"unique\", \"assertions\", \"promotion_log\"]",
    "replacement": "HUMAN_OWNED_IF_PRESENT = [\"verdicts\", \"assertions\", \"promotion_log\"]",
    "must_fail": [
@@ -50,7 +50,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B4 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            if field not in now_fields:",
    "replacement": "            if False:",
    "must_fail": [
@@ -64,7 +64,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B5 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        for key, was in old_unique.items():",
    "replacement": "        for key, was in {}.items():",
    "must_fail": [
@@ -78,7 +78,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B6 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    fields = _row_template(table, inst, unit_id=unit_id)\n    fields.update(_unique_overrides(table, row_id, inst))",
    "replacement": "    fields = _row_template(table, inst, unit_id=unit_id)",
    "must_fail": [
@@ -92,7 +92,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B7 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    lines.extend(unique_surql(inst))\n",
    "replacement": "",
    "must_fail": [
@@ -106,7 +106,7 @@
    "defect": "V2-20",
    "commit": "dff134c",
    "source": "dff134c B8 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                result[\"duplicate_reject\"] = (not ok) and (\"`%s`\" % plan[\"index\"] in message) and absent",
    "replacement": "                result[\"duplicate_reject\"] = True",
    "must_fail": [
@@ -120,7 +120,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B9 (scratch breaks.py)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "                _validate_independent(data, rule, problems)",
    "replacement": "                pass",
    "must_fail": [
@@ -134,7 +134,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B10 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    lines.extend(independence_surql(inst))\n",
    "replacement": "",
    "must_fail": [
@@ -149,7 +149,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B11 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            continue          # an independence-only rule has no clause to assert; its event is below",
    "replacement": "            pass",
    "must_fail": [
@@ -163,7 +163,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B12 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "edits": [
     {
      "anchor": "    if probe.get(\"independent\"):\n        # Both refusals",
@@ -189,7 +189,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B13 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        if was.get(\"independent\") is True and now.get(\"independent\") is not True:",
    "replacement": "        if False:",
    "must_fail": [
@@ -203,7 +203,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B14 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        if role is None:\n            return None, None, (\"%s would have to be promoted past rule %s",
    "replacement": "        if False:\n            return None, None, (\"%s would have to be promoted past rule %s",
    "must_fail": [
@@ -218,7 +218,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B15 (scratch breaks.py)",
-   "file": "xscholar/skills.py",
+   "file": "groundworks/skills.py",
    "anchor": "        mode = config.independence_of(rule)\n        if mode:\n            parts.append(\"the change is made",
    "replacement": "        mode = config.independence_of(rule)\n        if False:\n            parts.append(\"the change is made",
    "must_fail": [
@@ -233,7 +233,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B16 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "OR $auth IN ($before.%s ?? []) { \"",
    "replacement": "OR ('%s' = '' AND false) { \"",
    "must_fail": [
@@ -247,7 +247,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B17 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "\"DEFINE FIELD OVERWRITE %s ON %s TYPE array<record> VALUE array::union($before ?? [], \"\n                     \"IF $auth = NONE { [] } ELSE { [$auth] });\"",
    "replacement": "\"DEFINE FIELD OVERWRITE %s ON %s TYPE array<record> DEFAULT [] \"\n                     \"ASSERT true;\"",
    "must_fail": [
@@ -261,7 +261,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B18 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "OR array::len($before.%s ?? []) = 0 OR ",
    "replacement": "OR ('%s' = '' AND false) OR ",
    "must_fail": [
@@ -275,7 +275,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B19 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                writer, promoter = identities[\"proposer\"], identities[\"promoter\"]",
    "replacement": "                writer, promoter = identities[\"proposer\"], db",
    "must_fail": [
@@ -289,7 +289,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B20 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                        entry[flag] = not ok and independence_rule_in(message) == rule_id",
    "replacement": "                        entry[flag] = True",
    "must_fail": [
@@ -303,7 +303,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B21 (scratch breaks.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "edits": [
     {
      "anchor": "            if identities is None:\n                entry[\"missing_independence_probe\"] = (",
@@ -325,7 +325,7 @@
    "defect": "D17",
    "commit": "dff134c",
    "source": "dff134c B22 (scratch breaks.py)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "        _raise_if_not_independent(message, rid(\"fact\", slug))\n",
    "replacement": "",
    "must_fail": [
@@ -339,7 +339,7 @@
    "defect": "D14",
    "commit": "fa0c668",
    "source": "fa0c668 (scratch red_staged.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    if not gating:\n        return [_create(row, table, inst, assignments, unit_id=ids[\"ok\"])], [], None",
    "replacement": "    if True:\n        return [_create(row, table, inst, assignments, unit_id=ids[\"ok\"])], [], None",
    "must_fail": [
@@ -353,7 +353,7 @@
    "defect": "D14",
    "commit": "fa0c668",
    "source": "fa0c668 (scratch red_staged.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    statements = [_create(row, table, inst, assignments, unit_id=ids[\"ok\"])]\n    removals = []",
    "replacement": "    statements = [_create(row, table, inst, assignments, unit_id=ids[\"ok\"]), \"UPDATE %s SET %s;\" % (row, \", \".join(\"%s = %s\" % kv for kv in promote.items()))]\n    removals = []",
    "must_fail": [
@@ -367,7 +367,7 @@
    "defect": "D14",
    "commit": "fa0c668",
    "source": "fa0c668 (scratch red_staged.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        stem = prefix or \"zz_probe_%s\" % rule[\"id\"]",
    "replacement": "        stem = \"zz_nested_%s\" % rule[\"id\"] if prefix else \"zz_probe_%s\" % rule[\"id\"]",
    "must_fail": [
@@ -381,7 +381,7 @@
    "defect": "D14",
    "commit": "fa0c668",
    "source": "fa0c668 (scratch red_staged.py)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "MAX_EVIDENCE_CHAIN = 4 ",
    "replacement": "MAX_EVIDENCE_CHAIN = 10**9 ",
    "must_fail": [
@@ -395,7 +395,7 @@
    "defect": "D15",
    "commit": "7733fd5",
    "source": "7733fd5 (scratch red_verdict.py)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "edge_ids.edge_id(\"critique\", \"head\", conclusion, head)[-8:]",
    "replacement": "self.keyer(\"write\", \"critique\", conclusion, head)[-8:]",
    "must_fail": [
@@ -409,7 +409,7 @@
    "defect": "D15",
    "commit": "7733fd5",
    "source": "7733fd5 (scratch red_verdict.py)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "self.db.sql(\"UPSERT %s SET lens=%s, head=%s, verdict=%s, text=%s, author=%s, \"\n                    \"answered = IF answered != NONE { answered } ELSE { false }\"",
    "replacement": "self.db.sql(\"CREATE %s SET lens=%s, head=%s, verdict=%s, text=%s, author=%s, \"\n                    \"answered = false\"",
    "must_fail": [
@@ -423,7 +423,7 @@
    "defect": "D15",
    "commit": "7733fd5",
    "source": "7733fd5 (scratch red_verdict.py)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "\"answered = IF answered != NONE { answered } ELSE { false }\"",
    "replacement": "\"answered = false\"",
    "must_fail": [
@@ -437,7 +437,7 @@
    "defect": "D15",
    "commit": "7733fd5",
    "source": "7733fd5 (scratch red_verdict.py)",
-   "file": "xscholar/temporal.py",
+   "file": "groundworks/temporal.py",
    "anchor": "    \"critique\": {\"field\": \"verdict\", \"history\": \"verdict_history\", \"before\": \"verdict_before\",",
    "replacement": "    \"_critique_disabled\": {\"field\": \"verdict\", \"history\": \"verdict_history\", \"before\": \"verdict_before\",",
    "must_fail": [
@@ -522,8 +522,8 @@
    "commit": "6c54f25",
    "source": "6c54f25 (scratch redproof.py)",
    "file": ".github/workflows/ci.yml",
-   "anchor": "python -m xscholar.cli test --require-db",
-   "replacement": "python -m xscholar.cli test",
+   "anchor": "python -m groundworks.cli test --require-db",
+   "replacement": "python -m groundworks.cli test",
    "must_fail": [
     "tests.test_run_verdict.CiTests.test_a_skipped_suite_fails_the_build"
    ],
@@ -531,11 +531,11 @@
   },
   {
    "id": "M037",
-   "guard": "xscholar test runs the privacy scan",
+   "guard": "groundworks test runs the privacy scan",
    "defect": "D7",
    "commit": "6c54f25",
    "source": "6c54f25 (scratch redproof.py)",
-   "file": "xscholar/cli.py",
+   "file": "groundworks/cli.py",
    "anchor": "str(ROOT / \"scripts\" / \"privacy_scan.py\")",
    "replacement": "str(ROOT / \"scripts\" / \"license_check.py\")",
    "must_fail": [
@@ -549,7 +549,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if reason is None:                        # nobody corrected it: the source decides",
    "replacement": "        if True:                        # nobody corrected it: the source decides",
    "must_fail": [
@@ -563,7 +563,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if current != incoming:\n            plan[\"conflict\"].append(row)",
    "replacement": "        if False:\n            plan[\"conflict\"].append(row)",
    "must_fail": [
@@ -577,7 +577,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if reason is None:                        # nobody corrected it: the source decides",
    "replacement": "        if False:                        # nobody corrected it: the source decides",
    "must_fail": [
@@ -591,7 +591,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if (uid, field) in accept:",
    "replacement": "        if False:",
    "must_fail": [
@@ -605,7 +605,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if (uid, field) in accept:",
    "replacement": "        if True:",
    "must_fail": [
@@ -619,7 +619,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "HELD_FIELDS = (\"status\", \"grade\")",
    "replacement": "HELD_FIELDS = (\"status\",)",
    "must_fail": [
@@ -633,7 +633,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "\"UPDATE %s SET %s WHERE %s\" % (rid(\"unit\", unit[\"id\"]), \", \".join(sets), guard)",
    "replacement": "\"UPDATE %s SET %s\" % (rid(\"unit\", unit[\"id\"]), \", \".join(sets))",
    "must_fail": [
@@ -647,7 +647,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "    if unused:\n        raise LoadError(",
    "replacement": "    if False:\n        raise LoadError(",
    "must_fail": [
@@ -661,7 +661,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "            reason, by = ((\"no_provenance\", \"UNKNOWN: row predates load provenance\")\n                          if current != incoming else (None, None))",
    "replacement": "            reason, by = (None, None)",
    "must_fail": [
@@ -675,7 +675,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/temporal.py",
+   "file": "groundworks/temporal.py",
    "anchor": ", \"by\": _UNIT_BY.format(f=_field)}",
    "replacement": "}",
    "must_fail": [
@@ -689,7 +689,7 @@
    "defect": "V2-19",
    "commit": "a330b34",
    "source": "a330b34 (message; scratch breaks_out.txt)",
-   "file": "xscholar/consistency.py",
+   "file": "groundworks/consistency.py",
    "anchor": "\"NOT \" if negate else \"\"",
    "replacement": "\"\"",
    "must_fail": [
@@ -703,7 +703,7 @@
    "defect": "D4",
    "commit": "34960cf",
    "source": "34960cf (message)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "    if not label_files:\n        counts[\"sweep\"] = (",
    "replacement": "    if False:\n        counts[\"sweep\"] = (",
    "must_fail": [
@@ -717,7 +717,7 @@
    "defect": "D4",
    "commit": "34960cf",
    "source": "34960cf (message)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if not labels_root.is_dir():",
    "replacement": "        if False:",
    "must_fail": [
@@ -731,7 +731,7 @@
    "defect": "D2",
    "commit": "8a73fa4",
    "source": "8a73fa4 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        for part in (\"table\", \"field\", \"value\"):",
    "replacement": "        for part in ():",
    "must_fail": [
@@ -746,7 +746,7 @@
    "defect": "D2",
    "commit": "8a73fa4",
    "source": "8a73fa4 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    if not old_rules:\n        # A baseline that pins nothing",
    "replacement": "    if False:\n        # A baseline that pins nothing",
    "must_fail": [
@@ -760,7 +760,7 @@
    "defect": "D2",
    "commit": "8a73fa4",
    "source": "8a73fa4 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            unmatched.remove(best)",
    "replacement": "            pass",
    "must_fail": [
@@ -774,7 +774,7 @@
    "defect": "D2",
    "commit": "8a73fa4",
    "source": "8a73fa4 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            if rule_id in new_rules and rule_id not in now_entries:",
    "replacement": "            if False:",
    "must_fail": [
@@ -788,7 +788,7 @@
    "defect": "D2",
    "commit": "8a73fa4",
    "source": "8a73fa4 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    if same_file:\n",
    "replacement": "    if False:\n",
    "must_fail": [
@@ -802,7 +802,7 @@
    "defect": "D3",
    "commit": "8a73fa4",
    "source": "8a73fa4 (message)",
-   "file": "xscholar/surreal_bin.py",
+   "file": "groundworks/surreal_bin.py",
    "anchor": "        time.sleep(SETTLE)\n        if proc.poll() is not None:",
    "replacement": "        time.sleep(SETTLE)\n        if False:",
    "must_fail": [
@@ -817,7 +817,7 @@
    "defect": "D1",
    "commit": "d636282",
    "source": "d636282 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    if probe[\"constrained\"] and (entry[\"wrong_evidence_reject\"] is None or failed_to_fail):",
    "replacement": "    if False:",
    "must_fail": [
@@ -831,7 +831,7 @@
    "defect": "D1",
    "commit": "d636282",
    "source": "d636282 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        if now is None:\n            failures.append(\"rule %s is in the baseline and gone from the config\" % rule_id)\n            continue",
    "replacement": "        if now is None:\n            continue",
    "must_fail": [
@@ -845,7 +845,7 @@
    "defect": "D1",
    "commit": "d636282",
    "source": "d636282 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            if best[\"min\"] < clause[\"min\"]:",
    "replacement": "            if False:",
    "must_fail": [
@@ -859,7 +859,7 @@
    "defect": "D1",
    "commit": "d636282",
    "source": "d636282 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                if was.get(flag) is True and entry.get(flag) is not True:",
    "replacement": "                if False:",
    "must_fail": [
@@ -873,7 +873,7 @@
    "defect": "D11",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/pipeline/agreement.py",
+   "file": "groundworks/pipeline/agreement.py",
    "anchor": "    if expected >= 1.0:\n        return None",
    "replacement": "    if expected >= 1.0:\n        return 1.0",
    "must_fail": [
@@ -887,7 +887,7 @@
    "defect": "D13",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/pipeline/validator.py",
+   "file": "groundworks/pipeline/validator.py",
    "anchor": "    if not units:\n        # intake.py already refuses",
    "replacement": "    if False:\n        # intake.py already refuses",
    "must_fail": [
@@ -901,7 +901,7 @@
    "defect": "D13",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/present/plant.py",
+   "file": "groundworks/present/plant.py",
    "anchor": "    if not list(types):",
    "replacement": "    if False:",
    "must_fail": [
@@ -915,7 +915,7 @@
    "defect": "D10",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/present/metrics.py",
+   "file": "groundworks/present/metrics.py",
    "anchor": "        result[\"pct\"] = None\n        result[\"ok\"] = False",
    "replacement": "        result[\"pct\"] = 100.0\n        result[\"ok\"] = True",
    "must_fail": [
@@ -929,7 +929,7 @@
    "defect": "D10",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/present/metrics.py",
+   "file": "groundworks/present/metrics.py",
    "anchor": "        if two_layer:\n            result[\"ok\"] = False",
    "replacement": "        if False:\n            result[\"ok\"] = False",
    "must_fail": [
@@ -943,7 +943,7 @@
    "defect": "D12",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/queue.py",
+   "file": "groundworks/queue.py",
    "anchor": "        counts[\"changefeeds_missing\"] = self.missing_changefeeds()",
    "replacement": "        counts[\"changefeeds_missing\"] = []",
    "must_fail": [
@@ -957,7 +957,7 @@
    "defect": "D12",
    "commit": "277eded",
    "source": "277eded (message)",
-   "file": "xscholar/queue.py",
+   "file": "groundworks/queue.py",
    "anchor": "(counts[\"tables_replayed\"] if self.replay_from_start else counts[\"tables_fresh\"]).append(table)",
    "replacement": "(counts[\"tables_replayed\"] if self.replay_from_start else counts[\"tables_resumed\"]).append(table)",
    "must_fail": [
@@ -971,7 +971,7 @@
    "defect": "V2-13",
    "commit": "89f7b78",
    "source": "89f7b78 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        if len(built) < len(entry[\"forbids\"]):",
    "replacement": "        if False:",
    "must_fail": [
@@ -985,7 +985,7 @@
    "defect": "V2-13",
    "commit": "89f7b78",
    "source": "89f7b78 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "r.get(\"evidence_present\") and r.get(\"reject\") and r.get(\"cleared\") and r.get(\"restored_accept\")",
    "replacement": "r.get(\"reject\")",
    "must_fail": [
@@ -999,7 +999,7 @@
    "defect": "V2-13",
    "commit": "89f7b78",
    "source": "89f7b78 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            forbidden.append(_forbidden_plan(rule, index, clause, inst, ids))",
    "replacement": "            pass",
    "must_fail": [
@@ -1013,7 +1013,7 @@
    "defect": "D9",
    "commit": "b52ea90",
    "source": "b52ea90 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    if unbuilt or unmatched:",
    "replacement": "    if False:",
    "must_fail": [
@@ -1028,7 +1028,7 @@
    "defect": "D9",
    "commit": "b52ea90",
    "source": "b52ea90 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                   and not entry.get(\"setup_error\"))",
    "replacement": "                   )",
    "must_fail": [
@@ -1042,7 +1042,7 @@
    "defect": "D9",
    "commit": "b52ea90",
    "source": "b52ea90 (message)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    failed_to_fail = [r for r in wrong if r.get(\"really_fails\") is not True]",
    "replacement": "    failed_to_fail = []",
    "must_fail": [
@@ -1056,7 +1056,7 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "    inst = Instance(validate(data), source=path)\n    refuse_unusable_regression_file(inst)",
    "replacement": "    inst = Instance(validate(data), source=path)\n    pass",
    "must_fail": [
@@ -1071,7 +1071,7 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "        base_dir = pathlib.Path(inst.source).resolve().parent",
    "replacement": "        base_dir = pathlib.Path.cwd()",
    "must_fail": [
@@ -1085,7 +1085,7 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "        if not inst.source:\n            raise ConfigError(\"instance %s was loaded from a mapping",
    "replacement": "        if False:\n            raise ConfigError(\"instance %s was loaded from a mapping",
    "must_fail": [
@@ -1099,7 +1099,7 @@
    "defect": "rule 4",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "        if steps and (\"accepted\" not in expects or not expects & {\"refused\", \"denied\"}):",
    "replacement": "        if False:",
    "must_fail": [
@@ -1113,7 +1113,7 @@
    "defect": "D10",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "        if not any(n and n.startswith(\"expect\") for n in names):",
    "replacement": "        if False:",
    "must_fail": [
@@ -1127,7 +1127,7 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "        if entry.get(\"id\") in seen:",
    "replacement": "        if False:",
    "must_fail": [
@@ -1141,7 +1141,7 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "        if got != step[\"expect\"]:",
    "replacement": "        if False:",
    "must_fail": [
@@ -1155,7 +1155,7 @@
    "defect": "D15",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "            got, detail = \"error:%s\" % type(exc).__name__, str(exc)",
    "replacement": "            got, detail = \"refused\", str(exc)",
    "must_fail": [
@@ -1169,7 +1169,7 @@
    "defect": "D5",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "verdict, reason, log = NOT_EXECUTED, \"this check needs a database and none was given\", []",
    "replacement": "verdict, reason, log = CAUGHT, \"this check needs a database and none was given\", []",
    "must_fail": [
@@ -1183,7 +1183,7 @@
    "defect": "D13",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "    if not results:\n        return 2\n    if any(",
    "replacement": "    if not results:\n        return 0\n    if any(",
    "must_fail": [
@@ -1197,7 +1197,7 @@
    "defect": "METHOD s.15",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "    if sha256(path) != digest:",
    "replacement": "    if False:",
    "must_fail": [
@@ -1211,7 +1211,7 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "    if missing:\n        return REGRESSED, \"the planted error(s)",
    "replacement": "    if False:\n        return REGRESSED, \"the planted error(s)",
    "must_fail": [
@@ -1221,12 +1221,12 @@
   },
   {
    "id": "M086",
-   "guard": "xscholar test runs the evaluator",
+   "guard": "groundworks test runs the evaluator",
    "defect": "D22",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/cli.py",
-   "anchor": "rc_eval, out_eval = _stream([sys.executable, \"-m\", \"xscholar.evaluator\", DEMO_DIR, \"--memory\", port])",
+   "file": "groundworks/cli.py",
+   "anchor": "rc_eval, out_eval = _stream([sys.executable, \"-m\", \"groundworks.evaluator\", DEMO_DIR, \"--memory\", port])",
    "replacement": "rc_eval, out_eval = 0, \"EVALUATOR skipped\"",
    "must_fail": [
     "tests.test_evaluator.TestCommandWiringTests.test_the_evaluator_and_the_mutation_lint_are_run"
@@ -1239,7 +1239,7 @@
    "defect": "D5",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/cli.py",
+   "file": "groundworks/cli.py",
    "anchor": "        steps.append((\"evaluator\", False if strict_db else None,",
    "replacement": "        steps.append((\"evaluator\", None,",
    "must_fail": [
@@ -1249,11 +1249,11 @@
   },
   {
    "id": "M088",
-   "guard": "xscholar test runs the mutation lint",
+   "guard": "groundworks test runs the mutation lint",
    "defect": "D19",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/cli.py",
+   "file": "groundworks/cli.py",
    "anchor": "rc_lint, out_lint = _stream([sys.executable, \"-m\", \"tests.harness.mutate\", \"lint\", \"--from\", \"worktree\"])",
    "replacement": "rc_lint, out_lint = 0, \"skipped\"",
    "must_fail": [
@@ -1537,7 +1537,7 @@
    "defect": "D11",
    "commit": "277eded",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/pipeline/agreement.py",
+   "file": "groundworks/pipeline/agreement.py",
    "anchor": "    if expected >= 1.0:\n        return None",
    "replacement": "    if expected >= 1.0:\n        return 1.0",
    "must_fail": [
@@ -1551,7 +1551,7 @@
    "defect": "D16",
    "commit": "a330b34",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/pipeline/loader.py",
+   "file": "groundworks/pipeline/loader.py",
    "anchor": "        if reason is None:                        # nobody corrected it: the source decides",
    "replacement": "        if True:                        # nobody corrected it: the source decides",
    "must_fail": [
@@ -1565,7 +1565,7 @@
    "defect": "D2",
    "commit": "8a73fa4",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        for part in (\"table\", \"field\", \"value\"):",
    "replacement": "        for part in ():",
    "must_fail": [
@@ -1579,7 +1579,7 @@
    "defect": "coverage",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/pipeline/chunker.py",
+   "file": "groundworks/pipeline/chunker.py",
    "anchor": "        if piece and len(piece) + len(group) > size:",
    "replacement": "        if False:",
    "must_fail": [
@@ -1593,7 +1593,7 @@
    "defect": "D13",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/pipeline/validator.py",
+   "file": "groundworks/pipeline/validator.py",
    "anchor": "            elif quote not in normed[uid]:",
    "replacement": "            elif False:",
    "must_fail": [
@@ -1608,7 +1608,7 @@
    "defect": "V2-13",
    "commit": "89f7b78",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            forbidden.append(_forbidden_plan(rule, index, clause, inst, ids))",
    "replacement": "            pass",
    "must_fail": [
@@ -1622,7 +1622,7 @@
    "defect": "D9",
    "commit": "b52ea90",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        path, other = \"->%s->%s\" % (edge, dst), dst",
    "replacement": "        path, other = \"->%s->%s\" % (edge, \"unit\"), dst",
    "must_fail": [
@@ -1776,9 +1776,9 @@
    "defect": "TESTING s.3",
    "commit": "uncommitted",
    "source": "2026-09-16 harness build (proven by the runner on a worktree copy, not by hand)",
-   "file": "xscholar/evaluator.py",
-   "anchor": "from xscholar import config  # noqa: E402\n",
-   "replacement": "from xscholar import config  # noqa: E402\nimport evals.stats  # noqa: E402\n",
+   "file": "groundworks/evaluator.py",
+   "anchor": "from groundworks import config  # noqa: E402\n",
+   "replacement": "from groundworks import config  # noqa: E402\nimport evals.stats  # noqa: E402\n",
    "must_fail": [
     "tests.test_eval_harness.SeparationTests.test_the_engine_imports_neither_the_evals_nor_the_test_harness"
    ],
@@ -1790,7 +1790,7 @@
    "defect": "integration",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/skills.py",
+   "file": "groundworks/skills.py",
    "anchor": "    \"document_get\":          ((\"unit\", \"document\"), ()),\n",
    "replacement": "",
    "must_fail": [
@@ -1804,7 +1804,7 @@
    "defect": "V2-22(a)",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            enum = \" AND (%s)\" % own_assert if own_assert is not None else \"\"",
    "replacement": "            enum = \"\"",
    "must_fail": [
@@ -1819,7 +1819,7 @@
    "defect": "V2-22(f)",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "self.db.sql(\"UPSERT %s SET text=%s, author=%s\" % (rid(\"answer\", aid)",
    "replacement": "self.db.sql(\"CREATE %s SET text=%s, author=%s\" % (rid(\"answer\", aid)",
    "must_fail": [
@@ -1833,7 +1833,7 @@
    "defect": "V2-22(f)",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "eid = edge_ids.edge_id(\"write\", \"answers\", aid, critique_id)",
    "replacement": "eid = self.keyer(\"write\", \"answers\", aid, critique_id)",
    "must_fail": [
@@ -1847,7 +1847,7 @@
    "defect": "V2-22(f)",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/temporal.py",
+   "file": "groundworks/temporal.py",
    "anchor": "    \"answer\": {\"field\": \"text\", \"history\": \"text_history\", \"before\": \"text_before\", \"after\": \"text_after\",\n               \"type\": \"option<string>\", \"event\": \"answer_text_history\", \"snapshot\": False},\n",
    "replacement": "",
    "must_fail": [
@@ -1861,7 +1861,7 @@
    "defect": "integration",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "        _raise_if_not_about_evidence(self.db, self.inst, message, rid(\"fact\", slug))\n",
    "replacement": "",
    "must_fail": [
@@ -1876,7 +1876,7 @@
    "defect": "D3",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/surreal_bin.py",
+   "file": "groundworks/surreal_bin.py",
    "anchor": "    if port_in_use(port):\n        raise NotStarted(occupied(port))",
    "replacement": "    if False:\n        raise NotStarted(occupied(port))",
    "must_fail": [
@@ -1933,7 +1933,7 @@
    "defect": "integration",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "            return {\"NOT_EXECUTED\": str(exc), \"components\": components}",
    "replacement": "            return {\"missing\": 0, \"altered\": 0, \"unexpected\": 0, \"components\": components}",
    "must_fail": [
@@ -1947,7 +1947,7 @@
    "defect": "integration",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "                \"contradictions\": len(rep[\"contradictions\"]),",
    "replacement": "                \"contradictions\": 0,",
    "must_fail": [
@@ -1961,7 +1961,7 @@
    "defect": "integration",
    "commit": "uncommitted",
    "source": "2026-09-16 integration (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        conn.script(originals.enforcement_surql(inst))\n        oprobes",
    "replacement": "        oprobes",
    "must_fail": [
@@ -1986,7 +1986,7 @@
   {
    "id": "M200",
    "guard": "every MCP write tool runs the engine code guard before the adapter",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "        seen[\"found\"] = guard.check_write(tool)\n",
    "replacement": "        seen[\"found\"] = guard.assess()\n",
    "must_fail": [
@@ -2000,7 +2000,7 @@
   {
    "id": "M201",
    "guard": "a server started from a branch other than main refuses writes",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if start[\"branch\"] != self.branch:",
    "replacement": "if False:",
    "must_fail": [
@@ -2014,7 +2014,7 @@
   {
    "id": "M202",
    "guard": "a server started with uncommitted changes refuses writes",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "            if start[\"dirty\"]:\n",
    "replacement": "            if False:\n",
    "must_fail": [
@@ -2028,7 +2028,7 @@
   {
    "id": "M203",
    "guard": "a new commit after startup makes the server STALE",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if now[\"commit\"] != start[\"commit\"] or now[\"branch\"] != start[\"branch\"]:",
    "replacement": "if now[\"branch\"] != start[\"branch\"]:",
    "must_fail": [
@@ -2043,7 +2043,7 @@
   {
    "id": "M204",
    "guard": "a branch switch at the same commit makes the server STALE",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if now[\"commit\"] != start[\"commit\"] or now[\"branch\"] != start[\"branch\"]:",
    "replacement": "if now[\"commit\"] != start[\"commit\"]:",
    "must_fail": [
@@ -2058,7 +2058,7 @@
   {
    "id": "M205",
    "guard": "an engine code state that could not be read at startup is UNKNOWN, never verified",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if start[\"kind\"] != KIND_GIT:",
    "replacement": "if False:",
    "must_fail": [
@@ -2072,7 +2072,7 @@
   {
    "id": "M206",
    "guard": "uncommitted changes made after startup refuse writes",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if now[\"dirty\"] and not start[\"dirty\"]:",
    "replacement": "if False:",
    "must_fail": [
@@ -2085,8 +2085,8 @@
   },
   {
    "id": "M207",
-   "guard": "XSCHOLAR_ALLOW_UNVERIFIED=1 lets writes through",
-   "file": "xscholar/mcp/code_state.py",
+   "guard": "GROUNDWORKS_ALLOW_UNVERIFIED=1 lets writes through",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if found[\"problems\"] and not self.allow_unverified:",
    "replacement": "if found[\"problems\"]:",
    "must_fail": [
@@ -2100,7 +2100,7 @@
   {
    "id": "M208",
    "guard": "health puts the override WARNING first",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "    if engine.get(\"WARNING\"):\n        out[\"WARNING\"] = engine[\"WARNING\"]\n",
    "replacement": "",
    "must_fail": [
@@ -2114,7 +2114,7 @@
   {
    "id": "M209",
    "guard": "the override is set only by the exact value 1",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "return (env.get(ALLOW_ENV) or \"\").strip() == \"1\"",
    "replacement": "return (env.get(ALLOW_ENV) or \"\").strip().lower() in (\"1\", \"true\")",
    "must_fail": [
@@ -2128,7 +2128,7 @@
   {
    "id": "M210",
    "guard": "health carries the engine code state when the datastore is down",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "            out[\"engine_code\"] = engine\n",
    "replacement": "            pass\n",
    "must_fail": [
@@ -2142,7 +2142,7 @@
   {
    "id": "M211",
    "guard": "build_server without a guard reads the real checkout",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "guard = guard if guard is not None else code_state.CodeGuard.from_environment()",
    "replacement": "guard = guard if guard is not None else code_state.CodeGuard(reader=lambda: code_state.git_state(\"0\" * 40, \"main\"))",
    "must_fail": [
@@ -2156,7 +2156,7 @@
   {
    "id": "M212",
    "guard": "an engine inside another repository does not borrow its git history",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if not _same_path(top, root):",
    "replacement": "if False:",
    "must_fail": [
@@ -2170,7 +2170,7 @@
   {
    "id": "M213",
    "guard": "untracked files count as uncommitted only inside the package",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "if code == \"??\" and not path.startswith(PACKAGE_DIR):",
    "replacement": "if code == \"??\":",
    "must_fail": [
@@ -2184,7 +2184,7 @@
   {
    "id": "M214",
    "guard": "a staged rename's source path is not read as a second entry",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "        if code[0] in \"RC\":\n",
    "replacement": "        if False:\n",
    "must_fail": [
@@ -2198,7 +2198,7 @@
   {
    "id": "M215",
    "guard": "the guard re-reads the checkout at every write, not only at startup",
-   "file": "xscholar/mcp/code_state.py",
+   "file": "groundworks/mcp/code_state.py",
    "anchor": "now = self._reader() if now is None else now",
    "replacement": "now = self.at_start if now is None else now",
    "must_fail": [
@@ -2213,7 +2213,7 @@
   {
    "id": "M216",
    "guard": "the health summary surfaces a key named NOT_EXECUTED",
-   "file": "xscholar/mcp/health_summary.py",
+   "file": "groundworks/mcp/health_summary.py",
    "anchor": "                if NOT_EXECUTED.search(str(key)):\n",
    "replacement": "                if False:\n",
    "must_fail": [
@@ -2228,7 +2228,7 @@
   {
    "id": "M217",
    "guard": "the health summary surfaces a string saying NOT_EXECUTED",
-   "file": "xscholar/mcp/health_summary.py",
+   "file": "groundworks/mcp/health_summary.py",
    "anchor": "            if NOT_EXECUTED.search(obj):\n",
    "replacement": "            if False:\n",
    "must_fail": [
@@ -2243,7 +2243,7 @@
   {
    "id": "M218",
    "guard": "the health summary surfaces a false ok flag",
-   "file": "xscholar/mcp/health_summary.py",
+   "file": "groundworks/mcp/health_summary.py",
    "anchor": "if isinstance(value, bool) and value is False and str(key).lower() in FLAG_KEYS:",
    "replacement": "if False:",
    "must_fail": [
@@ -2258,7 +2258,7 @@
   {
    "id": "M219",
    "guard": "the health summary surfaces a non-zero drift number inside a list",
-   "file": "xscholar/mcp/health_summary.py",
+   "file": "groundworks/mcp/health_summary.py",
    "anchor": "if obj or not in_list:",
    "replacement": "if not in_list:",
    "must_fail": [
@@ -2272,7 +2272,7 @@
   {
    "id": "M220",
    "guard": "a non-zero drift number puts the summary headline at ATTENTION",
-   "file": "xscholar/mcp/health_summary.py",
+   "file": "groundworks/mcp/health_summary.py",
    "anchor": "    attention += [\"drift: %s = %s\" % (p, v) for p, v in out[\"drift\"].items() if v]\n",
    "replacement": "",
    "must_fail": [
@@ -2286,7 +2286,7 @@
   {
    "id": "M221",
    "guard": "an engine code state other than VERIFIED leads the summary",
-   "file": "xscholar/mcp/health_summary.py",
+   "file": "groundworks/mcp/health_summary.py",
    "anchor": "if engine_code is not None and engine_code.get(\"verdict\") != \"VERIFIED\":",
    "replacement": "if False:",
    "must_fail": [
@@ -2300,7 +2300,7 @@
   {
    "id": "M222",
    "guard": "health detail=false omits the detail",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "out[\"instance\"] = instance if detail else (",
    "replacement": "out[\"instance\"] = instance if True else (",
    "must_fail": [
@@ -2314,7 +2314,7 @@
   {
    "id": "M223",
    "guard": "the health summary is derived from the adapter's detail",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "out[\"summary\"] = health_summary.summarize(instance, engine)",
    "replacement": "out[\"summary\"] = health_summary.summarize({}, engine)",
    "must_fail": [
@@ -2328,7 +2328,7 @@
   {
    "id": "M224",
    "guard": "a seat's panel_status shows that seat's owed re-prompts (the seat-filter test is not vacuous)",
-   "file": "xscholar/mcp/panel_io.py",
+   "file": "groundworks/mcp/panel_io.py",
    "anchor": "            if only is None or sid == only:\n",
    "replacement": "            if only is None:\n",
    "must_fail": [
@@ -2342,7 +2342,7 @@
   {
    "id": "M225",
    "guard": "health counts carry a WHERE, so a record credential that can read a table does not read 0",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "rows = self._sql(\"SELECT count() AS n FROM %s WHERE %s GROUP ALL\" % (table, where), expect=1)[0]",
    "replacement": "rows = self._sql(\"SELECT count() AS n FROM %s GROUP ALL\" % table if where == \"true\" else \"SELECT count() AS n FROM %s WHERE %s GROUP ALL\" % (table, where), expect=1)[0]",
    "must_fail": [
@@ -2356,7 +2356,7 @@
   {
    "id": "M226",
    "guard": "a health count over a table the credential cannot read is NOT_EXECUTED, not 0",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "        if readable is False:\n            return self._blind(tables)\n",
    "replacement": "",
    "must_fail": [
@@ -2370,7 +2370,7 @@
   {
    "id": "M227",
    "guard": "a zero count under a record credential of unknown role is NOT_EXECUTED",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "if value == 0 and readable is None:",
    "replacement": "if False:",
    "must_fail": [
@@ -2384,7 +2384,7 @@
   {
    "id": "M228",
    "guard": "root is not subject to table permissions: its zero counts are real zeros",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "        if not getattr(self.db, \"access\", None):\n            return True\n",
    "replacement": "        if not getattr(self.db, \"access\", None):\n            return None\n",
    "must_fail": [
@@ -2398,7 +2398,7 @@
   {
    "id": "M229",
    "guard": "facts_by_status under a credential that cannot read fact is NOT_EXECUTED, not {}",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "            facts_by_status = self._blind((\"fact\",))\n",
    "replacement": "            facts_by_status = {}\n",
    "must_fail": [
@@ -2412,8 +2412,8 @@
   {
    "id": "M230",
    "guard": "the generic adapter takes the credential's role from the launch environment",
-   "file": "xscholar/mcp/instance_adapter.py",
-   "anchor": "role = os.environ.get(\"XSCHOLAR_ROLE\") if os.environ.get(\"XSCHOLAR_DB_ACCESS\") else None",
+   "file": "groundworks/mcp/instance_adapter.py",
+   "anchor": "role = os.environ.get(\"GROUNDWORKS_ROLE\") if os.environ.get(\"GROUNDWORKS_DB_ACCESS\") else None",
    "replacement": "role = None",
    "must_fail": [
     "tests.test_mcp_db.HealthNotExecutedTests.test_the_launch_environment_gives_the_generic_adapter_its_credential_role"
@@ -2426,7 +2426,7 @@
   {
    "id": "M231",
    "guard": "live-schema health says NOT_EXECUTED when the credential cannot read definitions",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "return {\"NOT_EXECUTED\": str(exc), \"components\": components}",
    "replacement": "return {\"missing\": 0, \"altered\": 0, \"unexpected\": 0, \"components\": components}",
    "must_fail": [
@@ -2440,7 +2440,7 @@
   {
    "id": "M232",
    "guard": "originals health counts units with a WHERE (an agent's gap does not read 0)",
-   "file": "xscholar/originals.py",
+   "file": "groundworks/originals.py",
    "anchor": "units = _count(db, \"SELECT count() AS n FROM unit WHERE true GROUP ALL\")",
    "replacement": "units = _count(db, \"SELECT count() AS n FROM unit GROUP ALL\")",
    "must_fail": [
@@ -2454,7 +2454,7 @@
   {
    "id": "M233",
    "guard": "a gate refusal from the generic adapter carries what is missing",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "return contract.GateRejected(\"%s: %s\" % (exc.rule, exc.missing), missing=[exc.missing])",
    "replacement": "return contract.GateRejected(\"%s: %s\" % (exc.rule, exc.missing), missing=[])",
    "must_fail": [
@@ -2471,7 +2471,7 @@
   {
    "id": "M234",
    "guard": "the MCP envelope passes a refusal's missing through",
-   "file": "xscholar/mcp/server.py",
+   "file": "groundworks/mcp/server.py",
    "anchor": "\"missing\": [str(m) for m in (getattr(exc, \"missing\", None) or [])]}",
    "replacement": "\"missing\": []}",
    "must_fail": [
@@ -2486,7 +2486,7 @@
   {
    "id": "M235",
    "guard": "claim_confirm explains an independence refusal as who may promote",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "        _raise_if_not_independent(message, rid(\"fact\", slug))\n",
    "replacement": "",
    "must_fail": [
@@ -2500,7 +2500,7 @@
   {
    "id": "M236",
    "guard": "claim_confirm explains originals and assertion refusals as what they are",
-   "file": "xscholar/pipeline/write.py",
+   "file": "groundworks/pipeline/write.py",
    "anchor": "        _raise_if_not_about_evidence(self.db, self.inst, message, rid(\"fact\", slug))\n",
    "replacement": "",
    "must_fail": [
@@ -2515,7 +2515,7 @@
   {
    "id": "M237",
    "guard": "claim_confirm re-hashes cited originals before the datastore is asked",
-   "file": "xscholar/mcp/instance_adapter.py",
+   "file": "groundworks/mcp/instance_adapter.py",
    "anchor": "        self._check_cited_originals(unit_ids or [])\n",
    "replacement": "",
    "must_fail": [
@@ -2529,7 +2529,7 @@
   {
    "id": "M238",
    "guard": "the conformance checker reports a missing field by name",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "            problems.append(\"%s.%s: missing\" % (where, field))\n",
    "replacement": "            pass\n",
    "must_fail": [
@@ -2543,7 +2543,7 @@
   {
    "id": "M239",
    "guard": "the conformance checker reports a wrong status by call",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "        if env.get(\"status\") != status:\n",
    "replacement": "        if False:\n",
    "must_fail": [
@@ -2557,7 +2557,7 @@
   {
    "id": "M240",
    "guard": "the conformance checker calls no write method without --write",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "        if self.write:\n            self.run_writes()\n",
    "replacement": "        if True:\n            self.run_writes()\n",
    "must_fail": [
@@ -2572,7 +2572,7 @@
   {
    "id": "M241",
    "guard": "--write runs only against the database --scratch names exactly",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "if not scratch or target is None or scratch != target:",
    "replacement": "if not scratch:",
    "must_fail": [
@@ -2586,7 +2586,7 @@
   {
    "id": "M242",
    "guard": "the conformance checker reports an empty required field",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "elif nonempty and (got is None",
    "replacement": "elif False and (got is None",
    "must_fail": [
@@ -2600,7 +2600,7 @@
   {
    "id": "M243",
    "guard": "the conformance checker reports a wrong type",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "ok = isinstance(got, types) and not (isinstance(got, bool) and bool not in types)",
    "replacement": "ok = True",
    "must_fail": [
@@ -2614,7 +2614,7 @@
   {
    "id": "M244",
    "guard": "the conformance checker judges results through the server's real envelope",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "return server.call(method, lambda: fn(*args))",
    "replacement": "return {\"status\": contract.STATUS_OK, \"tool\": method, \"data\": fn(*args)}",
    "must_fail": [
@@ -2628,7 +2628,7 @@
   {
    "id": "M245",
    "guard": "the conformance checker reports a count that disagrees with its list",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "search_problems = lambda d: ([] if d.get(\"count\") == len(d.get(\"units\") or []) else",
    "replacement": "search_problems = lambda d: ([] if True else",
    "must_fail": [
@@ -2642,7 +2642,7 @@
   {
    "id": "M246",
    "guard": "a read check the conformance checker could not run makes the run NOT_EXECUTED",
-   "file": "xscholar/mcp/conformance.py",
+   "file": "groundworks/mcp/conformance.py",
    "anchor": "\"verdict\": FAIL if counts[FAIL] else NOT_EXECUTED if reads_unexecuted else",
    "replacement": "\"verdict\": FAIL if counts[FAIL] else",
    "must_fail": [
@@ -2659,7 +2659,7 @@
    "defect": "B-011",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    shape = \"TYPE RELATION IN %s OUT %s ENFORCED SCHEMALESS\" % (src, dst)",
    "replacement": "    shape = \"TYPE RELATION IN %s OUT %s SCHEMALESS\" % (src, dst)",
    "must_fail": [
@@ -2674,7 +2674,7 @@
    "defect": "B-011",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        if n:\n            out[edge] = n",
    "replacement": "        if False:\n            out[edge] = n",
    "must_fail": [
@@ -2688,7 +2688,7 @@
    "defect": "item 5",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    return (\"DEFINE TABLE IF NOT EXISTS %s TYPE NORMAL SCHEMAFULL;\\nALTER TABLE %s TYPE NORMAL SCHEMAFULL;\"",
    "replacement": "    return (\"DEFINE TABLE OVERWRITE %s SCHEMAFULL;%.0s\"",
    "must_fail": [
@@ -2702,7 +2702,7 @@
    "defect": "item 5",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    return \"DEFINE TABLE IF NOT EXISTS %s %s;\\nALTER TABLE %s %s;\" % (edge, shape, edge, shape)",
    "replacement": "    return \"DEFINE TABLE OVERWRITE %s %s;\" % (edge, shape)",
    "must_fail": [
@@ -2716,7 +2716,7 @@
    "defect": "B-014",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "    if domain is None:\n        problems.append(\"%s: %s.%s has no enumerated domain",
    "replacement": "    if False:\n        problems.append(\"%s: %s.%s has no enumerated domain",
    "must_fail": [
@@ -2730,7 +2730,7 @@
    "defect": "B-014",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "    elif gates._value_literal(rule[\"value\"]) not in [gates._value_literal(v) for v in domain]:",
    "replacement": "    elif False:",
    "must_fail": [
@@ -2744,7 +2744,7 @@
    "defect": "B-014",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "                if values is None:\n                    problems.append(\"%s, which has no enumerated domain",
    "replacement": "                if values is None:\n                    continue\n                    problems.append(\"%s, which has no enumerated domain",
    "must_fail": [
@@ -2758,7 +2758,7 @@
    "defect": "B-014",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "                    if text not in allowed:",
    "replacement": "                    if False:",
    "must_fail": [
@@ -2772,7 +2772,7 @@
    "defect": "item 3",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        entry[\"reject\"] = entry.get(\"forbidden_evidence_reject\") is True",
    "replacement": "        pass",
    "must_fail": [
@@ -2786,7 +2786,7 @@
    "defect": "item 3",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                if not probe.get(\"forbids_only\"):",
    "replacement": "                if True:",
    "must_fail": [
@@ -2800,7 +2800,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    statements[0] = CredentialStatement(statements[0], inner, \"proposer\", stem)",
    "replacement": "    pass",
    "must_fail": [
@@ -2815,7 +2815,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "    statements.append(CredentialStatement(promotion, inner, \"promoter\", stem))",
    "replacement": "    statements.append(promotion)",
    "must_fail": [
@@ -2830,7 +2830,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        statements.append(CredentialStatement(own, inner, \"promoter\", stem))",
    "replacement": "        pass",
    "must_fail": [
@@ -2845,7 +2845,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "            return self.identities[stmt.stem][stmt.key].sql(stmt)",
    "replacement": "            return self.db.sql(stmt)",
    "must_fail": [
@@ -2859,7 +2859,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "                if staged_problem:\n                    entry[\"setup_error\"] = staged_problem",
    "replacement": "                if False:\n                    entry[\"setup_error\"] = staged_problem",
    "must_fail": [
@@ -2873,7 +2873,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/originals.py",
+   "file": "groundworks/originals.py",
    "anchor": "        writer, first, later = identities[\"proposer\"], identities[\"promoter\"], identities[\"promoter_b\"]",
    "replacement": "        writer, first, later = db, db, db",
    "must_fail": [
@@ -2887,7 +2887,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/originals.py",
+   "file": "groundworks/originals.py",
    "anchor": "        writer, first, later = identities[\"proposer\"], identities[\"promoter\"], identities[\"promoter_b\"]",
    "replacement": "        writer, first, later = identities[\"proposer\"], identities[\"promoter\"], identities[\"promoter\"]",
    "must_fail": [
@@ -2901,7 +2901,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/originals.py",
+   "file": "groundworks/originals.py",
    "anchor": "            for conn in (first, later):\n                conn.sql(link)",
    "replacement": "            for conn in ():\n                conn.sql(link)",
    "must_fail": [
@@ -2915,7 +2915,7 @@
    "defect": "item 4",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/originals.py",
+   "file": "groundworks/originals.py",
    "anchor": "            entry[\"not_built\"] = (\"the rule requires an independent promoter and the probe could not provision the \"",
    "replacement": "            entry[\"not_named\"] = (\"the rule requires an independent promoter and the probe could not provision the \"",
    "must_fail": [
@@ -2929,7 +2929,7 @@
    "defect": "item 6",
    "commit": "fix/gates",
    "source": "fix/gates lane 2026-09-16 (proven by the runner on a worktree copy)",
-   "file": "xscholar/gates.py",
+   "file": "groundworks/gates.py",
    "anchor": "        parts.append(\"%s >= %d\" % (_traversal(rule[\"table\"], clause, inst), int(clause.get(\"min\", 1))))",
    "replacement": "        parts.append(\"%s >= $min_evidence\" % _traversal(rule[\"table\"], clause, inst))",
    "must_fail": [
@@ -2995,10 +2995,10 @@
   },
   {
    "id": "M304",
-   "guard": "lookup hook: an unset XSCHOLAR_INSTANCE warns instead of printing nothing",
+   "guard": "lookup hook: an unset GROUNDWORKS_INSTANCE warns instead of printing nothing",
    "defect": "checks lane 2",
-   "file": "xscholar/hooks/lookup.py",
-   "anchor": "        return NOT_RUN % \"XSCHOLAR_INSTANCE is not set, so no instance graph is attached to this session\"",
+   "file": "groundworks/hooks/lookup.py",
+   "anchor": "        return NOT_RUN % \"GROUNDWORKS_INSTANCE is not set, so no instance graph is attached to this session\"",
    "replacement": "        return \"\"",
    "must_fail": [
     "tests.test_lookup_hook.LookupHookNeverSilentTests.test_an_unset_instance_warns_in_the_hook_output"
@@ -3011,7 +3011,7 @@
    "id": "M305",
    "guard": "lookup hook: input that is not JSON warns instead of printing nothing",
    "defect": "checks lane 2",
-   "file": "xscholar/hooks/lookup.py",
+   "file": "groundworks/hooks/lookup.py",
    "anchor": "        return NOT_RUN % (\"the hook input was not JSON (%s)\" % str(exc)[:80])",
    "replacement": "        return \"\"",
    "must_fail": [
@@ -3025,7 +3025,7 @@
    "id": "M306",
    "guard": "lookup hook: JSON that is not an object warns instead of printing nothing",
    "defect": "checks lane 2",
-   "file": "xscholar/hooks/lookup.py",
+   "file": "groundworks/hooks/lookup.py",
    "anchor": "        return NOT_RUN % (\"the hook input was JSON %s, not an object with tool_input\" % type(payload).__name__)",
    "replacement": "        return \"\"",
    "must_fail": [
@@ -3037,11 +3037,11 @@
   },
   {
    "id": "M307",
-   "guard": "xscholar test passes the demo docs to the drift check's docs arm",
+   "guard": "groundworks test passes the demo docs to the drift check's docs arm",
    "defect": "checks lane 3",
-   "file": "xscholar/cli.py",
-   "anchor": "_stream([sys.executable, \"-m\", \"xscholar.drift\"] + list(DEMO) + list(DEMO_DOCS))",
-   "replacement": "_stream([sys.executable, \"-m\", \"xscholar.drift\"] + list(DEMO))",
+   "file": "groundworks/cli.py",
+   "anchor": "_stream([sys.executable, \"-m\", \"groundworks.drift\"] + list(DEMO) + list(DEMO_DOCS))",
+   "replacement": "_stream([sys.executable, \"-m\", \"groundworks.drift\"] + list(DEMO))",
    "must_fail": [
     "tests.test_skills_drift.DemoDocsArmTests.test_the_test_command_passes_the_demo_docs_and_a_drifted_doc_fails_the_run"
    ],
@@ -3067,7 +3067,7 @@
    "id": "M309",
    "guard": "drift docs arm: engine identifiers (lens_view, lens_bound) are not lens mentions",
    "defect": "checks lane 3",
-   "file": "xscholar/drift.py",
+   "file": "groundworks/drift.py",
    "anchor": "if \"%s_%s\" % (kind, name) not in ENGINE_NAMES or name in known})",
    "replacement": "if True})",
    "must_fail": [
@@ -3082,7 +3082,7 @@
    "id": "M310",
    "guard": "drift docs arm: a doc that names no lens or seat checked nothing and is drift",
    "defect": "checks lane 3",
-   "file": "xscholar/drift.py",
+   "file": "groundworks/drift.py",
    "anchor": "        if not mentions:\n",
    "replacement": "        if False:\n",
    "must_fail": [
@@ -3096,7 +3096,7 @@
    "id": "M311",
    "guard": "panel: objection_categories are required and at least the dissent quota",
    "defect": "checks lane 4b",
-   "file": "xscholar/panel/panel.py",
+   "file": "groundworks/panel/panel.py",
    "edits": [
     {
      "anchor": "    if not categories or not all(categories) or len(set(categories)) != len(categories):",
@@ -3118,7 +3118,7 @@
    "id": "M312",
    "guard": "panel: dissent is counted by category, never by wording",
    "defect": "checks lane 4b",
-   "file": "xscholar/panel/panel.py",
+   "file": "groundworks/panel/panel.py",
    "anchor": "    return objection[\"category\"]\n",
    "replacement": "    return norm(objection[\"text\"])\n",
    "must_fail": [
@@ -3132,7 +3132,7 @@
    "id": "M313",
    "guard": "panel: a counterfactual objection outside the panel categories does not satisfy the agreement check",
    "defect": "checks lane 4a",
-   "file": "xscholar/panel/panel.py",
+   "file": "groundworks/panel/panel.py",
    "anchor": "    if not objections or any(o[\"category\"] not in cfg[\"categories\"] for o in objections):",
    "replacement": "    if not objections:",
    "must_fail": [
@@ -3146,7 +3146,7 @@
    "id": "M314",
    "guard": "panel: restating the seat's own round-2 objection does not satisfy the agreement check",
    "defect": "checks lane 4a",
-   "file": "xscholar/panel/panel.py",
+   "file": "groundworks/panel/panel.py",
    "anchor": " and norm(o[\"text\"]) not in own for o in objections)",
    "replacement": " for o in objections)",
    "must_fail": [
@@ -3160,7 +3160,7 @@
    "id": "M315",
    "guard": "panel: a token counterfactual objection (under three words) does not satisfy the agreement check",
    "defect": "checks lane 4a",
-   "file": "xscholar/panel/panel.py",
+   "file": "groundworks/panel/panel.py",
    "anchor": "    return any(len(words(o[\"text\"])) >= MIN_FLAW_WORDS and norm(",
    "replacement": "    return any(norm(",
    "must_fail": [
@@ -3174,7 +3174,7 @@
    "id": "M316",
    "guard": "temporal probes: history checks pass only on the append-only ASSERT's own refusal",
    "defect": "checks lane 5a",
-   "file": "xscholar/temporal.py",
+   "file": "groundworks/temporal.py",
    "anchor": "    return (\"for field `%s`\" % history_field) in message and \"must conform to\" in message",
    "replacement": "    return history_field in message",
    "must_fail": [
@@ -3188,7 +3188,7 @@
    "id": "M317",
    "guard": "temporal probes: no conclusion.ready gate is reported NOT EXECUTED for the gated flip",
    "defect": "checks lane 5b",
-   "file": "xscholar/temporal.py",
+   "file": "groundworks/temporal.py",
    "anchor": "            report[\"not_executed\"].append(\"conclusion ready flip through its gate",
    "replacement": "            [].append(\"conclusion ready flip through its gate",
    "must_fail": [
@@ -3202,7 +3202,7 @@
    "id": "M318",
    "guard": "chunk_by groups every unit sharing a value, not only adjacent ones",
    "defect": "V2-22(e)",
-   "file": "xscholar/pipeline/chunker.py",
+   "file": "groundworks/pipeline/chunker.py",
    "edits": [
     {
      "anchor": "    groups = {}                                    # insertion-ordered: first appearance of each value\n    for row in rows:\n        key = str((row.get(\"locator\") or {}).get(chunk_by))\n        groups.setdefault(key, []).append(row)\n",
@@ -3225,7 +3225,7 @@
    "id": "M319",
    "guard": "intake refuses a unit whose locator points outside its own original",
    "defect": "checks lane 7",
-   "file": "xscholar/pipeline/intake.py",
+   "file": "groundworks/pipeline/intake.py",
    "anchor": "    except ValueError as exc:\n        raise IntakeError(\"unit %s: its locator %s does not point into its own original",
    "replacement": "    except ValueError as exc:\n        return\n        raise IntakeError(\"unit %s: its locator %s does not point into its own original",
    "must_fail": [
@@ -3240,7 +3240,7 @@
    "id": "M320",
    "guard": "intake checks the locator of every unit linked to a retrievable original",
    "defect": "checks lane 7",
-   "file": "xscholar/pipeline/intake.py",
+   "file": "groundworks/pipeline/intake.py",
    "anchor": "                _check_locator(unit, doc, span_specs.get(unit[\"type\"]), store, last, counts)",
    "replacement": "                pass",
    "must_fail": [
@@ -3254,7 +3254,7 @@
    "id": "M321",
    "guard": "intake counts a locator it could not check as not checkable, never as checked",
    "defect": "checks lane 7",
-   "file": "xscholar/pipeline/intake.py",
+   "file": "groundworks/pipeline/intake.py",
    "anchor": "        skipped[\"binary original\"] = skipped.get(\"binary original\", 0) + 1\n",
    "replacement": "        counts[\"locators_checked\"] += 1\n",
    "must_fail": [
@@ -3268,7 +3268,7 @@
    "id": "M323",
    "guard": "evaluator run checks the pinned ids before judging any entry",
    "defect": "checks lane 9",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "    check_pins(path, data)                      # a removed known error fails before anything runs\n",
    "replacement": "    pass\n",
    "must_fail": [
@@ -3282,7 +3282,7 @@
    "id": "M324",
    "guard": "a known error deleted from the regression file is refused by id",
    "defect": "checks lane 9",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "for gone in sorted(set(pinned) - set(ids))]",
    "replacement": "for gone in []]",
    "must_fail": [
@@ -3296,7 +3296,7 @@
    "id": "M325",
    "guard": "a regression entry that is not pinned is refused",
    "defect": "checks lane 9",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "for new in sorted(set(ids) - set(pinned))]",
    "replacement": "for new in []]",
    "must_fail": [
@@ -3310,7 +3310,7 @@
    "id": "M326",
    "guard": "a regression file with no pinned id list is NOT EXECUTED",
    "defect": "checks lane 9",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "    if not pins.is_file():\n        raise NotExecuted(",
    "replacement": "    if not pins.is_file():\n        return []\n        raise NotExecuted(",
    "must_fail": [
@@ -3324,7 +3324,7 @@
    "id": "M327",
    "guard": "evaluator --check checks the pinned ids",
    "defect": "checks lane 9",
-   "file": "xscholar/evaluator.py",
+   "file": "groundworks/evaluator.py",
    "anchor": "            pinned = check_pins(path, data)\n",
    "replacement": "            pinned = []\n",
    "must_fail": [
@@ -3339,7 +3339,7 @@
    "id": "M322",
    "guard": "a relative evaluator.regression_file resolves against the config's own folder, as the template and demo now document",
    "defect": "checks lane 8",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "        base_dir = pathlib.Path(inst.source).resolve().parent\n",
    "replacement": "        base_dir = pathlib.Path.cwd()\n",
    "note": "A comment cannot carry a break (lint refuses an anchor inside a comment), so the break is on the behaviour the new comment documents; the test checks both the comment and the behaviour. config.py is not edited by this entry.",
@@ -3354,7 +3354,7 @@
    "id": "M350",
    "guard": "a quote under quote_min_words cut from a longer unit is refused",
    "defect": "trivial quote passes the validator",
-   "file": "xscholar/pipeline/validator.py",
+   "file": "groundworks/pipeline/validator.py",
    "anchor": "            elif quote != normed[uid] and len(quote.split()) < rules[\"quote_min_words\"]:\n",
    "replacement": "            elif False:\n",
    "must_fail": [
@@ -3368,7 +3368,7 @@
    "id": "M351",
    "guard": "a short quote that is the whole unit is not refused by the floor",
    "defect": "trivial quote passes the validator",
-   "file": "xscholar/pipeline/validator.py",
+   "file": "groundworks/pipeline/validator.py",
    "anchor": "            elif quote != normed[uid] and len(quote.split()) < rules[\"quote_min_words\"]:\n",
    "replacement": "            elif len(quote.split()) < rules[\"quote_min_words\"]:\n",
    "must_fail": [
@@ -3382,7 +3382,7 @@
    "id": "M352",
    "guard": "quote_distinct_units, when declared for a unit type, refuses a quote common to the slice",
    "defect": "trivial quote passes the validator",
-   "file": "xscholar/pipeline/validator.py",
+   "file": "groundworks/pipeline/validator.py",
    "anchor": "            elif (quote != normed[uid] and units[uid].get(\"type\") in rules[\"quote_distinct_units\"]\n",
    "replacement": "            elif (False and units[uid].get(\"type\") in rules[\"quote_distinct_units\"]\n",
    "must_fail": [
@@ -3396,7 +3396,7 @@
    "id": "M353",
    "guard": "labels.quote_min_words is read from the instance, not ignored",
    "defect": "trivial quote passes the validator",
-   "file": "xscholar/pipeline/validator.py",
+   "file": "groundworks/pipeline/validator.py",
    "anchor": "    return {\"quote_min_words\": int(section.get(\"quote_min_words\", QUOTE_MIN_WORDS)),\n",
    "replacement": "    return {\"quote_min_words\": QUOTE_MIN_WORDS,\n",
    "must_fail": [
@@ -3410,7 +3410,7 @@
    "id": "M354",
    "guard": "a labels: section must be human-owned",
    "defect": "trivial quote passes the validator",
-   "file": "xscholar/config.py",
+   "file": "groundworks/config.py",
    "anchor": "HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + [\"labels\"]\n",
    "replacement": "HUMAN_OWNED_IF_PRESENT = HUMAN_OWNED_IF_PRESENT + []\n",
    "must_fail": [
@@ -3424,7 +3424,7 @@
    "id": "M360",
    "guard": "the adjudication list is never capped",
    "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
-   "file": "xscholar/pipeline/agreement.py",
+   "file": "groundworks/pipeline/agreement.py",
    "anchor": "    return sorted(units, key=lambda u: (_group(units[u], tiers.get(u)), str(u)))\n",
    "replacement": "    return sorted(units, key=lambda u: (_group(units[u], tiers.get(u)), str(u)))[:20]\n",
    "must_fail": [
@@ -3438,7 +3438,7 @@
    "id": "M361",
    "guard": "a tier split inside the relevant tiers (2 vs 3) is adjudicated before other tier splits",
    "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
-   "file": "xscholar/pipeline/agreement.py",
+   "file": "groundworks/pipeline/agreement.py",
    "anchor": "        if d[\"field\"] == \"tier\" and isinstance(d[\"a\"], int) and isinstance(d[\"b\"], int) and d[\"a\"] >= 2 and d[\"b\"] >= 2:\n            return 1\n",
    "replacement": "        if d[\"field\"] == \"tier\" and isinstance(d[\"a\"], int) and isinstance(d[\"b\"], int) and d[\"a\"] >= 2 and d[\"b\"] >= 2:\n            return 2\n",
    "must_fail": [
@@ -3452,7 +3452,7 @@
    "id": "M362",
    "guard": "the adjudication list holds tier-only disagreements",
    "defect": "adjudication list silently capped at 20 and blind to tier-only splits",
-   "file": "xscholar/pipeline/agreement.py",
+   "file": "groundworks/pipeline/agreement.py",
    "anchor": "    for d in disagreements:\n        units.setdefault(d[\"unit\"], []).append(d)\n",
    "replacement": "    for d in disagreements:\n        if d[\"field\"] != \"tier\":\n            units.setdefault(d[\"unit\"], []).append(d)\n",
    "must_fail": [
@@ -3466,7 +3466,7 @@
    "id": "M363",
    "guard": "a direction flip on a unit both labellers rated relevant is adjudicated before other tier splits",
    "defect": "adjudication order",
-   "file": "xscholar/pipeline/agreement.py",
+   "file": "groundworks/pipeline/agreement.py",
    "anchor": "    if tiers and all(isinstance(t, int) and t >= 2 for t in tiers) and any(d[\"field\"] == \"dir\" for d in unit_disagreements):\n        return 2\n",
    "replacement": "    if tiers and all(isinstance(t, int) and t >= 2 for t in tiers) and any(d[\"field\"] == \"dir\" for d in unit_disagreements):\n        return 4\n",
    "must_fail": [

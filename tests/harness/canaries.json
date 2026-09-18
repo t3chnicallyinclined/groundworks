@@ -9,7 +9,7 @@
    "must_be": "SURVIVED",
    "why": "a test that asserts nothing cannot kill a real break",
    "entry": {"id": "CANARY-survivor", "guard": "canary: kappa returns 1.0 on one value (D11), judged by a test that asserts nothing",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "    if expected >= 1.0:\n        return None", "replacement": "    if expected >= 1.0:\n        return 1.0",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_asserts_nothing"]}
   },
@@ -17,7 +17,7 @@
    "must_be": "KILLED",
    "why": "the same break, judged by a test that checks it",
    "entry": {"id": "CANARY-killed", "guard": "canary: kappa returns 1.0 on one value (D11), judged by a real test",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "    if expected >= 1.0:\n        return None", "replacement": "    if expected >= 1.0:\n        return 1.0",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_kappa_is_undefined_on_one_value"]}
   },
@@ -25,7 +25,7 @@
    "must_be": "INVALID",
    "why": "a replacement that only adds a comment changes nothing a test could see",
    "entry": {"id": "CANARY-comment-only", "guard": "canary: comment-only break",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "    return round((observed - expected) / (1.0 - expected), 4)",
              "replacement": "    return round((observed - expected) / (1.0 - expected), 4)  # changed nothing",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_kappa_is_undefined_on_one_value"]}
@@ -34,7 +34,7 @@
    "must_be": "INVALID",
    "why": "an anchor inside a docstring is not code",
    "entry": {"id": "CANARY-in-docstring", "guard": "canary: anchor matches only docstring text",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "Returning 1.0 there", "replacement": "Returning 2.0 there",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_kappa_is_undefined_on_one_value"]}
   },
@@ -42,7 +42,7 @@
    "must_be": "INVALID",
    "why": "an anchor that occurs more than once is refused (D19)",
    "entry": {"id": "CANARY-twice", "guard": "canary: ambiguous anchor",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "        return None", "replacement": "        return 1.0",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_kappa_is_undefined_on_one_value"]}
   },
@@ -50,7 +50,7 @@
    "must_be": "STILLBORN",
    "why": "a break that stops the test module importing is not a catch",
    "entry": {"id": "CANARY-import", "guard": "canary: kappa renamed, so the fixture cannot import it",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "def kappa(pairs):", "replacement": "def kappa_renamed(pairs):",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_kappa_is_undefined_on_one_value"]}
   },
@@ -58,7 +58,7 @@
    "must_be": "NOT EXECUTED",
    "why": "a test that skips on the unmutated tree can judge nothing",
    "entry": {"id": "CANARY-skip", "guard": "canary: the named test always skips",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "    if expected >= 1.0:\n        return None", "replacement": "    if expected >= 1.0:\n        return 1.0",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_always_skips"]}
   },
@@ -66,7 +66,7 @@
    "must_be": "PREFLIGHT FAILED",
    "why": "a test already failing before the break proves nothing by failing after it",
    "entry": {"id": "CANARY-already-red", "guard": "canary: the named test fails unmutated",
-             "file": "xscholar/pipeline/agreement.py",
+             "file": "groundworks/pipeline/agreement.py",
              "anchor": "    if expected >= 1.0:\n        return None", "replacement": "    if expected >= 1.0:\n        return 1.0",
              "must_fail": ["tests.harness.canary_fixture.CanaryTests.test_already_failing"]}
   }

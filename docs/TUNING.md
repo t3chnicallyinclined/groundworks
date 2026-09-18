@@ -54,10 +54,10 @@ Every layer has knobs. This is what each one does, where to start, how to tell w
 **Write a baseline for your instance and commit it:**
 
 ```
-python -m xscholar.gates instances/<you>/instance.yaml --apply --url http://127.0.0.1:8040/sql --write-baseline instances/<you>/gate_baseline.json
+python -m groundworks.gates instances/<you>/instance.yaml --apply --url http://127.0.0.1:8040/sql --write-baseline instances/<you>/gate_baseline.json
 ```
 
-Then every later run takes `--baseline instances/<you>/gate_baseline.json`, and `xscholar test` checks the config half with no server. Without it, a probe report can say `0 misbehaved` while the gate it is testing has been loosened -- the report only says each gate matches *its own current spec*. Re-write the baseline when you change a gate on purpose, and review the diff; that review is the whole point of the file.
+Then every later run takes `--baseline instances/<you>/gate_baseline.json`, and `groundworks test` checks the config half with no server. Without it, a probe report can say `0 misbehaved` while the gate it is testing has been loosened -- the report only says each gate matches *its own current spec*. Re-write the baseline when you change a gate on purpose, and review the diff; that review is the whole point of the file.
 **Failure modes:** a gate that only ever rejects (nothing can be built) or only ever accepts (it is decoration). Bulk loaders that delete and recreate edges will demote everything downstream: *measured, 4 of 4 confirmed rows demoted by a delete-and-recreate load; writing edges by stable identity fixed it.*
 
 ---

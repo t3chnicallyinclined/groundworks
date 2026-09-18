@@ -16,10 +16,10 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config, gates, surreal_bin  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar.mcp import adapter as contract, instance_adapter, server  # noqa: E402
-from xscholar.pipeline import chunker, intake, loader  # noqa: E402
+from groundworks import config, gates, surreal_bin  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks.mcp import adapter as contract, instance_adapter, server  # noqa: E402
+from groundworks.pipeline import chunker, intake, loader  # noqa: E402
 try:  # discovery puts tests/ on the path; `python -m unittest tests.x` does not
     from test_pipeline import Adapter, CORPUS  # noqa: E402
     from test_pipeline_db import LABELS  # noqa: E402

@@ -23,14 +23,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar.present import features  # noqa: E402
-from xscholar.present import lookup  # noqa: E402
-from xscholar.present import metrics  # noqa: E402
-from xscholar.present import plant  # noqa: E402
-from xscholar.present import policy  # noqa: E402
-from xscholar.present import render  # noqa: E402
-from xscholar.present import score  # noqa: E402
-from xscholar.present import synthetic  # noqa: E402
+from groundworks.present import features  # noqa: E402
+from groundworks.present import lookup  # noqa: E402
+from groundworks.present import metrics  # noqa: E402
+from groundworks.present import plant  # noqa: E402
+from groundworks.present import policy  # noqa: E402
+from groundworks.present import render  # noqa: E402
+from groundworks.present import score  # noqa: E402
+from groundworks.present import synthetic  # noqa: E402
 
 DATASETS = {"incident": synthetic.incident, "legal": synthetic.legal}
 # Every dataset, including the big one that exercises collapse, overflow and the spot sample.

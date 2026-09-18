@@ -2,7 +2,7 @@
 """Re-stating a head replaces its verdict, and the change is on the record.
 
 The MCP adapter has always documented this: "Re-adding the same head from the same agent against the
-same target replaces its verdict" (xscholar/mcp/adapter.py). Until 2026-09-16 the code did not do it,
+same target replaces its verdict" (groundworks/mcp/adapter.py). Until 2026-09-16 the code did not do it,
 and no test covered it. Measured on the shipped code:
 
     1st  critique:c1__lens_skeptic__476d2269  fatal
@@ -27,12 +27,12 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from xscholar import config  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
-from xscholar import surreal_bin  # noqa: E402
-from xscholar import temporal  # noqa: E402
-from xscholar.pipeline import write  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
+from groundworks import temporal  # noqa: E402
+from groundworks.pipeline import write  # noqa: E402
 
 PORT = surreal_bin.free_port()   # OS-assigned (was 8029): suites no longer share a registry of fixed ports
 ROOT = pathlib.Path(__file__).resolve().parent.parent

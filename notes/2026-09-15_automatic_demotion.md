@@ -6,7 +6,7 @@ The largest known gap in the method: a fact confirmed on some evidence stays con
 ## Answer: yes, proven
 Tested on SurrealDB 3.1.4, in a throwaway database on the same server (created and removed; no instance data touched).
 
-Pattern file: `xscholar/patterns/tms_propagation.surql`.
+Pattern file: `groundworks/patterns/tms_propagation.surql`.
 
 | Check | Result |
 |---|---|
@@ -99,7 +99,7 @@ fact:derived_only <- demoted, cause fact:base
 
 **Install order:** loaders first, then truth maintenance, then the archive. Each step was backed up and tested before the next.
 
-**1. Loaders no longer churn edges** (`xscholar/patterns/edge_ids.py`).
+**1. Loaders no longer churn edges** (`groundworks/patterns/edge_ids.py`).
 - Every loader-written edge now has a stable id derived from (scope, edge table, source, target, repeat index), and every write carries a run token.
 - After a successful load, a sweep deletes only edges of that scope not written by this run.
 - The sweep is skipped if any write in the run failed, so a failed write cannot delete the previous copy.

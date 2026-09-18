@@ -86,7 +86,7 @@ The hand scripts from 2026-09-16 still sit in a session scratchpad outside the r
 - runs named tests;
 - restores the file and asserts the SHA-256 matches.
 
-`breaks.py` holds B1 to B22 for `dff134c`. Both **edit the live working tree** (`ROOT = C:/Users/trist/projects/xscholar`). Both treat any non-zero exit as "red", so a mutant that fails to import counts as killed. Neither checks that the named test passed *before* the mutation. And both would report a **skipped** database test (port occupied) as "NOT RED", which is a false survivor.
+`breaks.py` holds B1 to B22 for `dff134c`. Both **edit the live working tree** (`ROOT = C:/Users/trist/projects/groundworks`). Both treat any non-zero exit as "red", so a mutant that fails to import counts as killed. Neither checks that the named test passed *before* the mutation. And both would report a **skipped** database test (port occupied) as "NOT RED", which is a false survivor.
 
 ### The tool
 
@@ -95,7 +95,7 @@ tests/harness/mutations.json      the registry (human-owned; entries added, neve
 tests/harness/mutate.py           the runner (standard library)
 tests/harness/mutations_ids.json  the pinned id list, checked like gate_baseline.json
 
-python -m tests.harness.mutate run   [--ids M012,M013] [--files xscholar/loader.py] [--from HEAD|worktree] [--json OUT]
+python -m tests.harness.mutate run   [--ids M012,M013] [--files groundworks/loader.py] [--from HEAD|worktree] [--json OUT]
 python -m tests.harness.mutate lint                      # no tests run: every anchor still valid, every test id exists
 python -m tests.harness.mutate replay --commit 34960cf^  # s.9
 ```
@@ -107,7 +107,7 @@ python -m tests.harness.mutate replay --commit 34960cf^  # s.9
   "id": "M014",
   "guard": "a run that read no label files does not sweep",
   "defect": "D4", "commit": "34960cf",
-  "file": "xscholar/pipeline/loader.py",
+  "file": "groundworks/pipeline/loader.py",
   "anchor": "    if not label_files:\n        counts[\"sweep\"] = (",
   "replacement": "    if False:\n        counts[\"sweep\"] = (",
   "must_fail": ["tests.test_loader_sweep.SweepTests.test_an_empty_labels_directory_sweeps_nothing"],
@@ -124,7 +124,7 @@ The test id above is illustrative. `lint` verifies each real id exists.
    - Build it with `git archive <rev> | tar -x` into a temporary directory, or with `--from worktree` as a copy of `git ls-files` plus modified files.
    - The live tree is **never written**, so there is nothing to restore in it and no way to corrupt another lane's edits.
    - The tree's content hash is recorded in the report. Mutations then apply to a fresh copy of that tree, or to the same copy restored and hash-verified, whichever is faster.
-   - *Trap it closes:* another lane mid-edit in the same tree. CONFIRMED hazard: `a330b34` and `6c54f25` both deferred full-suite runs because "another lane is mid-edit in the same tree", and during this very design session `xscholar/config.py` was modified and `xscholar/assertions.py` created by another lane at 14:47.
+   - *Trap it closes:* another lane mid-edit in the same tree. CONFIRMED hazard: `a330b34` and `6c54f25` both deferred full-suite runs because "another lane is mid-edit in the same tree", and during this very design session `groundworks/config.py` was modified and `groundworks/assertions.py` created by another lane at 14:47.
 2. **Anchor validation, before anything runs.**
    - The anchor must occur **exactly once** (D19).
    - It must not lie wholly inside a `#` comment or a docstring. Check with `tokenize`: every character of the match must fall in non-COMMENT tokens. A STRING token is allowed only when it is not a bare expression statement, because SurrealQL lives in strings here (B16 and B17 mutate SQL text).
@@ -189,7 +189,7 @@ That is about 64 before anything new is written (INFERRED count from the message
 ### What exists and what is missing (CONFIRMED)
 
 - `instances/demo-incident` has one fixed corpus (66 units after one exclusion), a keyword stand-in labeller (`labeler_stub.py`), and a scenario whose expected outcomes are written in prose inside `adapter.py`.
-- `xscholar/present/plant.py` plants five error types into **rendered rows** for reviewer studies. Its targeting is deterministic given the policy, so two seeds upgraded the same two rows (`notes/2026-09-16_marker_wording.md` line 193).
+- `groundworks/present/plant.py` plants five error types into **rendered rows** for reviewer studies. Its targeting is deterministic given the policy, so two seeds upgraded the same two rows (`notes/2026-09-16_marker_wording.md` line 193).
 - Nothing plants truth into the **corpus and the graph**, and nothing scores the pipeline's output against it.
 - `evaluator.regression_file` is required by `config.py:624`. But the demo's `evals/known_errors.json` **does not exist**, and no module reads that key or `evaluator.label_agreement` (CONFIRMED by grep: the only references are `config.py:624-625` and `tests/test_config.py`). **The Lessons loop in METHOD s.15 is declared and never executed.** That is D22's class, in the evaluator itself.
 
@@ -250,13 +250,13 @@ Outputs, all from `random.Random(seed)`, with no domain words:
 - The same seed gives byte-identical output. A test asserts that by generating twice and comparing hashes.
 
 **How it avoids being a test the engine was fitted to pass.** METHOD s.15's fence applies.
-1. **The engine never imports anything under `evals/`.** `license_check`-style AST scan: an `xscholar/` import of `evals` fails the suite.
+1. **The engine never imports anything under `evals/`.** `license_check`-style AST scan: an `groundworks/` import of `evals` fails the suite.
 2. **The answer key is computed by a reference model inside the generator, not by the engine.** It is a deliberately naive Python evaluation of each gate over the planted rows. This is differential testing: engine and reference must agree. When they disagree, a human decides which is wrong. Limit (INFERRED): the reference and the engine can share their author's misunderstanding. So the reference is written by a different lane from the one changing the engine, and five hand-built small cases pin it.
 3. **Held-out seeds.**
    - `dev` seeds are in the repo, for developing and debugging.
-   - The **gate** run uses seeds derived from a salt kept outside the repo, `~/.xscholar/eval_salt`, the same pattern as the privacy deny list (`instance.yaml` line 187). An agent tuning the engine can make the dev seeds pass, and learns nothing about the held-out ones.
+   - The **gate** run uses seeds derived from a salt kept outside the repo, `~/.groundworks/eval_salt`, the same pattern as the privacy deny list (`instance.yaml` line 187). An agent tuning the engine can make the dev seeds pass, and learns nothing about the held-out ones.
    - The salt is rotated when a held-out failure has been looked at, because a seed that has been debugged is a dev seed.
-4. **Human-owned files, pinned.** `evals/seeded/generate.py`, `score.py` and the category list are added to `human_owned` and pinned by content hash in `evals/evaluator_pins.json`. `xscholar test` fails if a pinned file changes without the pin being updated, and a pin update is a reviewed diff. This is the gate-baseline pattern again, and it works (`89f7b78`: "unchanged config exit 0; one clause deleted exit 1").
+4. **Human-owned files, pinned.** `evals/seeded/generate.py`, `score.py` and the category list are added to `human_owned` and pinned by content hash in `evals/evaluator_pins.json`. `groundworks test` fails if a pinned file changes without the pin being updated, and a pin update is a reviewed diff. This is the gate-baseline pattern again, and it works (`89f7b78`: "unchanged config exit 0; one clause deleted exit 1").
 5. **Results are written by the scorer, not by the session.** The agent that ran the experiment never writes `evals/history/`. The scorer appends the record, and the record carries the scorer's own hash.
 
 **What it catches that today's suite does not.**
@@ -366,7 +366,7 @@ tests/test_faults.py           one test per row below, each with its no-fault co
 
 | Injector | How | Seam |
 |---|---|---|
-| `FaultyDb(db, plan)` | a proxy over `xscholar.db.Db`. Per statement index or regex it can raise `DbError`, return fewer result blocks, return `[]` with status OK (the measured denied-write shape), sleep past `timeout`, or run a callback **between** two statements | every engine function takes `db` as a parameter (`loader.load`, `gates.run_probes`, `consistency.report`, `lens.*`) |
+| `FaultyDb(db, plan)` | a proxy over `groundworks.db.Db`. Per statement index or regex it can raise `DbError`, return fewer result blocks, return `[]` with status OK (the measured denied-write shape), sleep past `timeout`, or run a callback **between** two statements | every engine function takes `db` as a parameter (`loader.load`, `gates.run_probes`, `consistency.report`, `lens.*`) |
 | `KillServer(proc, after=...)` | `proc.terminate()` on **our own** Popen handle after N statements or seconds. By PID, never by name | test-owned server |
 | `StrangerOnPort(port, when=...)` | a plain `socket` listener bound before the check, or bound in the window between `port_in_use` and `surreal start` (a thread races it) | `run_instance.start_memory`, suite `setUpClass` |
 | `FsFault(dir, kind)` | missing directory; empty directory; `.json` instead of `.jsonl`; truncated last line; UTF-8 BOM; a file written in cp1252 (D21); a zero-byte file; a directory where a file is expected | intake, loader, validator, plant, score, metrics |
@@ -447,7 +447,7 @@ tests/test_faults.py           one test per row below, each with its no-fault co
 
 ## 7. Agent and LLM evaluation done properly
 
-**One harness, one store, three evals.** Today agreement (`xscholar/pipeline/agreement.py`), planted-error review (`xscholar/present/plant.py` + `score.py`) and retrieval (`xscholar/embed/bakeoff.py`) are separate tools with no shared history (CONFIRMED). Keep each tool. Add:
+**One harness, one store, three evals.** Today agreement (`groundworks/pipeline/agreement.py`), planted-error review (`groundworks/present/plant.py` + `score.py`) and retrieval (`groundworks/embed/bakeoff.py`) are separate tools with no shared history (CONFIRMED). Keep each tool. Add:
 
 ```
 evals/stats.py            wilson(k, n), bootstrap(values, clusters=None), paired_bootstrap, kappa_ci, power_two_proportions
@@ -501,7 +501,7 @@ evals/gate.py             python -m evals.gate --metric reviewer.status_upgrade.
    - The same guide version, pinned by hash in the record.
    - The labeller that did the production pass must not be one of the two, or else be recorded as such.
    - Same-model labellers agree on shared mistakes. Where possible use a second model, and report both pairings.
-3. **Compute** with `xscholar labels agreement A.jsonl B.jsonl --out`: exact agreement, kappa with a cluster-bootstrap CI over slices, `kappa_undefined`, and the relevance split.
+3. **Compute** with `groundworks labels agreement A.jsonl B.jsonl --out`: exact agreement, kappa with a cluster-bootstrap CI over slices, `kappa_undefined`, and the relevance split.
 4. **Adjudication measures truth, not agreement.**
    - A human adjudicates every relevance-split unit **and a random 10% of agreed units** against the source.
    - Report **accuracy of each labeller against adjudication**, with Wilson intervals.
@@ -599,7 +599,7 @@ python -m tests.harness.replay --all          # every defect with a replay entry
 | # | Item | Effort | Caught (INFERRED) | The one test that shows it works | When |
 |---|---|---|---|---|---|
 | 1 | **Mutation runner + registry**, seeded with the ~64 mutations already described in commit messages and `breaks.py`; `lint` in CI, changed-file subset in CI, full set nightly | 2 d | D2, D8, D18, D19 directly. Every future guard stays guarded: the method already relies on this; it is only automated here | the canary survivor (a test asserting nothing) is reported **SURVIVED** and the run exits 1 | **Now** |
-| 2 | **Wire the declared evaluator**: a runner for `evaluator.regression_file` (a known-errors file of planted misquotes and past errors, each with its expected refusal); create the demo's `evals/known_errors.json`; config refuses a regression file that does not exist | 0.5 d | D22's class in the evaluator itself: METHOD's Lessons loop runs for the first time | delete the demo's regression file: `xscholar test` goes FAILED, naming it | **Now** |
+| 2 | **Wire the declared evaluator**: a runner for `evaluator.regression_file` (a known-errors file of planted misquotes and past errors, each with its expected refusal); create the demo's `evals/known_errors.json`; config refuses a regression file that does not exist | 0.5 d | D22's class in the evaluator itself: METHOD's Lessons loop runs for the first time | delete the demo's regression file: `groundworks test` goes FAILED, naming it | **Now** |
 | 3 | **Fault harness, loader and environment half**: `FaultyDb`, `FsFault`, `StrangerOnPort`, correction-mid-load, server-kill-mid-load; **plus a test that every suite's `setUpClass` checks its own process after the health poll** | 2 d | D3, D4, D16 (mid-load), D20, D21; likely finds the suites' missing settle check (s.5) | a stranger bound between the port check and `surreal start` in a **suite** setUp is reported, not borrowed | **Now** |
 | 4 | **Defect replay** for the ten reproducible defects in s.9, using items 1 and 3 as scenarios | 1.5 d | proves the others: the result is a measured count, not an inferred one | the D4 scenario is RED at `34960cf^` and GREEN at HEAD | Depends on 1 and 3 |
 | 5 | **Pure-function properties** (s.6, no server): `compare_baseline` weakening, `reconcile`, `kappa`, `chunk`, `preservation`, `plant`/`score`, `probes` plan completeness; shrinker; saved failures replayed | 2 d | D1, D2, D9, D10, D11, D13, D16 (logic half) | planted `kappa` returning 1.0 on one value is found and shrunk to a single-valued pair list | **Now** |

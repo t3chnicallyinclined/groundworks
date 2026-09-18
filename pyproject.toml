@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xscholar"
+name = "groundworks"
 version = "0.1.0.dev1"
 description = "Evidence-gated knowledge graph built by exhaustive, verified agent reading, viewed through expert lenses."
 readme = "README.md"
@@ -17,11 +17,11 @@ mcp = ["mcp>=1.26"]
 embed = ["torch", "sentence-transformers>=3", "numpy"]
 
 [project.scripts]
-xscholar = "xscholar.cli:main"
+groundworks = "groundworks.cli:main"
 
 [tool.setuptools]
-packages = ["xscholar", "xscholar.pipeline", "xscholar.present", "xscholar.panel", "xscholar.mcp", "xscholar.embed", "xscholar.patterns", "xscholar.hooks"]
+packages = ["groundworks", "groundworks.pipeline", "groundworks.present", "groundworks.panel", "groundworks.mcp", "groundworks.embed", "groundworks.patterns", "groundworks.hooks"]
 
 [tool.setuptools.package-data]
-"xscholar.patterns" = ["*.surql"]
-"xscholar" = ["skills_templates/*.md"]   # xscholar/skills.py renders these; without them `skills generate` has no templates
+"groundworks.patterns" = ["*.surql"]
+"groundworks" = ["skills_templates/*.md"]   # groundworks/skills.py renders these; without them `skills generate` has no templates

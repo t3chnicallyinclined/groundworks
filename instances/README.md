@@ -53,7 +53,7 @@ Each folder maps the general method onto one domain: the eight answers, the evid
   run. An instance with no baseline is not checked at all. After any deliberate change to your gates,
   `tables:` or `edges:`, regenerate yours at a terminal:
 
-      python -m xscholar.gates instances/<name>/instance.yaml --apply --url <throwaway db> --write-baseline instances/<name>/gate_baseline.json
+      python -m groundworks.gates instances/<name>/instance.yaml --apply --url <throwaway db> --write-baseline instances/<name>/gate_baseline.json
 
   then read the diff (that review is the point of the file) and prove it can still fail: delete one
   clause from a copy of the config and check that `--baseline` exits 1 and names it. Only a human at a

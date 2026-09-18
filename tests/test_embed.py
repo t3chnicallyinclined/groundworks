@@ -21,8 +21,8 @@ from array import array
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar.embed import bakeoff  # noqa: E402
-from xscholar.embed import embed  # noqa: E402
+from groundworks.embed import bakeoff  # noqa: E402
+from groundworks.embed import embed  # noqa: E402
 
 INCIDENTS = [
     ("inc_001", "log_entry", "Pump P-3 tripped on low suction pressure at 02:14; operator reset after a valve check."),

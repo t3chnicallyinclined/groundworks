@@ -15,7 +15,7 @@ Deletion means different things for different data. One timer for everything wou
 **Legal hold overrides every expiry.** In litigation, destroying material while a matter is pending or reasonably anticipated can be spoliation. An instance for an active matter should start with holds on.
 
 ## Proven
-Tested on SurrealDB 3.1.4, in a throwaway database. Pattern: `xscholar/patterns/archive_bin.surql`.
+Tested on SurrealDB 3.1.4, in a throwaway database. Pattern: `groundworks/patterns/archive_bin.surql`.
 
 | Check | Result |
 |---|---|

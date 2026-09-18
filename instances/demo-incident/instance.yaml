@@ -165,7 +165,7 @@ roles:
 
 evaluator:
   # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository
-  # root and not the working directory (xscholar/config.py regression_file_path); an absolute path is taken as it
+  # root and not the working directory (groundworks/config.py regression_file_path); an absolute path is taken as it
   # is. The pinned id list beside it (<name>.ids.json) resolves the same way.
   regression_file: evals/known_errors.json
   gate_probes: generated
@@ -184,7 +184,7 @@ verdicts:
   damaging: "A real problem that blocks readiness until it is answered on the record. Use it for anything curable by better evidence, a narrower claim or a rewrite, including not as currently written. Most surviving heads belong here."
   survivable: "Worth recording so the next reader sees it was considered, but it does not block. A weakness the conclusion can carry."
 
-# Originals (xscholar/originals.py, xscholar/store.py). Every unit links to the exact bytes it was extracted
+# Originals (groundworks/originals.py, groundworks/store.py). Every unit links to the exact bytes it was extracted
 # from, kept in this instance's content-addressed store (a directory beside this file, git-ignored by the
 # store itself). `required`: intake refuses a unit with no original, by name. `transition` keeps such units
 # and names every one in health. In both, a gated promotion counts only units whose original is verified.
@@ -201,10 +201,10 @@ originals:
 human_owned: [gates, fidelity, status, evaluator, privacy, verdicts, unique, originals]
 
 privacy:
-  deny_list: "~/.xscholar/denylist.txt"
+  deny_list: "~/.groundworks/denylist.txt"
   providers_allowed: ["the model provider the owner approved"]
 
-# Per-agent datastore credentials (xscholar/access.py): a role SELECTs only `read`, writes only `write`;
+# Per-agent datastore credentials (groundworks/access.py): a role SELECTs only `read`, writes only `write`;
 # a lens_bound role writes lens-carrying rows only under its own lens; only loader writes labels;
 # DELETE is root-only. Gates stay in force for every role.
 access:

@@ -20,13 +20,13 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import config  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import gates  # noqa: E402
+from groundworks import config  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import gates  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "instances" / "demo-incident" / "instance.yaml"
-from xscholar import surreal_bin  # noqa: E402
+from groundworks import surreal_bin  # noqa: E402
 SURREAL = surreal_bin.find()
 PORT = surreal_bin.free_port()   # OS-assigned (was 8023): suites no longer share a registry of fixed ports
 def declared_instance(base):
@@ -1355,7 +1355,7 @@ class IndependenceDeclarationTests(unittest.TestCase):
                               probe["cleanup"])
 
     def test_the_generated_skill_tells_the_agent_who_may_promote(self):
-        from xscholar import skills
+        from groundworks import skills
         text = skills._gates_block(independent_instance(self.inst))
         self.assertIn("never by its own proposer, never by root", text)
         self.assertNotIn("never by root", skills._gates_block(self.inst))
@@ -1468,7 +1468,7 @@ class ParamTests(unittest.TestCase):
     SIGNIN = {"id", "pass"}
 
     def generated(self, inst):
-        from xscholar import access, assertions, originals, promotion_log, temporal
+        from groundworks import access, assertions, originals, promotion_log, temporal
         return "\n".join([gates.schema_surql(inst), gates.gate_surql(inst), temporal.temporal_surql(inst),
                           assertions.surql(inst), access.access_surql(inst), originals.enforcement_surql(inst),
                           "\n".join(promotion_log.log_surql(inst))])
@@ -1518,7 +1518,7 @@ class GateFixServerTests(unittest.TestCase):
             cls.proc.kill()
 
     def fresh(self, inst, *more):
-        from xscholar import access
+        from groundworks import access
         type(self).n += 1
         conn = dbmod.Db(url="http://127.0.0.1:%d/sql" % PORT_FIXES, ns="fixes", db="d%d" % self.n)
         conn.script(gates.schema_surql(inst))
@@ -1540,7 +1540,7 @@ class GateFixServerTests(unittest.TestCase):
 
     def test_a_link_to_a_missing_record_is_refused_and_a_link_to_real_ones_is_taken(self):
         """B-011, both ways, raw and through the typed write surface, on a built-in and a declared edge."""
-        from xscholar.pipeline import write
+        from groundworks.pipeline import write
         conn = self.fresh(self.inst)
         conn.sql("CREATE unit:u1 SET type='log_line', text='t', locator={p: 1}, status='in_window', "
                  "grade='original_log', hash='h';")
@@ -1585,7 +1585,7 @@ class GateFixServerTests(unittest.TestCase):
 
     def test_reapplying_the_schema_keeps_permissions_and_changefeeds(self):
         """Measured before the fix on the demo: 14 of 20 tables back to PERMISSIONS NONE, CHANGEFEED gone from 5."""
-        from xscholar import access, live_schema, queue, temporal
+        from groundworks import access, live_schema, queue, temporal
         conn = self.fresh(self.inst)
         for text in (temporal.temporal_surql(self.inst), access.access_surql(self.inst),
                      queue.changefeed_surql(self.inst)):
@@ -1661,7 +1661,7 @@ class GateFixServerTests(unittest.TestCase):
                       "credential and promoted by another", entry["setup_error"])
 
     def test_originals_enforcement_is_probed_for_a_rule_needing_an_independent_promoter(self):
-        from xscholar import originals
+        from groundworks import originals
         from tests.test_independence_modes import mode_instance
         for mode in (True, {"between": "principal", "own_evidence": True}):
             with self.subTest(mode=mode):
@@ -1678,7 +1678,7 @@ class GateFixServerTests(unittest.TestCase):
                     self.assertEqual(conn.count(table), 0, "probe rows left behind in %s" % table)
 
     def test_originals_probe_without_credentials_is_reported_by_name(self):
-        from xscholar import originals
+        from groundworks import originals
         inst = independent_instance(self.inst)
         conn = self.fresh(inst)
         conn.script(originals.enforcement_surql(inst))

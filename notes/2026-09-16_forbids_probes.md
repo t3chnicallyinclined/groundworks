@@ -1,6 +1,6 @@
 # 2026-09-16: half of every gate expression was never probed
 
-Generic; no matter content. Module: `xscholar/gates.py`. Found by an architect pass reviewing the
+Generic; no matter content. Module: `groundworks/gates.py`. Found by an architect pass reviewing the
 probe generator, left as a design decision, then decided and implemented.
 
 ## What was measured

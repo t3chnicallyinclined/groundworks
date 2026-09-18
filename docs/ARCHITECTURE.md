@@ -1,6 +1,6 @@
 # Architecture
 
-**What this is.** XScholar makes AI agents reliably expert in one large body of material with a stated goal. It is domain-free: the same engine serves an incident timeline, a body of trials, a codebase, a research literature or a legal record. A domain becomes an **instance**: a config, a few adapters, and its own vocabularies. Nothing about a domain belongs in engine code.
+**What this is.** Groundworks makes AI agents reliably expert in one large body of material with a stated goal. It is domain-free: the same engine serves an incident timeline, a body of trials, a codebase, a research literature or a legal record. A domain becomes an **instance**: a config, a few adapters, and its own vocabularies. Nothing about a domain belongs in engine code.
 
 **Where instances live.** An instance belongs to **its own project**, with its data, adapters, vocabularies and settings. This repository holds the method, the engine and domain **specs** with synthetic examples only. Measurements that come back from a private instance are recorded here as generic numbers and lessons, never as its material.
 

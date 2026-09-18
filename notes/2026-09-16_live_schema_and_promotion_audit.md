@@ -9,7 +9,7 @@ The owner named two limits of independent promotion (V2-20):
 
 All measurements: SurrealDB 3.1.6, throwaway servers on ports 8070-8079 (memory; for the chain, also `rocksdb://` and `surrealkv://`), each stopped by PID.
 
-## A. Live-schema drift (`xscholar/live_schema.py`)
+## A. Live-schema drift (`groundworks/live_schema.py`)
 
 ### What the server does to a definition (measured)
 
@@ -28,7 +28,7 @@ All measurements: SurrealDB 3.1.6, throwaway servers on ports 8070-8079 (memory;
 A text comparison against the generated SurrealQL would flag every definition. Writing a normaliser would mean a second parser that drifts from the server's.
 
 **Measured:** two databases given the same statements return byte-identical `INFO`, for every table and every definition. So the expected side is **rendered by the same server**:
-1. Apply the generated statements to an empty scratch database (`zz_xscholar_reference_<random>`, in the live namespace).
+1. Apply the generated statements to an empty scratch database (`zz_groundworks_reference_<random>`, in the live namespace).
 2. Read its `INFO`.
 3. Remove the scratch database in a `finally`, and check that it is gone.
 
@@ -135,7 +135,7 @@ Every rule with clauses is now **also** emitted as a privileged event, `<rule>_g
 - **The INDEPENDENCE summary** now accounts for every rule: `N require an independent promoter: X passed, Y untested, Z FAILED`. Before, a rule that failed without being untested appeared in neither count.
 - **Two tests changed:** `test_gates.py` has two tests that weakened a gate by redefining only its ASSERT. Those tests now also remove the gate event: a gate that still has its event has not been weakened.
 
-## C. The promotion log (`xscholar/promotion_log.py`, `promotion_log: true`)
+## C. The promotion log (`groundworks/promotion_log.py`, `promotion_log: true`)
 
 ### Measured
 

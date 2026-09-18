@@ -1,4 +1,4 @@
-# instance.yaml -- the eight answers, machine-readable. THIS FILE LOADS: `python -m xscholar.config
+# instance.yaml -- the eight answers, machine-readable. THIS FILE LOADS: `python -m groundworks.config
 # instances/_template/instance.yaml` validates it, and the same shape generates the schema, the
 # datastore gates, a reject-and-accept probe per rule, the label validator's vocabulary and the lens views.
 #
@@ -131,7 +131,7 @@ lenses:
 # 7. ROLES: skills generated from templates with this vocabulary.
 #    panel: the options each seat must choose from, the objection categories, and the weighted seat
 #    (or null). Thresholds default to consensus 2/3, agreement 0.70, dissent_quota 2, and are
-#    human-owned; keep them in a settings file and lock with --settings (xscholar/panel/PROTOCOL.md).
+#    human-owned; keep them in a settings file and lock with --settings (groundworks/panel/PROTOCOL.md).
 roles:
   - skill: red-team
     lenses: [adversary, decision_maker]
@@ -149,13 +149,13 @@ roles:
 # 8. EVALUATOR. HUMAN-OWNED (entries may be added, never removed or loosened).
 evaluator:
   # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository
-  # root and not the working directory (xscholar/config.py regression_file_path); an absolute path is taken as it
+  # root and not the working directory (groundworks/config.py regression_file_path); an absolute path is taken as it
   # is. The pinned id list beside it (<name>.ids.json) resolves the same way.
   regression_file: evals/known_errors.json
   gate_probes: generated
   label_agreement: {sample_chunks: 2, adjudicate: true}
 
-# OPTIONAL: per-agent datastore credentials (xscholar/access.py). The datastore, not the server,
+# OPTIONAL: per-agent datastore credentials (groundworks/access.py). The datastore, not the server,
 # enforces these: read = tables the role may SELECT, write = tables it may CREATE/UPDATE/RELATE,
 # lens_bound = writes lens-carrying rows only under its own lens. Only loader writes label. DELETE is root-only.
 access:
@@ -166,7 +166,7 @@ access:
     coordinator: {read: [unit, document, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion]}
 
 privacy:
-  deny_list: "~/.xscholar/denylist.txt"     # outside the repo; the scan fails closed without it
+  deny_list: "~/.groundworks/denylist.txt"     # outside the repo; the scan fails closed without it
   providers_allowed: ["the model provider the owner approved"]
 
 # OPTIONAL but strongly advised. What each critique verdict MEANS here. The three names are an engine
@@ -181,12 +181,12 @@ verdicts:
   survivable: "Recorded so the next reader sees it was considered; it does not block."
 
 # ORIGINALS. HUMAN-OWNED. Every unit links to the exact bytes it was extracted from, kept in this instance's
-# content-addressed store (xscholar/originals.py, xscholar/store.py). The adapter yields them from
+# content-addressed store (groundworks/originals.py, groundworks/store.py). The adapter yields them from
 # `documents()` and names one per unit with `document: <key>` (docs/MODULES.md, adapter `documents()`).
 #   required    intake refuses a unit with no original, by name. The default for a new instance.
 #   transition  a unit with no original is kept and named in health; for an existing corpus being migrated.
 # In both modes nothing without a VERIFIED original can support a gated promotion. Run
-# `python -m xscholar.originals verify instance.yaml` after any restore or import.
+# `python -m groundworks.originals verify instance.yaml` after any restore or import.
 # spans: how a unit's locator cuts its span out of a text original, so a label's quote is checked against the
 # original as well as the extracted text: line: <field> | lines: [from, to] | chars: [start, end] | whole: true.
 # A unit type with no span (a scanned page has no text span) is counted as not checkable, never as checked.

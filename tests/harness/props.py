@@ -113,7 +113,7 @@ def check(name, prop, generate, n=200, seed=0):
         if isinstance(outcome, tuple):
             shrunk = shrink(prop, case)
             final = _outcome(prop, shrunk)
-            fd, path = tempfile.mkstemp(prefix="xscholar-property-%s-" % name, suffix=".json")
+            fd, path = tempfile.mkstemp(prefix="groundworks-property-%s-" % name, suffix=".json")
             with open(fd, "w", encoding="utf-8") as handle:
                 json.dump({"property": name, "seed": seed, "case": shrunk, "original_size": size(case)}, handle,
                           indent=1, default=str)

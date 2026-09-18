@@ -26,12 +26,12 @@ import urllib.request
 import pathlib as _pathlib, sys as _sys
 if __package__ in (None, ""):  # run as a plain script: make the repo root importable
     _sys.path.insert(0, str(next(d for d in _pathlib.Path(__file__).resolve().parents if (d / "pyproject.toml").exists())))
-from xscholar import access, assertions, config, gates, lens, originals, surreal_bin, temporal  # noqa: E402
-from xscholar import db as dbmod  # noqa: E402
-from xscholar import store as storemod  # noqa: E402
-from xscholar.mcp import adapter as contract  # noqa: E402
-from xscholar.mcp import code_state, instance_adapter, server  # noqa: E402
-from xscholar.pipeline import loader, write  # noqa: E402
+from groundworks import access, assertions, config, gates, lens, originals, surreal_bin, temporal  # noqa: E402
+from groundworks import db as dbmod  # noqa: E402
+from groundworks import store as storemod  # noqa: E402
+from groundworks.mcp import adapter as contract  # noqa: E402
+from groundworks.mcp import code_state, instance_adapter, server  # noqa: E402
+from groundworks.pipeline import loader, write  # noqa: E402
 try:  # discovery puts tests/ on the path; `python -m unittest tests.x` does not
     from test_independence_modes import mode_instance  # noqa: E402
     from test_assertions import EDGE, with_assertions  # noqa: E402
@@ -157,12 +157,12 @@ class HealthNotExecutedTests(unittest.TestCase):
         adapter = instance_adapter.create_adapter_for(self.inst, agent_db(self.root, self.inst, "loader_2", "loader"))
         inst = self.health(adapter)["instance"]
         self.assertTrue(str(inst["critiques_unanswered"]).startswith("NOT_EXECUTED"), inst["critiques_unanswered"])
-        self.assertIn("XSCHOLAR_ROLE", inst["critiques_unanswered"])
+        self.assertIn("GROUNDWORKS_ROLE", inst["critiques_unanswered"])
         self.assertEqual(inst["units"], 2)                    # rows it can see are a real count
 
     def test_the_launch_environment_gives_the_generic_adapter_its_credential_role(self):
         creds = access.provision(self.root, self.inst, "loader_3", "loader", provisioned_by="test")
-        env = dict(creds, XSCHOLAR_INSTANCE=str(DEMO))
+        env = dict(creds, GROUNDWORKS_INSTANCE=str(DEMO))
         saved = {k: instance_adapter.os.environ.get(k) for k in env}
         try:
             instance_adapter.os.environ.update(env)
@@ -228,7 +228,7 @@ class GateRefusalThroughToolsTests(unittest.TestCase):
         srv = serve(instance_adapter.create_adapter_for(inst, root, store=storemod.FileStore(tmp / "originals")))
         run_tool(srv, "claim_propose", {"slug": "pool", "claim": "the pool was exhausted"})
         self.assertRefused(run_tool(srv, "claim_confirm", {"slug": "pool", "unit_ids": ["u_bare"]}),
-                           "u_bare (NO original)", "xscholar.originals verify", absent=("whose grade is in",))
+                           "u_bare (NO original)", "groundworks.originals verify", absent=("whose grade is in",))
 
     def test_an_originals_refusal_before_the_datastore_names_the_original_to_restore(self):
         """The datastore still says integrity ok; the file is gone from the store. The adapter re-hashes first."""

@@ -8,7 +8,7 @@ a test that asserts nothing is the defect the whole harness exists to catch.
 """
 import unittest
 
-from xscholar.pipeline.agreement import kappa
+from groundworks.pipeline.agreement import kappa
 
 
 class CanaryTests(unittest.TestCase):
