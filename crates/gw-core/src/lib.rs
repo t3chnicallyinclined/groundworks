@@ -21,6 +21,7 @@ pub const ORACLE_COMMIT: &str = "94ad5dca0882121c71245dd644fe533743788655";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn the_oracle_is_pinned_to_one_tag_and_one_commit() {
@@ -28,5 +29,38 @@ mod tests {
         assert_eq!(ORACLE_TAG, "v0.2.0");
         assert_eq!(ORACLE_COMMIT.len(), 40);
         assert!(ORACLE_COMMIT.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// Minor finding (fix round, review of b2b7f99): this crate's only test asserted a constant
+    /// against its own literal, which cannot drift. The invariant that CAN drift is this constant
+    /// duplicated in `harness/differential.py` (`ORACLE_COMMIT = "..."`, next to `ORACLE_TAG = "..."`)
+    /// -- nothing enforced the two stayed equal. This reads the Python source (by path, relative to
+    /// this crate via CARGO_MANIFEST_DIR, so it works from any cwd) and checks both constants by a
+    /// plain string search, without needing a Python interpreter at test time.
+    #[test]
+    fn oracle_tag_and_commit_match_the_python_harness() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let harness = manifest_dir
+            .join("..")
+            .join("..")
+            .join("harness")
+            .join("differential.py");
+        let source = std::fs::read_to_string(&harness)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", harness.display()));
+
+        let extract = |needle: &str| -> String {
+            let line = source
+                .lines()
+                .find(|l| l.trim_start().starts_with(needle))
+                .unwrap_or_else(|| panic!("no line starting with {needle:?} in {}", harness.display()));
+            let (_, rest) = line.split_once('"').expect("no opening quote");
+            let (value, _) = rest.split_once('"').expect("no closing quote");
+            value.to_string()
+        };
+
+        assert_eq!(extract("ORACLE_TAG = "), ORACLE_TAG,
+                  "differential.py's ORACLE_TAG drifted from gw-core's ORACLE_TAG");
+        assert_eq!(extract("ORACLE_COMMIT = "), ORACLE_COMMIT,
+                  "differential.py's ORACLE_COMMIT drifted from gw-core's ORACLE_COMMIT");
     }
 }

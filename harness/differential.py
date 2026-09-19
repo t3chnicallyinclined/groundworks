@@ -47,13 +47,20 @@ the first recording, each with its reason below; overturning one needs a logged 
   (3) `bytes` at the TOP LEVEL of a transcript line is the harness's own length of that line's
       UNMASKED envelope. It is checked equal to that side's own recomputed length and then dropped.
       `data.bytes` inside an envelope (a document's size) is the engine's and is COMPARED.
-  (4) ENGINE_CODE_FIELDS (`engine_code`, `engine_code_warning`, and the `WARNING` that repeats it):
-      the identity and freshness of the PYTHON checkout the server started from. Not engine
-      behaviour, carries a measured duration and a timeout-dependent verdict, and a Rust candidate
-      has no Python checkout. Masked whole, and counted.
+  (4) ENGINE_CODE_VOLATILE_LEAVES, ONLY inside `engine_code` (and the free-text `engine_code_warning` /
+      `WARNING` strings, masked whole): `read_ms`, `kind`, `reason`, `branch`, `commit`, `dirty`,
+      `dirty_count`, `dirty_files` -- the two nested state dicts (`started_from`, `on_disk_now`) that
+      `code_state.read_state` produces. These, and only these, are a measured duration and a
+      git-timeout-dependent re-read a Rust candidate cannot reproduce. `verdict`, `writes`, `override`,
+      `problems`, `missing`, `checked` and the key set of `engine_code` itself are DETERMINISTIC engine
+      behaviour (this checkout is always the same clean commit) and are COMPARED, not masked. REVISED
+      2026-09-19 (fix round): the whole-subtree mask hid `override`/`checked` and let a candidate that
+      dropped the write-authorization guard entirely pass; narrowed to leaves.
   (5) LAUNCH PATHS, at RECORD time on both sides: the two absolute paths the HARNESS chose (the
       oracle checkout and the panel root) become <ORACLE_DIR> / <PANEL_ROOT> where a refusal text
-      quotes them back. They are the harness's inputs, not the engine's output.
+      quotes them back. They are the harness's inputs, not the engine's output. Counted as `path` in
+      the same counts dict as every other rule (fix round: it used to count only at record time and
+      print, with no comparable key -- `mask_transcript` now recounts the token occurrences it finds).
 
 Exit codes: 0 green, 1 a difference or a red arm that failed to go red, 2 not executed (the oracle
 is not pinned, a tool is missing, the datastore would not start).
@@ -93,13 +100,20 @@ DATETIME_FIELDS = ("learned_at", "created_at", "updated_at", "started_at", "ende
                    "verified_at")
 RANDOM_ID_FIELDS = ()          # see rule (2) above: the oracle generates none
 RUN_TOKEN_FIELDS = ("run",)    # patterns/edge_ids.py:32, "r%d" % time.time_ns()
-# Rule (4), ADDED 2026-09-19 with its reason. `engine_code` / `engine_code_warning` (and the `WARNING`
-# that repeats it) report the identity and freshness of the PYTHON ENGINE CHECKOUT this server started
-# from (groundworks/mcp/code_state.py). They are not engine behaviour: they carry a measured duration
-# (`read_ms`), a verdict that flips when a `git` re-read exceeds code_state.GIT_TIMEOUT_S=15 (seen on
-# this machine), and absolute paths -- and a Rust candidate has no Python checkout to report at all.
-# Masked whole, and counted, so a candidate that stops emitting the field fails the count check.
-ENGINE_CODE_FIELDS = ("engine_code", "engine_code_warning")
+# Rule (4), ADDED 2026-09-19, NARROWED 2026-09-19 (fix round, blocking finding 1). `engine_code` /
+# `engine_code_warning` (and the `WARNING` that repeats it) report the identity and freshness of the
+# PYTHON ENGINE CHECKOUT this server started from (groundworks/mcp/code_state.py). Only the LEAVES
+# below are not engine behaviour -- a measured duration (`read_ms`) and the state a `git` re-read
+# produces, which can flip when it exceeds code_state.GIT_TIMEOUT_S=15 (seen on this machine) -- and a
+# Rust candidate has no Python checkout to report at all. `verdict`, `writes`, `override`, `problems`,
+# `missing`, `checked` and the key set stay COMPARED: they are deterministic for this pinned checkout,
+# and masking them whole (the original rule) let a candidate silently drop the write-authorization
+# guard and still pass. `engine_code_warning` and `WARNING` are free-text strings that embed the same
+# volatile detail, so those two are still masked whole when present.
+ENGINE_CODE_CONTAINERS = ("engine_code",)
+ENGINE_CODE_WHOLE_STRING_FIELDS = ("engine_code_warning",)
+ENGINE_CODE_VOLATILE_LEAVES = ("read_ms", "kind", "reason", "branch", "commit",
+                               "dirty", "dirty_count", "dirty_files")
 ENGINE_CODE_WARNING_PREFIX = "WRITES ARE ALLOWED FROM UNVERIFIED ENGINE CODE"
 
 
@@ -142,9 +156,12 @@ def verify_oracle(tag=ORACLE_TAG):
     head = _git(["rev-parse", "HEAD"], ORACLE_DIR)
     if tag == ORACLE_TAG and head != ORACLE_COMMIT:
         raise NotExecuted("NOT EXECUTED: %s in %s is %s, not the pinned %s" % (tag, ORACLE_DIR, head, ORACLE_COMMIT))
-    dirty = _git(["status", "--porcelain", "--untracked-files=no"], ORACLE_DIR)
+    # blocking finding 2 (fix round): --untracked-files=no let an untracked file sit in the oracle
+    # checkout (ORACLE_DIR is on PYTHONPATH and is the child's cwd) and be imported by the child
+    # process without this check ever seeing it. Default untracked-file reporting catches it.
+    dirty = _git(["status", "--porcelain"], ORACLE_DIR)
     if dirty:
-        raise NotExecuted("NOT EXECUTED: the oracle checkout has uncommitted changes:\n%s" % dirty)
+        raise NotExecuted("NOT EXECUTED: the oracle checkout has uncommitted or untracked changes:\n%s" % dirty)
     return head
 
 
@@ -283,7 +300,12 @@ def child_env():
 
 
 def record_goldens(out_dir):
-    """Emit every golden into `out_dir` through a child process on the oracle."""
+    """Emit every golden into `out_dir` through a child process on the oracle.
+
+    Verifies the oracle itself (fix round, blocking finding 2): every path that emits goldens -- the
+    CLI, and the CONTROL recordings inside --self-test -- checks the pinned tag, not just the first
+    caller in the chain."""
+    verify_oracle()
     out_dir = pathlib.Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -308,6 +330,33 @@ def write_manifest(root):
              for p in golden_files(root)]
     with open(root / "MANIFEST.sha256", "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
+
+
+def verify_manifest(root):
+    """MANIFEST.sha256 against the golden files actually on disk under `root`. Minor finding (fix
+    round): the manifest was written and committed but never checked -- only its existence -- so it
+    looked like an integrity control and was not one. Returns a list of differences, empty if none."""
+    root = pathlib.Path(root)
+    manifest = root / "MANIFEST.sha256"
+    if not manifest.exists():
+        return ["%s is missing" % manifest]
+    recorded = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        digest, _, rel = line.partition("  ")
+        recorded[rel] = digest
+    actual = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+             for p in golden_files(root)}
+    out = []
+    for rel in sorted(set(recorded) - set(actual)):
+        out.append("MANIFEST lists missing file: %s" % rel)
+    for rel in sorted(set(actual) - set(recorded)):
+        out.append("MANIFEST is missing a file that exists: %s" % rel)
+    for rel in sorted(set(recorded) & set(actual)):
+        if recorded[rel] != actual[rel]:
+            out.append("MANIFEST hash mismatch for %s: manifest %s != actual %s" % (rel, recorded[rel], actual[rel]))
+    return out
 
 
 def diff_trees(left, right, left_name="oracle", right_name="candidate"):
@@ -344,11 +393,12 @@ FIXED_ENV = {
     "GROUNDWORKS_AGENT_ID": "harness_agent",
     "GROUNDWORKS_ROLE": "coordinator",
     "GROUNDWORKS_LENS": HARNESS_LENS,
-    # The oracle is a pinned TAG, so the server never starts on branch main and the code guard would
-    # refuse every write. The override keeps the guard's verdict out of the gate; `engine_code` is
-    # masked (rule 4) for the same reason.
-    "GROUNDWORKS_ALLOW_UNVERIFIED": "1",
     "TZ": "UTC",
+    # NO GROUNDWORKS_ALLOW_UNVERIFIED here (fix round, blocking finding 1). The oracle is a pinned tag,
+    # so the checkout is detached HEAD (branch "HEAD", never "main"): the code guard refuses every
+    # write with `rejected_by_gate`, on both recordings, deterministically. That refusal path is
+    # exactly what the `engine_guard_dropped` red arm proves the gate can see -- with the override set,
+    # a candidate that never implemented the guard at all would still pass.
 }
 
 # Rule (5), ADDED 2026-09-19 with its reason: absolute paths the HARNESS chose at launch (the oracle
@@ -370,6 +420,10 @@ def detokenize_paths(text):
                 text = text.replace(spelling, token)
     return text, count
 
+
+# The write tools this call script exercises (server.py WRITE_TOOLS is a superset; these are the ones
+# the CALL_SCRIPT below actually calls). Used by the `engine_guard_dropped` red arm.
+WRITE_TOOLS_IN_SCRIPT = ("critique_add", "critique_answer", "panel_submit")
 
 # The fixed call script over the v0.2.0 tool surface. Order and arguments are part of the gate.
 CALL_SCRIPT = [
@@ -393,9 +447,14 @@ CALL_SCRIPT = [
     ("critique_add", {"target": "no_such_conclusion", "head": "h", "verdict": "fatal"}),
     ("critique_add", {"target": "rc_pool_exhaustion", "head": "", "verdict": "fatal"}),
     ("claim_explain", {"claim_id": "rc_pool_exhaustion"}),
-    # <CRITIQUE_ID> is filled at record time with the id the ORACLE derives for the critique added
-    # above (write.py:143 via patterns/edge_ids.py:27). The answer only lands if the candidate derives
-    # the same id, so this call is the derived-id check.
+    # <CRITIQUE_ID> is filled at record time with the id the ORACLE would derive for the critique
+    # added above (write.py:143 via patterns/edge_ids.py:27), computed offline the same way the
+    # engine does, independent of whether the critique_add call above landed. Fix round: with the code
+    # guard no longer overridden, this critique_add is refused rejected_by_gate (this checkout is
+    # detached HEAD, never branch main), so this call is refused too, before the id is even looked up
+    # -- it is NOT the derived-id check any more. That check now lives in the `transcript_derived_id`
+    # red arm, against the critique the fixture's OWN build scenario (a read, never gated) already
+    # attacked rc_pool_exhaustion with (instances/demo-incident/adapter.py:157).
     ("critique_answer", {"critique": "<CRITIQUE_ID>", "answer": "the harness answers its own head"}),
     ("critique_answer", {"critique": "critique:no_such_critique", "answer": "x"}),
     ("panel_submit", {"run_dir": "no_such_run", "round": 1, "seat": "seat_security", "text": "x"}),
@@ -492,6 +551,8 @@ def _record_transcript(out_path):
 
 
 def record_transcript(out_path):
+    """Same verification requirement as `record_goldens` (fix round, blocking finding 2)."""
+    verify_oracle()
     run = subprocess.run([sys.executable, str(HERE / "differential.py"), "--_transcript", str(out_path)],
                          env=child_env(), cwd=str(ORACLE_DIR))
     if run.returncode != 0:
@@ -514,8 +575,12 @@ def _is_datetime(value):
         return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:?\d{2})?", value.strip()))
 
 
-def mask_envelope(node, counts):
-    """Rules (1) and (2), applied by FIELD NAME anywhere in the envelope. Returns a new object."""
+def mask_envelope(node, counts, in_engine_code=False):
+    """Rules (1), (2) and the narrowed (4), applied by FIELD NAME. `in_engine_code` is true only while
+    recursing INSIDE an `engine_code` subtree, so rule 4's leaf names cannot shadow an unrelated field
+    with the same name elsewhere in the envelope (fix round, blocking finding 1: the whole subtree used
+    to be replaced by one token, which also hid `override`/`checked`/the key set). Returns a new
+    object."""
     if isinstance(node, dict):
         out = {}
         for key, value in node.items():
@@ -528,15 +593,20 @@ def mask_envelope(node, counts):
             elif key in RUN_TOKEN_FIELDS and isinstance(value, str) and re.fullmatch(r"r\d{10,}", value):
                 counts["run_token"] = counts.get("run_token", 0) + 1
                 out[key] = "<run>"
-            elif key in ENGINE_CODE_FIELDS or (key == "WARNING" and isinstance(value, str)
+            elif key in ENGINE_CODE_WHOLE_STRING_FIELDS or (key == "WARNING" and isinstance(value, str)
                                                and value.startswith(ENGINE_CODE_WARNING_PREFIX)):
                 counts["engine_code"] = counts.get("engine_code", 0) + 1
                 out[key] = "<engine_code>"
+            elif in_engine_code and key in ENGINE_CODE_VOLATILE_LEAVES:
+                counts["engine_code"] = counts.get("engine_code", 0) + 1
+                out[key] = "<engine_code>"
+            elif key in ENGINE_CODE_CONTAINERS:
+                out[key] = mask_envelope(value, counts, in_engine_code=True)
             else:
-                out[key] = mask_envelope(value, counts)
+                out[key] = mask_envelope(value, counts, in_engine_code=in_engine_code)
         return out
     if isinstance(node, list):
-        return [mask_envelope(item, counts) for item in node]
+        return [mask_envelope(item, counts, in_engine_code=in_engine_code) for item in node]
     return node
 
 
@@ -546,10 +616,17 @@ class MaskError(Exception):
 
 def mask_transcript(path):
     """(masked lines, per-rule counts). Rule (3) is enforced here: `bytes` must equal this side's own
-    unmasked envelope length, and is then dropped."""
-    counts = {"datetime": 0, "random_id": 0, "run_token": 0, "engine_code": 0, "bytes_checked": 0}
+    unmasked envelope length, and is then dropped.
+
+    Rule (5) is counted here too (fix round, blocking finding 3 family): both sides already had their
+    launch paths replaced by `<ORACLE_DIR>` / `<PANEL_ROOT>` at RECORD time, so recounting those tokens
+    in the file gives a comparable `path` key in the same counts dict as every other rule -- previously
+    `path` had no key at all (RUST_PORT.md:126's "the two sides' counts must be equal" was false for it)."""
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    counts = {"datetime": 0, "random_id": 0, "run_token": 0, "engine_code": 0, "bytes_checked": 0,
+             "path": text.count("<ORACLE_DIR>") + text.count("<PANEL_ROOT>")}
     lines = []
-    for lineno, raw in enumerate(pathlib.Path(path).read_text(encoding="utf-8").splitlines(), start=1):
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         if not raw.strip():
             continue
         row = json.loads(raw)
@@ -613,12 +690,24 @@ def self_test(tag=ORACLE_TAG):
             bad = diff_trees(first, other, "run1", name.split(" vs ")[1])
             print("CONTROL goldens %-18s %d file(s): %s" % (name, n, "IDENTICAL" if not bad else "DIFFER"))
             failures += ["CONTROL %s: %s" % (name, d) for d in bad[:5]]
+        manifest_bad = verify_manifest(GOLDENS)
+        print("CONTROL manifest    %s" % ("VERIFIED" if not manifest_bad else "MISMATCH"))
+        failures += ["CONTROL manifest: %s" % d for d in manifest_bad[:5]]
         if not TRANSCRIPT.exists():
             raise NotExecuted("NOT EXECUTED: %s is missing. Run --record-transcript." % TRANSCRIPT.name)
-        for pas in (1, 2):
-            bad, lc, rc = diff_transcripts(TRANSCRIPT, TRANSCRIPT, "transcript", "itself")
-            print("CONTROL transcript pass %d: %s, masks %s" % (pas, "IDENTICAL" if not bad else "DIFFER", canon(lc)))
-            failures += ["CONTROL transcript: %s" % d for d in bad]
+        # blocking finding 3 (fix round): this used to diff the committed file against ITSELF, twice,
+        # which cannot fail and proves nothing about reproducibility (gate-discipline: run the CONTROL
+        # first, but a control has to be able to fail). Two FRESH recordings, each a throwaway DB and a
+        # freshly built demo graph, mirror the goldens CONTROL above: run1 vs run2, and run1 vs the
+        # committed golden.
+        run1 = record_transcript(tmp / "transcript_run1.jsonl")
+        run2 = record_transcript(tmp / "transcript_run2.jsonl")
+        lc = rc = None
+        for name, other in (("run1 vs run2", run2), ("run1 vs committed", TRANSCRIPT)):
+            bad, lc, rc = diff_transcripts(run1, other, "run1", name.split(" vs ")[1])
+            print("CONTROL transcript %-18s %s, masks %s vs %s"
+                 % (name, "IDENTICAL" if not bad else "DIFFER", canon(lc), canon(rc)))
+            failures += ["CONTROL transcript %s: %s" % (name, d) for d in bad]
         committed = json.loads(TRANSCRIPT_MASKS.read_text(encoding="utf-8")) if TRANSCRIPT_MASKS.exists() else None
         if committed is not None and committed != lc:
             failures.append("CONTROL transcript: recorded mask counts %s != committed %s" % (canon(lc), canon(committed)))
@@ -784,6 +873,61 @@ def self_test(tag=ORACLE_TAG):
             write_manifest(broken)
             return diff_trees(first, broken)
         arm("config_verdict_changed", config_verdict_changed)
+
+        # ---- fix round: the three NEW arms the reviewer's blocking findings demanded --------------
+
+        def engine_guard_dropped():
+            """A candidate that never implemented the write-authorization guard: its first write call
+            LANDS (status ok) instead of being refused `rejected_by_gate`. With rule 4 narrowed to
+            leaves (blocking finding 1), the whole `engine_code` shape -- including `override` and
+            `checked`, which used to be hidden inside the old whole-subtree mask -- is compared, so
+            this must be caught even without inspecting `status` at all; we still change `status` too
+            because that IS what "the write landed" means on the wire."""
+            broken, state = spoil_first_key("engine_guard_dropped", "status", lambda v: "ok",
+                                            where=lambda v: v == "rejected_by_gate")
+
+            def is_write_call(raw):
+                row = json.loads(raw)
+                return row.get("tool") in WRITE_TOOLS_IN_SCRIPT
+
+            if not any(is_write_call(r) for r in TRANSCRIPT.read_text(encoding="utf-8").splitlines() if r.strip()):
+                raise NotExecuted("NOT EXECUTED: no write-tool call appears in the transcript; the call "
+                                  "script no longer exercises the guard")
+            bad = diff_transcripts(TRANSCRIPT, broken)[0]
+            return ["(call %s: a write tool's rejected_by_gate -> ok, as a guardless candidate would "
+                    "report) %s" % (state["call"], d) for d in bad if d.startswith("TRANSCRIPT")]
+        arm("engine_guard_dropped", engine_guard_dropped)
+
+        def poisoned_oracle_untracked_file():
+            """Blocking finding 2's proof, kept as a permanent arm: an untracked file dropped into the
+            oracle checkout (on PYTHONPATH, the child's cwd) must make verify_oracle refuse, not just
+            get caught later by a byte diff against the committed tree."""
+            plant = ORACLE_DIR / "sitecustomize.py"
+            if plant.exists():
+                raise NotExecuted("NOT EXECUTED: %s already exists; the arm cannot tell its own plant "
+                                  "from a real file" % plant)
+            plant.write_text("# planted by the poisoned_oracle_untracked_file red arm\n", encoding="utf-8")
+            try:
+                verify_oracle()
+                return []                                    # verify_oracle did NOT refuse: BAD
+            except NotExecuted as exc:
+                return [str(exc)]
+            finally:
+                plant.unlink(missing_ok=True)
+        arm("poisoned_oracle_untracked_file", poisoned_oracle_untracked_file)
+
+        def masks_json_disagrees():
+            """Blocking finding 3's masks.json half: a committed masks.json that disagrees with the
+            counts a fresh recording actually measures must be caught, the same way the CONTROL's own
+            comparison above catches it -- proven here by tampering a COPY of the committed counts and
+            re-running the same comparison the CONTROL uses."""
+            tampered = dict(committed) if committed is not None else dict(lc)
+            key = next(iter(tampered))
+            tampered[key] = tampered[key] + 1
+            if tampered == lc:
+                raise NotExecuted("NOT EXECUTED: the tampered counts still equal what was measured")
+            return ["CONTROL transcript: recorded mask counts %s != committed %s" % (canon(lc), canon(tampered))]
+        arm("masks_json_disagrees", masks_json_disagrees)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -807,6 +951,9 @@ def main(argv=None):
     parser.add_argument("--record-transcript", action="store_true")
     parser.add_argument("--twice", action="store_true", help="with --record-transcript: record twice on a fresh "
                                                              "DB each time and diff after the mask")
+    parser.add_argument("--force-masks", action="store_true",
+                       help="with --record-transcript: overwrite a committed masks.json that disagrees, "
+                            "instead of refusing")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--mcp", action="store_true", help="replay the call script against a candidate")
     parser.add_argument("--candidate", help="the candidate binary (with --mcp)")
@@ -839,8 +986,20 @@ def main(argv=None):
             verify_oracle(args.oracle)
             record_transcript(TRANSCRIPT)
             _, counts = mask_transcript(TRANSCRIPT)
-            with open(TRANSCRIPT_MASKS, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(json.dumps(counts, indent=2, sort_keys=True) + "\n")
+            # blocking finding 3 (fix round): this used to overwrite masks.json with whatever it just
+            # measured, so a re-record could never disagree with "the committed counts" -- the check at
+            # self_test's CONTROL was comparing a file to a copy of its own last write. Refuse instead,
+            # unless there is nothing committed yet (first --record-transcript ever) or --force-masks.
+            if TRANSCRIPT_MASKS.exists() and not args.force_masks:
+                committed = json.loads(TRANSCRIPT_MASKS.read_text(encoding="utf-8"))
+                if committed != counts:
+                    print("REFUSED: measured mask counts %s disagree with committed %s (%s). Re-run with "
+                          "--force-masks only after confirming the disagreement is expected."
+                          % (canon(counts), canon(committed), TRANSCRIPT_MASKS.name))
+                    return 1
+            else:
+                with open(TRANSCRIPT_MASKS, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(json.dumps(counts, indent=2, sort_keys=True) + "\n")
             print("wrote %s (mask counts %s)" % (TRANSCRIPT.name, canon(counts)))
             if args.twice:
                 again = TRANSCRIPT.with_suffix(".second.jsonl")
