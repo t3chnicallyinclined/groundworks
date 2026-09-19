@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "groundworks"
-version = "0.1.0.dev1"
+version = "0.2.0"
 description = "Evidence-gated knowledge graph built by exhaustive, verified agent reading, viewed through expert lenses."
 readme = "README.md"
 requires-python = ">=3.11"

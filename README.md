@@ -1,4 +1,4 @@
-# Groundworks (working name)
+# Groundworks
 
 A method and engine for making AI agents reliably expert in one large body of material with a stated goal:
 - **Agents read all of it, under mechanical checks.** Their judgments go into a knowledge graph whose database refuses to treat anything as established without evidence of sufficient rank.
@@ -7,10 +7,10 @@ A method and engine for making AI agents reliably expert in one large body of ma
 
 Descriptive term: **evidence-gated knowledge graph built by exhaustive, verified agent reading.**
 
-## Status (2026-09-16) -- v0.2, feature complete
+## Status (2026-09-19) -- v0.2.0, tagged
 
 - **Method written down:** `docs/METHOD.md`. **Upgrading from an older checkout:** [`UPGRADING.md`](UPGRADING.md).
-- **424 tests, 0 skipped**, plus a license check, a config/skills drift check and a privacy scan, all run by `groundworks test` and summarised by name so a check that did NOT run is visible rather than green.
+- **752 tests, 0 skipped** (at the v0.2.0 tag), plus a license check, a config/skills drift check and a privacy scan, all run by `groundworks test` and summarised by name so a check that did NOT run is visible rather than green.
 - **The graph's shape belongs to the instance:** declare your own node tables and edge types in `instance.yaml` and they get schema, gate traversals, all three probe kinds, cleanup, per-role PERMISSIONS and a write path -- with no engine change.
 - **Gates are probed in both directions and pinned to a committed baseline**, so a rule that is quietly loosened fails the run instead of reporting `0 misbehaved`.
 - **First instance built and running privately:** an appellate case record. 9,101 units read by 77 agents; 77 of 77 chunks passed the verbatim validator.
