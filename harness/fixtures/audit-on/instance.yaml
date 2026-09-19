@@ -1,0 +1,225 @@
+# FIXTURE (groundworks/harness/fixtures/audit-on) -- NOT an oracle instance.
+# demo-incident's config with the two audit features the demo leaves OFF turned ON, so the
+# differential gate covers the emitters that are empty for every instance the oracle ships:
+#   gates.independence_surql, gates.independence_mode_surql, gates.writer_record_surql,
+#   promotion_log.log_surql. Only three lines differ from instances/demo-incident/instance.yaml
+# at v0.2.0 (94ad5dc): the instance id, `independent: {between: principal}` on the conclusion
+# rule, and `promotion_log: true` (with promotion_log added to human_owned).
+# Demo instance: an incident postmortem. Synthetic data, no real service, no personal data.
+# Purpose: a complete, runnable, NON-LEGAL instance that proves the engine is domain-free.
+
+instance:
+  id: audit_on
+  goal: "Establish the root cause of the checkout outage, provable from the incident record"
+  holder: "the service team"
+  off_limits: ["customer personal data", "speculation about individuals"]
+
+units:
+  - name: log_line
+    locator_fields: [host, file, line, ts]
+    chunk_size: 200
+  - name: change
+    locator_fields: [repo, commit, ts]
+    chunk_size: 50
+  - name: metric_point
+    locator_fields: [series, ts]
+    chunk_size: 200
+
+fidelity:
+  # official_text: read in the vendor's or platform's own published text, not in someone's summary
+  # of it. The authority rule below is what makes that grade mean something.
+  order: [official_text, original_log, exported_metric, agent_summary, recollection]
+  confirming: [official_text, original_log, exported_metric]
+  agent_grades: [agent_summary]
+
+status:
+  values: [in_window, out_of_window, redacted]
+  usable: [in_window]
+
+vocabulary:
+  tiers: [0, 1, 2, 3]
+  directions: [for_goal, against_goal, mixed, neutral]
+  issues: [saturation, dependency, deploy, config, monitoring, capacity]
+  targets: [rc_pool_exhaustion, rc_bad_deploy, rc_upstream_timeout]
+  roles: [error, warning, metric, change, note]
+
+# Node tables and edge types this instance adds to the ones the engine ships with. Both sections are
+# optional. A declared name that collides with a built-in, or an edge whose end is not a table, is
+# refused by name at load time. Everything downstream treats what is declared here exactly as it
+# treats a built-in: schema and enumerated fields, gate clauses, PERMISSIONS per access role, and
+# probes in both directions (refused without the evidence, accepted with it).
+#
+#   tables:
+#     event:
+#       fields: {when: string, summary: string}
+edges:
+  # V2-8. Something recorded the observation a conclusion rests on, at the time, and says how.
+  # `not_captured` is the recorded exception: nothing captured it and a human said so in the graph,
+  # which the readiness rule accepts and which stays visible on the edge.
+  preserves:
+    from: unit
+    to: conclusion
+    fields:
+      how: {type: string, one_of: [alert, dashboard, manual_note, not_captured]}
+  # V2-9. Where an authority's text was actually read. `cites` joins fact and unit, so an authority
+  # needs its own edge; the gate below is what makes it mean "read in the official text".
+  verified_from:
+    from: authority
+    to: unit
+    fields:
+      read_by: string
+
+# A rule may also say `independent: true`: the change it gates may then only be made by a signed-in
+# credential that has not written the row. The datastore records who wrote each row from `$auth` (the
+# caller cannot set it), so a proposer can never promote its own row, root can never promote at all,
+# and a row only root has written has no proposer to be independent of and is refused until a
+# credential has written it. It needs `access:` below. Probed both ways: refused from the row's own
+# writer and from root, accepted from a second credential.
+#
+#   - id: confirmed_needs_source_grade
+#     ...
+#     independent: true
+#
+# Not switched on in this demo yet: every flow here that confirms a fact (the scenario in adapter.py
+# and several suites) writes and confirms under one identity or as root, and would need a second
+# credential first. That is the owner's call (gates are human-owned).
+gates:
+  - id: confirmed_needs_source_grade
+    table: fact
+    field: status
+    value: confirmed
+    requires:
+      - edge: cites
+        to: [unit]
+        where: "grade IN $confirming AND status IN $usable"
+        min: 1
+  - id: root_cause_needs_support_and_attack
+    table: conclusion
+    field: ready
+    value: true
+    independent: {between: principal, own_evidence: false}
+    requires:
+      - edge: supports
+        to: [fact]
+        min: 1
+      - edge: attacks
+        min: 1
+      - edge: preserves        # V2-8: nothing is ready on an observation nobody recorded at the time
+        from: [unit]
+        min: 1
+    forbids:
+      - edge: attacks
+        where: "verdict = 'fatal'"
+      - edge: attacks
+        where: "verdict = 'damaging' AND answered = false"
+  - id: authority_verified_needs_official_text
+    table: authority
+    field: verified
+    value: true
+    requires:
+      - edge: verified_from    # V2-9: the existence of a citation verifies nothing
+        to: [unit]
+        where: "grade = 'official_text' AND status IN $usable"
+        min: 1
+
+# Fields no two rows of a table may share, on a built-in or a declared node table: one unique index per
+# field in the datastore. A field the table does not have is refused by name at load time. Probed both
+# ways: a second row with the same value is refused by that field's own index, a different value is
+# accepted. The comparison is exact -- case and whitespace count -- so it stops a copied row, not a
+# differently typed one.
+unique:
+  authority: [citation]
+
+# Lenses (docs/METHOD.md section 7). A perspective or discipline lens becomes a datastore view
+# lens_<name> over label joined to its unit; its standard may be stricter than the base gates, never
+# looser (statuses within status.usable, grades within fidelity.confirming); its filter is over label
+# fields only. A framework lens files every labelled unit under transcribed frame nodes via the crosswalk.
+lenses:
+  - name: service_owner
+    kind: perspective
+    charter: "Owns the service; wants the true cause; hurt by a wrong fix; asks: what changed, what saturated, what would have caught it"
+    standard: {status: [in_window]}
+    filter: "tier >= 2"
+    backing: prompt
+    signed: false        # no human has signed this charter, so it stays prompt-backed
+  - name: security
+    kind: discipline
+    charter: "Thinks in trust boundaries and configuration drift; wants every config or dependency change named; hurt by a cause that hides a control gap"
+    standard: {status: [in_window], grade: [original_log]}
+    filter: "issues CONTAINS 'config' OR issues CONTAINS 'dependency'"
+    backing: prompt
+  - name: management
+    kind: perspective
+    charter: "Decides what to fund next; wants only material that survives review; hurt by noise"
+    filter: "tier >= 2"
+    backing: prompt
+  - name: incident_framework
+    kind: framework
+    charter: "Files every labelled unit under the review template's headings"
+    frame:
+      source: "Incident review template v3, section 2"
+      nodes: [trigger, propagation, detection, mitigation, prevention]
+    crosswalk: {trigger: [deploy, config], propagation: [saturation, dependency, capacity], detection: [monitoring], mitigation: [], prevention: [config, monitoring]}
+    backing: prompt
+    signed: false        # no human has signed this charter, so it stays prompt-backed
+
+roles:
+  - skill: red-team
+    lenses: [service_owner, security, management]
+    panel:
+      options: [survives, damaged, fatal]
+      objection_categories: [evidence, timeline, alternative_cause, blast_radius, prevention, monitoring]
+      weighted_seat: null
+
+evaluator:
+  # regression_file: a relative path resolves against THE FOLDER THIS instance.yaml IS IN, not the repository
+  # root and not the working directory (groundworks/config.py regression_file_path); an absolute path is taken as it
+  # is. The pinned id list beside it (<name>.ids.json) resolves the same way.
+  regression_file: evals/known_errors.json
+  gate_probes: generated
+  label_agreement:
+    sample_chunks: 2
+    adjudicate: true
+
+
+# What each critique verdict MEANS here. The names are an engine constant; what separates them is a
+# judgement about this instance's risk, so it is the owner's to write and no role may turn it.
+# Measured on the first real instance: of 53 `fatal` verdicts, 32 came from one role mapping its own
+# three review options onto these three by position -- a reviewer saying "not on this draft" was
+# recorded as permanently terminal. Under the readiness gate below, `fatal` has no `answered` escape.
+verdicts:
+  fatal: "Nothing could cure this: no rewrite and no further evidence. It ends the conclusion, and it has no answered escape in the readiness gate. Not for a conclusion that is merely unsupported as written."
+  damaging: "A real problem that blocks readiness until it is answered on the record. Use it for anything curable by better evidence, a narrower claim or a rewrite, including not as currently written. Most surviving heads belong here."
+  survivable: "Worth recording so the next reader sees it was considered, but it does not block. A weakness the conclusion can carry."
+
+# Originals (groundworks/originals.py, groundworks/store.py). Every unit links to the exact bytes it was extracted
+# from, kept in this instance's content-addressed store (a directory beside this file, git-ignored by the
+# store itself). `required`: intake refuses a unit with no original, by name. `transition` keeps such units
+# and names every one in health. In both, a gated promotion counts only units whose original is verified.
+# `spans` says how a unit's locator cuts its span out of the original, so a label's quote is checked against
+# the original and not only against the extracted text: `line: <field>`, `lines: [from, to]`,
+# `chars: [start, end]` or `whole: true`. A unit type with no span is counted as not checkable.
+originals:
+  mode: required
+  store: originals
+  spans:
+    log_line: {line: line}
+    change: {whole: true}
+
+human_owned: [gates, fidelity, status, evaluator, privacy, verdicts, unique, originals, promotion_log]
+
+promotion_log: true
+
+privacy:
+  deny_list: "~/.groundworks/denylist.txt"
+  providers_allowed: ["the model provider the owner approved"]
+
+# Per-agent datastore credentials (groundworks/access.py): a role SELECTs only `read`, writes only `write`;
+# a lens_bound role writes lens-carrying rows only under its own lens; only loader writes labels;
+# DELETE is root-only. Gates stay in force for every role.
+access:
+  roles:
+    reader:      {read: [unit, document, label, fact, conclusion, critique, answer], write: [fact, cites, supports]}
+    seat:        {read: [unit, label, fact, conclusion, critique, answer], write: [critique, attacks, answer, answers], lens_bound: true}
+    loader:      {read: [unit, document, label, conclusion], write: [unit, document, label, bears_on, conclusion]}
+    coordinator: {read: [unit, document, label, fact, conclusion, critique, answer], write: [fact, cites, supports, critique, attacks, answer, answers, conclusion, preserves]}

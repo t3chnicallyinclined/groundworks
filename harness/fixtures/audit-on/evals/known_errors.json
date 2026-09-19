@@ -1,0 +1,88 @@
+{
+ "format": "groundworks.known_errors/1",
+ "doc": "HUMAN-OWNED (instance.yaml human_owned: evaluator). The errors this instance has actually made, each checked again by `python -m groundworks.evaluator instances/demo-incident --memory 0` and by `groundworks test`. Entries may be added; removing, weakening or editing one takes a human. Every entry is a defect CONFIRMED in a commit message as measured on this instance's own corpus, labels, vocabulary or config -- none is invented to fill the file. Synthetic data only.",
+ "entries": [
+  {
+   "id": "KE001",
+   "error": "A load given a labels directory with no *.jsonl files returned success and deleted every bears_on edge in the scope",
+   "found": {
+    "commit": "34960cf",
+    "how": "architect audit asking whether a check can pass without doing its work",
+    "measured": "on the demo instance's own units and labels: run 1 real labels {'labels': 66, 'edges': 79, 'swept': 0}, bears_on 79; run 2 EMPTY dir {'labels': 0, 'edges': 0, 'swept': 79}, bears_on 0, no exception. After the fix bears_on stays 79 through an empty directory, a missing directory and a directory holding only .json files."
+   },
+   "added": "2026-09-16",
+   "check": {
+    "kind": "loads",
+    "steps": [
+     {"load": {"labels": "fixture"}},
+     {"count": {"table": "bears_on", "as": "edges", "require_min": 1}},
+     {"load": {"labels": "empty_dir"}},
+     {"expect_count": {"table": "bears_on", "equals": "$edges"}},
+     {"expect_load": {"key": "swept", "equals": 0}},
+     {"load": {"labels": "wrong_extension"}},
+     {"expect_count": {"table": "bears_on", "equals": "$edges"}},
+     {"load": {"labels": "missing_dir", "raises": "LoadError"}},
+     {"expect_count": {"table": "bears_on", "equals": "$edges"}}
+    ]
+   }
+  },
+  {
+   "id": "KE002",
+   "error": "A routine reload silently put a human correction of a unit's status back to the source value, with no report",
+   "found": {
+    "commit": "a330b34",
+    "how": "reported from beta testing on a real instance, then reproduced in this engine on the demo vocabulary before fixing",
+    "measured": "after first load status 'redacted'; after a human corrects: 'in_window'; after a routine reload: 'redacted' -- correction silently reverted. After the fix: 'in_window', conflicts reported 1, and accept_source names the pair to let the source win."
+   },
+   "added": "2026-09-16",
+   "check": {
+    "kind": "loads",
+    "steps": [
+     {"load": {"labels": "fixture"}},
+     {"expect_unit": {"unit": "log_0001", "field": "status", "equals": "out_of_window"}},
+     {"correct": {"unit": "log_0001", "field": "status", "value": "in_window", "by": "reviewer_1"}},
+     {"load": {"labels": "fixture"}},
+     {"expect_unit": {"unit": "log_0001", "field": "status", "equals": "in_window"}},
+     {"expect_load": {"key": "conflicts", "equals": 1}},
+     {"load": {"labels": "fixture", "accept_source": [["log_0001", "status"]]}},
+     {"expect_unit": {"unit": "log_0001", "field": "status", "equals": "out_of_window"}},
+     {"expect_load": {"key": "accepted", "equals": 1}}
+    ]
+   }
+  },
+  {
+   "id": "KE003",
+   "error": "A fatal critique verdict could never be downgraded: re-stating the head created a second critique row, so the fatal one kept blocking readiness forever",
+   "found": {
+    "commit": "7733fd5",
+    "how": "a real instance reported 3 of 3 points blocked by fatal heads; confirmed in this engine under the demo config's readiness gate and lens_skeptic",
+    "measured": "1st critique:c1__lens_skeptic__476d2269 fatal; 2nd critique:c1__lens_skeptic__49a218dc survivable -> TWO rows, the fatal still blocking; new session, same head -> DbError: Database record already exists."
+   },
+   "added": "2026-09-16",
+   "check": {
+    "kind": "writes",
+    "writers": {
+     "reader": {"role": "reader", "lens": null},
+     "seat": {"role": "seat", "lens": "lens_skeptic"},
+     "coordinator": {"role": "coordinator", "lens": null}
+    },
+    "setup": [
+     "CREATE unit:ke003_u1 SET type = 'log_line', text = 'pool exhausted: waited 30000ms for connection (pool max 50)', locator = {host: 'api-1', file: 'app.log', line: 1, ts: '2026-03-04T11:40:00Z'}, status = 'in_window', grade = 'original_log', hash = 'ke003'",
+     "CREATE conclusion:ke003_c1 SET statement = 'the pool was exhausted by retry volume', ready = false"
+    ],
+    "steps": [
+     {"as": "reader", "op": "propose", "args": ["ke003_f1", "The pool was exhausted from 11:40"], "expect": "accepted"},
+     {"as": "reader", "op": "confirm", "args": ["ke003_f1", ["ke003_u1"]], "expect": "accepted"},
+     {"as": "reader", "op": "support", "args": ["ke003_f1", "ke003_c1"], "expect": "accepted"},
+     {"as": "coordinator", "op": "relate", "args": ["preserves", "ke003_u1", "ke003_c1"], "kwargs": {"how": "alert"}, "expect": "accepted"},
+     {"as": "seat", "op": "critique", "args": ["ke003_c1", "a slow query could have filled the pool", "fatal"], "save": "head", "expect": "accepted"},
+     {"as": "coordinator", "op": "mark_ready", "args": ["ke003_c1"], "expect": "refused"},
+     {"as": "seat", "op": "critique", "args": ["ke003_c1", "a slow query could have filled the pool", "damaging"], "expect": "accepted"},
+     {"as": "coordinator", "op": "mark_ready", "args": ["ke003_c1"], "expect": "refused"},
+     {"as": "coordinator", "op": "answer", "args": ["$head", "query p99 stayed flat; the pool filled from retry volume"], "expect": "accepted"},
+     {"as": "coordinator", "op": "mark_ready", "args": ["ke003_c1"], "expect": "accepted"}
+    ]
+   }
+  }
+ ]
+}

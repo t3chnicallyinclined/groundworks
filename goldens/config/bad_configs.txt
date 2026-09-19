@@ -1,0 +1,57 @@
+# tests/test_config.py bad-config fixtures at v0.2.0: verdict and verbatim error
+test_config.py:131  REFUSE  broken(surprise="x")  ->  ConfigError: unknown top-level key(s): surprise; allowed: access, assertions, authority, discovery, edges, embed, evaluator, fidelity, gates, human_owned, instance, labels, lenses, originals, panel, present, privacy, promotion_log, roles, staleness, status, tables, unique, units, verdicts, vocabulary
+test_config.py:132  REFUSE  broken(gates=config.ConfigError)  ->  ConfigError: missing required section: gates
+test_config.py:133  REFUSE  broken(instance__id="Toy Instance")  ->  ConfigError: config invalid:
+  - instance.id 'Toy Instance' must match [a-z0-9_]+
+test_config.py:134  REFUSE  broken(units=[])  ->  ConfigError: config invalid:
+  - units must be a non-empty list
+test_config.py:135  REFUSE  broken(units=[{"name": "line", "locator_fields": ["f"], "chunk_size": 0}])  ->  ConfigError: config invalid:
+  - unit line needs a positive chunk_size
+test_config.py:137  REFUSE  broken(units=[{"name": "line", "chunk_size": 5}])  ->  ConfigError: config invalid:
+  - unit line needs locator_fields a program can resolve
+test_config.py:138  REFUSE  broken(fidelity__confirming=["source", "extract", "agent"])  ->  ConfigError: config invalid:
+  - fidelity.confirming cannot be every grade: some grade must be unable to establish
+  - agent output may never confirm: agent is in both confirming and agent_grades
+test_config.py:140  REFUSE  broken(fidelity__confirming=["source", "agent"])  ->  ConfigError: config invalid:
+  - agent output may never confirm: agent is in both confirming and agent_grades
+test_config.py:141  REFUSE  broken(fidelity__confirming=["nope"])  ->  ConfigError: config invalid:
+  - fidelity.confirming not in order: nope
+test_config.py:142  REFUSE  broken(status__usable=["in", "out"])  ->  ConfigError: config invalid:
+  - status.usable cannot be every status: 'true but unusable' must be expressible
+test_config.py:143  REFUSE  broken(status__usable=["elsewhere"])  ->  ConfigError: config invalid:
+  - status.usable not in values: elsewhere
+test_config.py:144  REFUSE  broken(vocabulary__tiers=[1, 2, 3])  ->  ConfigError: config invalid:
+  - vocabulary.tiers must start at 0 (noise)
+test_config.py:145  REFUSE  broken(vocabulary__tiers=[0, 3, 2])  ->  ConfigError: config invalid:
+  - vocabulary.tiers must ascend
+test_config.py:146  REFUSE  broken(vocabulary__issues=[])  ->  ConfigError: config invalid:
+  - vocabulary.issues must be a non-empty list
+test_config.py:147  REFUSE  broken(gates=[])  ->  ConfigError: config invalid:
+  - gates must be a non-empty list: a graph with no gate is not gated
+test_config.py:148  REFUSE  broken(gates=[{"id": "g1", "table": "fact", "field": "status", "value": "confirmed"}])  ->  ConfigError: config invalid:
+  - gate g1 requires or forbids nothing
+test_config.py:150  REFUSE  broken(human_owned=["gates"])  ->  ConfigError: config invalid:
+  - human_owned must include fidelity, status, evaluator, privacy (CLAUDE.md rule 6)
+test_config.py:151  REFUSE  broken(evaluator={})  ->  ConfigError: config invalid:
+  - evaluator needs a regression_file: the errors this project has actually made
+test_config.py:173  FIXTURE-RAISED NameError: name 'section' is not defined
+test_config.py:178  REFUSE  broken(tables={"event": {"fields": {"a": "string"}}}, edges={"event": {"from": "unit", "to": "fact"}})  ->  ConfigError: config invalid:
+  - edges.event: 'event' is already declared under tables; a name is one thing or the other
+test_config.py:184  REFUSE  broken(edges={"mentions": {"from": "unit", "to": "evnt"}})  ->  ConfigError: config invalid:
+  - edges.mentions: to names unknown table 'evnt'; declare it under tables: or name one of answer, authority, conclusion, critique, document, fact, label, unit
+test_config.py:190  REFUSE  broken(edges={"mentions": {"from": "cites", "to": "fact"}})  ->  ConfigError: config invalid:
+  - edges.mentions: from names 'cites', which is an edge type, not a node table; known tables: answer, authority, conclusion, critique, document, fact, label, unit
+test_config.py:192  REFUSE  broken(edges={"mentions": {"from": "unit"}})  ->  ConfigError: config invalid:
+  - edges.mentions: to must name the table this edge ends at
+test_config.py:194  ACCEPT  broken(tables={"event": {"fields": {"when": "string"}}}, edges={"mentions": {"from": "unit", "to": "event"}})
+test_config.py:199  FIXTURE-RAISED NameError: name 'fields' is not defined
+test_config.py:206  REFUSE  broken(tables={"event": {"fields": {}}})  ->  ConfigError: config invalid:
+  - tables.event: fields must be a non-empty mapping of name -> type
+test_config.py:207  REFUSE  broken(edges={"mentions": {"from": "unit", "to": "fact", "fields": {"in": "string"}}})  ->  ConfigError: config invalid:
+  - edges.mentions: field 'in' is owned by the datastore on a relation table
+test_config.py:214  ACCEPT  broken(tables={"event": {"fields": {"when": "string"}}}, edges={"mentions": {"from": "unit", "to": "event"}}, access={"roles": {"reader": {"read": ["unit", "event", "mentions"], "write": ["event", "mentions"]}}})
+test_config.py:223  REFUSE  broken(access={"roles": {"reader": {"read": ["unit", "event"]}}})  ->  ConfigError: config invalid:
+  - access role reader names unknown table(s) event; known: unit, label, fact, conclusion, authority, critique, answer, document, cites, supports, undercuts, attacks, answers, bears_on, relies_on
+test_config.py:228  REFUSE  broken(human_owned=["gates"], vocabulary__tiers=[1, 2])  ->  ConfigError: config invalid:
+  - vocabulary.tiers must start at 0 (noise)
+  - human_owned must include fidelity, status, evaluator, privacy (CLAUDE.md rule 6)

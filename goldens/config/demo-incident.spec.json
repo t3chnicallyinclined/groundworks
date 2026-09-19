@@ -1,0 +1,95 @@
+{
+  "edges": {
+    "attacks": {
+      "from": "critique",
+      "to": "conclusion"
+    },
+    "cites": {
+      "from": "fact",
+      "to": "unit"
+    },
+    "preserves": {
+      "from": "unit",
+      "to": "conclusion"
+    },
+    "supports": {
+      "from": "fact",
+      "to": "conclusion"
+    },
+    "verified_from": {
+      "from": "authority",
+      "to": "unit"
+    }
+  },
+  "instance": "demo_incident",
+  "rules": {
+    "authority_verified_needs_official_text": {
+      "clauses": [
+        {
+          "edge": "verified_from",
+          "kind": "requires",
+          "min": 1,
+          "where": "grade = 'official_text' AND status IN ['in_window']"
+        }
+      ],
+      "field": "verified",
+      "table": "authority",
+      "value": true
+    },
+    "confirmed_needs_source_grade": {
+      "clauses": [
+        {
+          "edge": "cites",
+          "kind": "requires",
+          "min": 1,
+          "where": "grade IN ['official_text', 'original_log', 'exported_metric'] AND status IN ['in_window']"
+        }
+      ],
+      "field": "status",
+      "table": "fact",
+      "value": "confirmed"
+    },
+    "root_cause_needs_support_and_attack": {
+      "clauses": [
+        {
+          "edge": "attacks",
+          "kind": "forbids",
+          "min": 1,
+          "where": "verdict = 'damaging' AND answered = false"
+        },
+        {
+          "edge": "attacks",
+          "kind": "forbids",
+          "min": 1,
+          "where": "verdict = 'fatal'"
+        },
+        {
+          "edge": "attacks",
+          "kind": "requires",
+          "min": 1,
+          "where": null
+        },
+        {
+          "edge": "preserves",
+          "kind": "requires",
+          "min": 1,
+          "where": null
+        },
+        {
+          "edge": "supports",
+          "kind": "requires",
+          "min": 1,
+          "where": null
+        }
+      ],
+      "field": "ready",
+      "table": "conclusion",
+      "value": true
+    }
+  },
+  "unique": {
+    "authority": [
+      "citation"
+    ]
+  }
+}

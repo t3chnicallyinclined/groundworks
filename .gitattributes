@@ -1,0 +1,7 @@
+# The goldens are compared BYTE FOR BYTE against what the oracle emits, and the oracle emits LF.
+# core.autocrlf is true on this machine, so without this every fresh checkout would hand the gate
+# CRLF goldens and `--self-test` would go red on line endings alone.
+goldens/** -text
+harness/** -text
+docs/** -text
+crates/** -text

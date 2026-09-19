@@ -1,0 +1,63 @@
+{
+  "edges": {
+    "attacks": {
+      "from": "critique",
+      "to": "conclusion"
+    },
+    "cites": {
+      "from": "fact",
+      "to": "unit"
+    },
+    "supports": {
+      "from": "fact",
+      "to": "conclusion"
+    }
+  },
+  "instance": "example_instance",
+  "rules": {
+    "conclusion_ready": {
+      "clauses": [
+        {
+          "edge": "attacks",
+          "kind": "forbids",
+          "min": 1,
+          "where": "verdict = 'damaging' AND answered = false"
+        },
+        {
+          "edge": "attacks",
+          "kind": "forbids",
+          "min": 1,
+          "where": "verdict = 'fatal'"
+        },
+        {
+          "edge": "attacks",
+          "kind": "requires",
+          "min": 1,
+          "where": null
+        },
+        {
+          "edge": "supports",
+          "kind": "requires",
+          "min": 1,
+          "where": null
+        }
+      ],
+      "field": "ready",
+      "table": "conclusion",
+      "value": true
+    },
+    "confirmed_needs_source_grade": {
+      "clauses": [
+        {
+          "edge": "cites",
+          "kind": "requires",
+          "min": 1,
+          "where": "grade IN ['original', 'text_extract'] AND status IN ['usable']"
+        }
+      ],
+      "field": "status",
+      "table": "fact",
+      "value": "confirmed"
+    }
+  }
+}
