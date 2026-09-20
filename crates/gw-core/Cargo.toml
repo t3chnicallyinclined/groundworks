@@ -11,4 +11,7 @@ workspace = true
 [dependencies]
 serde_json = { workspace = true, features = ["preserve_order"] }
 regex = "1"
+# The SurrealDB HTTP /sql endpoint this crate talks to is always plain http:// on localhost
+# (db.py's own default, and every caller in this repo); TLS is not a decision this crate needs to make.
+ureq = { version = "2", default-features = false }
 thiserror = "1"

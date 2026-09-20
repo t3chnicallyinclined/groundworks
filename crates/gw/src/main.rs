@@ -2,7 +2,14 @@
 //!
 //! `config spec <instance>` and `config check <fixture.json>` are port-01's surface: the differential
 //! harness's `--config` mode drives both (`groundworks/harness/differential.py`).
+//!
+//! `--split-statements` is port-04's own entry point: it reads a whole script from stdin, splits it
+//! exactly the way `gw_core::db::split_statements` (the Rust port of `db.py::_split_statements`)
+//! does, and writes the pieces to stdout as a JSON array of strings -- one array element per
+//! statement, in order, never trimmed -- so `harness/differential.py --split` can diff it byte for
+//! byte against the oracle's own `_split_statements` on the same input.
 
+use std::io::Read;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -13,13 +20,24 @@ fn main() -> ExitCode {
             println!("{} {}", gw_core::ORACLE_TAG, gw_core::ORACLE_COMMIT);
             ExitCode::SUCCESS
         }
+        Some("--split-statements") => {
+            let mut input = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut input) {
+                eprintln!("gw: could not read stdin: {e}");
+                return ExitCode::from(2);
+            }
+            let parts = gw_core::db::split_statements(&input);
+            let json = serde_json::to_string(&parts).expect("Vec<String> always serializes");
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
         Some("config") => config_command(args.collect()),
         Some(other) => {
             eprintln!("gw: unknown argument {other}");
             ExitCode::from(2)
         }
         None => {
-            println!("gw: try --oracle, or config spec/check");
+            println!("gw: try --oracle, --split-statements, or config spec/check");
             ExitCode::SUCCESS
         }
     }
