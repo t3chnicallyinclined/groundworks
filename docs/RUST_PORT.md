@@ -18,7 +18,20 @@ at tag `v0.2.0` into `C:/Users/trist/projects/groundworks-oracle`, and every com
 * `git describe --exact-match` in that checkout says `v0.2.0`,
 * `HEAD` is `94ad5dca0882121c71245dd644fe533743788655` (the tag's commit; the release commit, child of 6917236 —
   only version/changelog/readme differ), and
-* the checkout has no uncommitted changes.
+* **git is tracking everything in the checkout** — `git status --porcelain -z --ignored=matching
+  --untracked-files=all` must come back EMPTY. Untracked *and* ignored: round 1 found that
+  `--untracked-files=no` let an untracked `sitecustomize.py` be imported by the child (the checkout is on
+  `PYTHONPATH` and is the child's cwd); round 2 found that `--porcelain` alone still does not report
+  **gitignored** paths, and the oracle's `.gitignore` ignores `__pycache__/` — which is exactly where CPython
+  loads code from. A forged `groundworks/__pycache__/gates.cpython-313.pyc` carrying the real `gates.py`
+  mtime+size in its PEP-552 header poisoned all three `gates.surql` goldens while verification passed.
+
+Before that check the harness deletes **only** the data `scripts/run_instance.py` regenerates inside the
+checkout (`instances/*/out`, `instances/*/originals` — `git ls-files` confirms nothing is tracked under
+either), so the gate can run twice in a row. A destructive guard fails closed: the list is matched component by
+component, and **nothing CPython can load is ever deleted** — an ignored `__pycache__` is a REFUSAL, not a
+silent cleanup, because every harness child runs with `PYTHONDONTWRITEBYTECODE=1` and so one appearing means
+something else ran Python in the oracle.
 
 A clone, not a worktree: a worktree of a working checkout follows whatever that checkout does next.
 
@@ -45,8 +58,22 @@ gate works; it is not a claim about any candidate. The arms today:
 | `bytes_field_lies` | a transcript line's `bytes` off by one | rule (3), before any diff |
 | `config_verdict_changed` | a bad-config `REFUSE` -> `ACCEPT` | byte diff on `config/bad_configs.txt` |
 | `engine_guard_dropped` | a write call's `rejected_by_gate` -> `ok` (what a candidate with no write-authorization guard would report) | transcript diff, naming the call — added fix round |
-| `poisoned_oracle_untracked_file` | an untracked `sitecustomize.py` dropped into the oracle checkout | `verify_oracle` refuses (NOT EXECUTED) — added fix round |
-| `masks_json_disagrees` | a committed mask count off by one, compared against what a fresh recording measures | the same comparison the CONTROL uses — added fix round |
+| `poisoned_oracle_untracked_file` | an untracked `sitecustomize.py` dropped into the oracle checkout | `verify_oracle` refuses (NOT EXECUTED) — added fix round 1 |
+| `poisoned_oracle_gitignored_file` | a real `.pyc` with a matching PEP-552 header in the **gitignored** `groundworks/__pycache__/` | `verify_oracle` refuses (NOT EXECUTED) — added fix round 2 |
+| `masks_json_disagrees` | a tampered `masks.json` driven through `promote_transcript`, the same function `--record-transcript` uses | that function must refuse **and write nothing** — added fix round 1, made non-vacuous in round 2 |
+| `ambient_allow_unverified` (a PIN arm, inverted) | a real recording made with `GROUNDWORKS_ALLOW_UNVERIFIED=1` exported in the operator's shell | it must be **byte-identical** to the committed golden; a difference is the failure — added fix round 2 |
+
+**Mutation-proven, 2026-09-19** (each arm was shown to go blind when the production code it guards is removed,
+then green again on revert — a red arm that cannot detect its own mutation is decoration):
+
+| Mutation | Arm | Result |
+|---|---|---|
+| `bad = []` in place of `mask_counts_disagreement(...)` inside `promote_transcript` | `masks_json_disagrees` | `GREEN — THE GATE IS BLIND`, self-test exit 1 |
+| `_status_entries([])` in place of `--ignored=matching --untracked-files=all` in `verify_oracle` | `poisoned_oracle_gitignored_file` | `GREEN — THE GATE IS BLIND`, self-test exit 1 |
+| `GROUNDWORKS_ALLOW_UNVERIFIED` dropped from `FIXED_ENV` **and** the strip loop replaced by round 2's `env.pop("GROUNDWORKS_DB_ACCESS")` | `ambient_allow_unverified` | `LEAKED — THE GATE IS NOT PINNED`, `MASK COUNT engine_code: ambient=1 44 != committed 32`, exit 1 |
+
+Note the middle row's second lesson: dropping the pin **alone** did not leak, because the strip loop
+(`PINNED_SERVER_ENV_KEYS`) closes the same hole independently. Two independent controls, both proven.
 
 Other entry points: `--record-goldens`, `--record-transcript [--twice] [--force-masks]`, `--goldens <dir>` (diff a
 produced tree against the committed one), `--mcp --candidate <bin>` (replay the same call script against the
@@ -137,30 +164,102 @@ ONE counts dict with a key per rule; the two sides' counts must be equal, so a r
 is itself a failure. FIX ROUND (2026-09-19, review of merge b2b7f99, verdict CHANGES): rule 5 used to have no
 key in that dict at all, so this sentence was false for it — see rule 5 below.
 
-Everything else about the run is pinned to a constant: the launch environment (`GROUNDWORKS_ADAPTER`,
-`GROUNDWORKS_AGENT_ID=harness_agent`, `GROUNDWORKS_ROLE=coordinator`, `GROUNDWORKS_LENS=lens_security`,
-`GROUNDWORKS_PANEL_ROOT`, `TZ=UTC`, `PYTHONHASHSEED=0`), the instance (`demo-incident`), the graph (built by
-`scripts/run_instance.py` on a **fresh throwaway** SurrealDB), and the call script itself. **No longer pinned**
-(fix round, blocking finding 1): `GROUNDWORKS_ALLOW_UNVERIFIED`. It used to be set to `1` at launch so the code
-guard's refusal path never ran; every write call in the call script now goes through the guard for real (the
-oracle checkout is a detached-HEAD clone, branch `HEAD` never `main`, so every write is refused
-`rejected_by_gate`, deterministically on both sides) — that refusal is exactly what the `engine_guard_dropped`
-red arm proves the gate can see.
+### 4a. The launch environment is a CLOSED SET, not "whatever was exported"
+
+Everything else about the run is pinned to a constant: the instance (`demo-incident`), the graph (built by
+`scripts/run_instance.py` on a **fresh throwaway** SurrealDB), the call script, and every environment variable
+the server process can see.
+
+| Variable | Pinned to | Read at |
+|---|---|---|
+| `GROUNDWORKS_ADAPTER` | `groundworks.mcp.instance_adapter` | `server.py:425` |
+| `GROUNDWORKS_AGENT_ID` | `harness_agent` | `server.py:11-24` block |
+| `GROUNDWORKS_ROLE` | `coordinator` | `server.py:11-24`, `instance_adapter.py:443` |
+| `GROUNDWORKS_LENS` | `lens_security` | `server.py:11-24` |
+| `GROUNDWORKS_ALLOW_UNVERIFIED` | **`"0"`** | `code_state.py:133` (`== "1"`) |
+| `GROUNDWORKS_DB_USER` / `GROUNDWORKS_DB_PASS` | `root` / `root` | `instance_adapter.py:440` (defaulted — pinned, not defaulted) |
+| `GROUNDWORKS_INSTANCE`, `_DB_URL`, `_NS`, `_DB`, `_PANEL_ROOT` | computed per recording | `instance_adapter.py:434-439`, `server.py:435` |
+| `GROUNDWORKS_DB_ACCESS` | **absent**, not empty | `instance_adapter.py:441/443` treats set-but-empty differently from unset |
+| `TZ` | `UTC` | |
+| `PYTHONHASHSEED` / `PYTHONIOENCODING` / `PYTHONDONTWRITEBYTECODE` | `0` / `utf-8` / `1` | `child_env()` |
+| `PATH` | an **empty** harness directory — see 4b | |
+
+**Any other `GROUNDWORKS_*` in the operator's shell is stripped before launch** (`PINNED_SERVER_ENV_KEYS`).
+Round 2, blocking finding 4: `GROUNDWORKS_ALLOW_UNVERIFIED` had been *dropped* from `FIXED_ENV` rather than
+pinned, and `child_env()` is `dict(os.environ)` — so a shell that exported it as `1` launched the server with
+"writes ALLOWED BY OVERRIDE", the write calls returned `ok` with real derived ids, and the counts moved to
+`engine_code 44 / path 14`. Both the pin and the strip are proven by the `ambient_allow_unverified` arm.
+
+`GROUNDWORKS_SURREAL` (`surreal_bin.py:22`) and `GROUNDWORKS_EVAL_PORT` (`cli.py:128`) are read only by the
+**harness child**, never by the server. The datastore binary the first one selects is part of what the gate
+compares (`db.py`'s 3.1.x version check), so it is deliberately left to the machine; named here so the audit is
+complete.
+
+The code guard is **not** overridden (round-1 finding): every write call goes through it for real and is
+refused `rejected_by_gate` — which is exactly what the `engine_guard_dropped` red arm proves the gate can see.
+
+### 4b. The 15-second git hang: diagnosed, and removed from the recording
+
+Round 2, blocking finding 2. The fix round left `verdict` (`"UNKNOWN"`), `problems`, `missing` and the same
+sentence inside the `error` of all nine refusal envelopes **compared**, when every one of them existed only
+because the engine's git re-read hit `code_state.GIT_TIMEOUT_S = 15` (`code_state.py:51`) — on this machine and
+nowhere else. A gate that is green only on one machine is not a gate.
+
+**Diagnosed, not masked** (measured 2026-09-19, Windows 11, `C:/Users/trist/projects/groundworks-oracle`,
+CPython 3.13, Git for Windows). `code_state.read_state()` answers in **46–52 ms** standalone and in **160 ms**
+at server *startup*, then times out at **15005 ms** on every re-read once the MCP session is live. It is not
+the environment, not process nesting, not asyncio, not a worker thread: probes at every one of those layers
+answered in under 90 ms. An instrumented copy of the oracle isolated the single cause —
+
+| Variant of the identical `git rev-parse` call, inside the live server | Result |
+|---|---|
+| as `code_state._git` makes it (`capture_output=True`, **stdin inherited**) | **TimeoutExpired, 15054 ms** |
+| same, but `stdin=subprocess.DEVNULL` | **rc 0 in 55.2 ms** |
+| same, inheriting the environment too (stdin still inherited) | TimeoutExpired, 20008 ms |
+| output to temp files instead of pipes, `stdin=DEVNULL` | rc 0 in 37.6 ms |
+| `Popen` + `wait()`, pipes never drained, `stdin=DEVNULL` | rc 0 in 31.8 ms |
+
+**The cause is stdin.** Once the server is being driven over MCP stdio, its fd 0 is the client's asyncio
+(Proactor, overlapped) pipe, and `subprocess.run(capture_output=True)` hands that handle straight to `git`,
+which then never completes. Passing `stdin=DEVNULL` — a child has no business inheriting the server's stdin —
+makes the identical call return in 55 ms. **That is a defect in the ORACLE** (`code_state.py:65`), and this
+ticket may not fix it: the oracle is a pinned tag and "no Python engine code is written or changed".
+
+So the harness removes the timing-dependent input instead, at the one place it owns — the launch environment.
+`FIXED_ENV` pins **`PATH` to an empty harness-owned directory**, so `read_state` answers the same constant on
+every machine: `kind=UNKNOWN`, `reason="git is not installed or not on PATH"`. Nothing else in the server
+shells out (checked: no `subprocess` in `db.py`, `originals.py` or the demo adapter) and it launches from an
+absolute `sys.executable`, so this costs the server nothing.
+
+*What another machine does:* exactly this. The probe is decided by PATH, not by how the machine's git behaves,
+so `verdict`, `problems`, `missing` and the nine refusal strings are the same bytes on Linux, on CI, and on a
+machine where git answers in 3 ms. **And the harness refuses rather than trusting it:** `record_transcript`
+reads `engine_code.on_disk_now` out of the recording it just made and raises NOT EXECUTED unless it is that
+exact constant, so a machine where the pin failed to take cannot write a golden at all.
+
+*What it cost and what it bought.* Cost: the refusal reason is now "the state cannot be read" instead of
+"started from branch `HEAD`, not `main`" — the branch arm of the guard is no longer the one exercised (both are
+the guard, and writes are still refused `rejected_by_gate`; `engine_guard_dropped` is unchanged). Bought: no
+15-second timeout anywhere, no environment in the compared data, and a recording that went from ~200 s to
+**36.8 s**, so the self-test now affords three fresh recordings instead of two.
 
 | # | Rule | Fields | The line that justifies it | Count |
 |---|---|---|---|---|
-| 1 | a **datetime** field, and only after the value parses as a datetime | `learned_at, created_at, updated_at, started_at, ended_at, cited_at, verified_at` | `verified_at` is written `time::now()` by the datastore when an original is re-hashed — `groundworks/originals.py:513` — and `document_get` re-hashes on every read. It is the **only** datetime the v0.2.0 tool surface returns, so without it there is nothing to mask and the transcript is not reproducible twice | see below |
+| 1 | a **datetime** field, and only after the value parses as a datetime | `learned_at, created_at, updated_at, started_at, ended_at, cited_at, verified_at` | `verified_at` is written `time::now()` by the datastore when an original is re-hashed — `groundworks/originals.py:513` — and `document_get` re-hashes on every read. It is the **only** datetime the v0.2.0 tool surface returns, so without it there is nothing to mask and the transcript is not reproducible twice | **3** |
 | 2 | a **randomly generated record id** in a named field | **EMPTY** | The oracle derives every id it writes: critique = `sha1(conclusion\|lens\|head)[-8:]` (`pipeline/write.py:143` + `patterns/edge_ids.py:27-29`), answer = `ans_<critique>` (`write.py:161`), every edge id the same sha1 (`edge_ids.py:27`), and `rand::` / `rand()` appears nowhere in the engine's SurQL at v0.2.0. Derived ids are **COMPARED** — the `transcript_derived_id` red arm is exactly that | 0 |
 | 2b | the loader's **run token** | `run` | `patterns/edge_ids.py:32` — `"r%d" % time.time_ns()`, a clock-derived stamp on loader-written edges. Masked only where it appears (it does not appear in this call script: count 0) | 0 |
-| 3 | `bytes` at the **top level of a transcript line** (the harness's own field) | `bytes` | Checked equal to that side's own recomputed, UNMASKED envelope length, then dropped — so a truncated envelope cannot pass. `data.bytes` inside an envelope (a document's size) is the **engine's** and is COMPARED. Minor (fix round): this can never fail on a real recording — the harness computes `bytes` itself at record time — so it only catches a hand-edited transcript; it is not candidate coverage | see below |
-| 4 | the **engine code guard's** VOLATILE LEAVES only, inside `engine_code` | `read_ms, kind, reason, branch, commit, dirty, dirty_count, dirty_files` (nested under `started_from` / `on_disk_now`); `engine_code_warning` and `WARNING` masked whole when present | `groundworks/mcp/code_state.py`. Only these leaves are not engine behaviour: a measured duration (`read_ms`) and a re-read that can flip when `git` exceeds `GIT_TIMEOUT_S = 15` (observed on this machine). **NARROWED fix round (blocking finding 1):** the original rule masked the WHOLE `engine_code` subtree, hiding `override`, `checked` and the key set — a candidate that dropped the write-authorization guard entirely could still pass. Those three, plus `verdict`/`writes`/`problems`/`missing`, are now COMPARED like everything else | see below |
-| 5 | the **harness's own launch paths**, substituted at RECORD time on both sides | the oracle checkout -> `<ORACLE_DIR>`, the panel root -> `<PANEL_ROOT>` | `panel_submit` / `panel_status` quote the resolved run_dir back in their refusal. Those paths are the harness's INPUTS, not the engine's output, and they differ per machine and per checkout. **FIXED fix round (blocking finding 3 family):** now counted as `path` in the same counts dict as every other rule, by recounting the `<ORACLE_DIR>`/`<PANEL_ROOT>` tokens already in the recorded file, instead of only being printed once at record time | see below |
+| 3 | `bytes` at the **top level of a transcript line** (the harness's own field) | `bytes` | Checked equal to that side's own recomputed, UNMASKED envelope length, then dropped — so a truncated envelope cannot pass. `data.bytes` inside an envelope (a document's size) is the **engine's** and is COMPARED. Minor (fix round): this can never fail on a real recording — the harness computes `bytes` itself at record time — so it only catches a hand-edited transcript; it is not candidate coverage | **24** lines checked |
+| 4 | the **engine code guard's** VOLATILE LEAVES only, inside `engine_code` | `read_ms, kind, reason, branch, commit, dirty, dirty_count, dirty_files` (nested under `started_from` / `on_disk_now`); `engine_code_warning` and `WARNING` masked whole when present | `groundworks/mcp/code_state.py`. Only these leaves are not engine behaviour: a measured duration (`read_ms`) and a git re-read a Rust candidate has no Python checkout to reproduce at all (round 2: what it reports is no longer environment-dependent either — see 4b). **NARROWED fix round (blocking finding 1):** the original rule masked the WHOLE `engine_code` subtree, hiding `override`, `checked` and the key set — a candidate that dropped the write-authorization guard entirely could still pass. Those three, plus `verdict`/`writes`/`problems`/`missing`, are now COMPARED like everything else | **32** |
+| 5 | the **harness's own launch paths**, substituted at RECORD time on both sides | the oracle checkout -> `<ORACLE_DIR>`, the panel root -> `<PANEL_ROOT>` | `panel_submit` / `panel_status` quote the resolved run_dir back in their refusal. Those paths are the harness's INPUTS, not the engine's output, and they differ per machine and per checkout. **FIXED fix round (blocking finding 3 family):** now counted as `path` in the same counts dict as every other rule, by recounting the `<ORACLE_DIR>`/`<PANEL_ROOT>` tokens already in the recorded file, instead of only being printed once at record time | **8** |
 
 **Reproducibility, measured 2026-09-19 on the dev machine (Windows 11, `C:/Users/trist/projects`), fix round:**
 `--self-test`'s CONTROL now records the transcript **twice fresh** (a throwaway SurrealDB and a freshly built
 demo graph each time) and diffs run1 vs run2 AND run1 vs the committed golden — replacing the earlier version,
 which diffed the committed file against **itself** and could not fail (gate-discipline: a control has to be
-able to fail). See the ticket Log for the exact counts from the run that produced the committed golden.
+able to fail). The counts every side must show are the "Count" column above and `goldens/transcript-v0.2.0.masks.json`:
+`{"bytes_checked":24,"datetime":3,"engine_code":32,"path":8,"random_id":0,"run_token":0}`. One recording is
+36.8 s (Windows 11 dev machine, 2026-09-19); the self-test makes three of them (run1, run2, and the
+`ambient_allow_unverified` arm).
 
 **The call script** (order and arguments are part of the gate; 24 recorded lines, line 0 being the tool list):
 `health, unit_search` ×3, `unit_get` ×2, `claim_explain` ×2, `eliminated_claims`, `document_get` ×2,
@@ -204,7 +303,18 @@ rather than "byte-identical". Every departure is named in the patch, and this fi
 
 * `db_unreachable` is the one envelope status the call script never produces. Add an arm that points the
   adapter at a dead port once the candidate exists.
-* The oracle's `code_state` git re-read timed out (15 s) on every write call during recording on this machine,
-  while the same `git` commands answer in ~30 ms from a shell. It is masked (rule 4) and costs ~90 s per
-  recording; it is a Python-oracle quirk, not a port question, so it is recorded, not chased.
+* **DIAGNOSED AND CLOSED in fix round 2** (was: "the git re-read times out, recorded not chased"). It is a
+  defect in the ORACLE at `code_state.py:65` — `subprocess.run(capture_output=True)` hands the child the
+  server's own stdin, which under MCP stdio is the client's overlapped asyncio pipe, and `git` then never
+  completes; `stdin=DEVNULL` makes the identical call return in 55 ms. Section 4b has the measurements. The
+  harness cannot fix the oracle (a pinned tag), so it removes the input instead (PATH pin) and REFUSES to
+  record if that pin does not take. **A follow-up for the Python engine, not for the port: `code_state._git`
+  should pass `stdin=subprocess.DEVNULL`.**
+* **Coverage cost, worth its own ticket** (reviewer, round 2, minor (d)): all nine write calls now return the
+  same canned refusal before any argument reaches the adapter, so the transcript's write half has no semantic
+  coverage — a candidate that hardcodes one refusal string passes 9 of the 24 calls. A second recording against
+  a clone that also carries a local branch `main` at the pinned commit (HEAD and porcelain status unchanged, so
+  `verify_oracle` is unaffected) would restore lands / wrong-lens / empty-head without giving up the refusal
+  arm. Note it now needs the PATH pin lifted for that second recording too, since an UNKNOWN `on_disk_now`
+  refuses writes regardless of branch.
 * `--mcp --candidate` is wired to the same call script but exits NOT EXECUTED until the Rust front door exists.

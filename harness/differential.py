@@ -62,6 +62,15 @@ the first recording, each with its reason below; overturning one needs a logged 
       the same counts dict as every other rule (fix round: it used to count only at record time and
       print, with no comparable key -- `mask_transcript` now recounts the token occurrences it finds).
 
+What is NOT normalized, and is instead PINNED (fix round 2)
+-----------------------------------------------------------
+* The oracle checkout must have NOTHING git is not tracking -- untracked OR ignored. `__pycache__/` is
+  ignored and is where CPython loads code from; a forged .pyc there poisons every emitter silently.
+* The server's whole launch environment is a closed set (`FIXED_ENV` + `PINNED_SERVER_ENV_KEYS`), including
+  `PATH`, which is an EMPTY directory so the engine's git probe answers the same constant on every machine
+  instead of this one's 15-second timeout. `record_transcript` REFUSES to write a golden that says otherwise.
+  The diagnosis and the measurements are in docs/RUST_PORT.md section 4b.
+
 Exit codes: 0 green, 1 a difference or a red arm that failed to go red, 2 not executed (the oracle
 is not pinned, a tool is missing, the datastore would not start).
 """
@@ -70,6 +79,7 @@ import ast
 import copy
 import datetime as _dt
 import hashlib
+from fnmatch import fnmatchcase as _fnmatch
 import json
 import os
 import pathlib
@@ -145,8 +155,73 @@ def ensure_oracle(tag=ORACLE_TAG):
     return verify_oracle(tag)
 
 
+# The ONLY paths inside the oracle checkout the harness is allowed to delete: the DATA that
+# `scripts/run_instance.py` writes while the transcript is being recorded. They are ignored by the oracle's
+# .gitignore, they reappear on every recording (so refusing on them would stop the gate running twice), and
+# deleting them first is strictly better than tolerating them -- `document_get` re-hashes originals on every
+# read, so a planted original would change the transcript. NOTHING that CPython can load is on this list:
+# an ignored `__pycache__/` is a REFUSAL, never a silent deletion. A destructive guard fails closed, so the
+# list is matched component by component and nothing outside it is ever removed.
+PURGEABLE_GLOBS = ("instances/*/out", "instances/*/originals")   # git ls-files: nothing tracked under either
+
+
+def _status_entries(flags):
+    """(code, path) for every line of `git status --porcelain -z <flags>` in the oracle checkout."""
+    out = subprocess.run(["git", "-C", str(ORACLE_DIR), "status", "--porcelain", "-z"] + list(flags),
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        raise NotExecuted("NOT EXECUTED: git status in %s: %s" % (ORACLE_DIR, out.stderr.strip()))
+    return [(entry[:2], entry[3:]) for entry in out.stdout.split("\0") if len(entry) >= 4]
+
+
+def _purgeable_ancestor(rel):
+    """The path the harness may delete to make `rel` go away, or None if `rel` is not the harness's to
+    delete. `rel` is a posix path relative to ORACLE_DIR."""
+    parts = pathlib.PurePosixPath(rel.rstrip("/")).parts
+    for i in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:i])
+        if any(_fnmatch(prefix, g) for g in PURGEABLE_GLOBS):
+            return prefix
+    return None
+
+
+def purge_generated():
+    """Delete the harness's OWN leftovers inside the oracle checkout, so verify_oracle can then demand that
+    NOTHING untracked or ignored remains at all.
+
+    ROUND-2 BLOCKING FINDING 1. `git status --porcelain` does not report GITIGNORED files, and the oracle's
+    .gitignore ignores `__pycache__/` -- which is exactly where CPython loads code from. The reviewer forged
+    a poisoned `groundworks/__pycache__/gates.cpython-313.pyc` carrying the real gates.py mtime+size in its
+    PEP-552 header; verification passed and all three gates.surql goldens came back poisoned. A
+    `__pycache__` is therefore NOT purged, it is REFUSED: the harness's own children all run with
+    PYTHONDONTWRITEBYTECODE=1 (child_env), so one appearing means something else ran Python in the oracle
+    checkout, and that is worth stopping the gate for rather than quietly deleting.
+
+    Returns the list of paths that are NOT the harness's to delete (verify_oracle refuses on them)."""
+    doomed, refuse = [], []
+    for code, path in _status_entries(["--ignored=matching", "--untracked-files=all"]):
+        if code not in ("!!", "??"):
+            refuse.append("%s %s" % (code.strip() or code, path))
+            continue
+        ancestor = _purgeable_ancestor(path)
+        if ancestor is None:
+            refuse.append("%s %s" % (code, path))
+        elif ancestor not in doomed:
+            doomed.append(ancestor)
+    for rel in doomed:
+        target = ORACLE_DIR / rel
+        if not str(target.resolve()).startswith(str(ORACLE_DIR.resolve())):   # fail closed
+            raise NotExecuted("NOT EXECUTED: refusing to delete %s: it is outside %s" % (target, ORACLE_DIR))
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            target.unlink(missing_ok=True)
+    return refuse
+
+
 def verify_oracle(tag=ORACLE_TAG):
-    """Refuse to compare against anything but the pinned tag."""
+    """Refuse to compare against anything but the pinned tag, with NOTHING in the checkout that git is not
+    tracking -- untracked (round-1 finding) or IGNORED (round-2 finding)."""
     if not (ORACLE_DIR / ".git").exists():
         raise NotExecuted("NOT EXECUTED: %s is not a git checkout. Run --ensure-oracle." % ORACLE_DIR)
     described = _git(["describe", "--exact-match"], ORACLE_DIR, check=False)
@@ -156,12 +231,17 @@ def verify_oracle(tag=ORACLE_TAG):
     head = _git(["rev-parse", "HEAD"], ORACLE_DIR)
     if tag == ORACLE_TAG and head != ORACLE_COMMIT:
         raise NotExecuted("NOT EXECUTED: %s in %s is %s, not the pinned %s" % (tag, ORACLE_DIR, head, ORACLE_COMMIT))
-    # blocking finding 2 (fix round): --untracked-files=no let an untracked file sit in the oracle
-    # checkout (ORACLE_DIR is on PYTHONPATH and is the child's cwd) and be imported by the child
-    # process without this check ever seeing it. Default untracked-file reporting catches it.
-    dirty = _git(["status", "--porcelain"], ORACLE_DIR)
-    if dirty:
-        raise NotExecuted("NOT EXECUTED: the oracle checkout has uncommitted or untracked changes:\n%s" % dirty)
+    # round 1: --untracked-files=no let an untracked sitecustomize.py sit in the oracle checkout (which is
+    # on PYTHONPATH and is the child's cwd) and be imported without this check ever seeing it.
+    # round 2: --porcelain alone still does not see GITIGNORED paths, and __pycache__/ is ignored. The
+    # harness deletes its own leftovers first, then demands an EMPTY untracked-and-ignored status.
+    refuse = purge_generated()
+    remaining = _status_entries(["--ignored=matching", "--untracked-files=all"])
+    if refuse or remaining:
+        listed = sorted(set(refuse) | {"%s %s" % (c, p) for c, p in remaining})
+        raise NotExecuted("NOT EXECUTED: the oracle checkout has changes git is not tracking (uncommitted, "
+                          "untracked or IGNORED -- an ignored path such as __pycache__/ is loadable code):\n%s"
+                          % "\n".join("  " + line for line in listed))
     return head
 
 
@@ -387,19 +467,50 @@ def diff_trees(left, right, left_name="oracle", right_name="candidate"):
 HARNESS_LENS = "lens_security"          # one of the demo instance's lenses (instance.yaml `lenses:`)
 PANEL_ROOT = pathlib.Path(tempfile.gettempdir()) / "gw_harness_panel_root"   # FIXED, never mkdtemp
 
+# ROUND-2 BLOCKING FINDING 2, the fix. An EMPTY directory that the harness puts on the server's PATH in
+# place of the machine's, so the engine's git probe (`code_state.read_state`) answers the same constant on
+# every machine instead of a 15-second timeout that only this one produces. See PINNED_ENGINE_STATE below
+# and docs/RUST_PORT.md section 4 for the measurement that justifies it.
+NO_TOOLS_DIR = pathlib.Path(tempfile.gettempdir()) / "gw_harness_no_tools"
+
+# What `code_state.read_state` MUST report for the server process, on any machine, given the PATH pin.
+# `record_transcript` refuses to write a golden that says anything else, so a machine where the pin fails
+# cannot bake its own environment into the gate.
+PINNED_ENGINE_STATE = ("UNKNOWN", "git is not installed or not on PATH")
+
 FIXED_ENV = {
-    # every launch variable server.py reads (server.py:11-24), pinned to a constant
+    # Every launch variable server.py reads (server.py:11-24) PINNED TO A CONSTANT -- pinned, never
+    # dropped. Round-2 blocking finding 4: GROUNDWORKS_ALLOW_UNVERIFIED was *removed* from this dict
+    # instead of being pinned, and `child_env()` is `dict(os.environ)`, so an operator shell that
+    # happened to export GROUNDWORKS_ALLOW_UNVERIFIED=1 launched the server with writes ALLOWED BY
+    # OVERRIDE and the recording changed under the gate. code_state.py:133 reads it as == "1".
     "GROUNDWORKS_ADAPTER": "groundworks.mcp.instance_adapter",
     "GROUNDWORKS_AGENT_ID": "harness_agent",
     "GROUNDWORKS_ROLE": "coordinator",
     "GROUNDWORKS_LENS": HARNESS_LENS,
+    "GROUNDWORKS_ALLOW_UNVERIFIED": "0",
+    "GROUNDWORKS_DB_USER": "root",           # instance_adapter.py:440, defaulted -- pinned, not defaulted
+    "GROUNDWORKS_DB_PASS": "root",           # instance_adapter.py:440
     "TZ": "UTC",
-    # NO GROUNDWORKS_ALLOW_UNVERIFIED here (fix round, blocking finding 1). The oracle is a pinned tag,
-    # so the checkout is detached HEAD (branch "HEAD", never "main"): the code guard refuses every
-    # write with `rejected_by_gate`, on both recordings, deterministically. That refusal path is
-    # exactly what the `engine_guard_dropped` red arm proves the gate can see -- with the override set,
-    # a candidate that never implemented the guard at all would still pass.
+    # The PATH pin (blocking finding 2). Nothing the server does shells out except code_state's git probe
+    # (checked: no `subprocess` in db.py, originals.py or the demo adapter), and it launches from an
+    # absolute sys.executable, so an empty PATH costs the server nothing and removes the one timing-
+    # dependent input from the recording.
+    "PATH": str(NO_TOOLS_DIR),
+    "Path": str(NO_TOOLS_DIR),               # Windows spells it either way; pin both spellings
 }
+
+# Every GROUNDWORKS_* the SERVER PROCESS is allowed to see. Anything else inherited from the operator's
+# shell is stripped before launch (blocking finding 4's class, not just its one instance): the launch
+# environment is an INPUT to the gate, so it is a closed set, not "whatever was exported".
+PINNED_SERVER_ENV_KEYS = frozenset(FIXED_ENV) | {
+    "GROUNDWORKS_INSTANCE", "GROUNDWORKS_DB_URL", "GROUNDWORKS_NS", "GROUNDWORKS_DB", "GROUNDWORKS_PANEL_ROOT",
+}
+# GROUNDWORKS_DB_ACCESS is deliberately ABSENT, not empty: instance_adapter.py:441/443 reads `.get()` and
+# treats a set-but-empty value differently from unset (it selects the provisioned-agent credential path).
+# GROUNDWORKS_SURREAL (surreal_bin.py:22) and GROUNDWORKS_EVAL_PORT (cli.py:128) are read only by the
+# HARNESS CHILD, never by the server; the datastore binary they select is part of what the gate compares
+# (db.py's 3.1.x version check), so they are left to the machine and named here so the audit is complete.
 
 # Rule (5), ADDED 2026-09-19 with its reason: absolute paths the HARNESS chose at launch (the oracle
 # checkout and the panel root) appear verbatim in refusal texts. They are the harness's own inputs, not
@@ -450,8 +561,10 @@ CALL_SCRIPT = [
     # <CRITIQUE_ID> is filled at record time with the id the ORACLE would derive for the critique
     # added above (write.py:143 via patterns/edge_ids.py:27), computed offline the same way the
     # engine does, independent of whether the critique_add call above landed. Fix round: with the code
-    # guard no longer overridden, this critique_add is refused rejected_by_gate (this checkout is
-    # detached HEAD, never branch main), so this call is refused too, before the id is even looked up
+    # guard no longer overridden, this critique_add is refused rejected_by_gate (round 1: the checkout is a
+    # detached-HEAD clone; round 2 and onwards: the PATH pin makes the engine state UNKNOWN, which refuses
+    # writes for a reason that is the same on every machine), so this call is refused too, before the id is
+    # even looked up
     # -- it is NOT the derived-id check any more. That check now lives in the `transcript_derived_id`
     # red arm, against the critique the fixture's OWN build scenario (a read, never gated) already
     # attacked rc_pool_exhaustion with (instances/demo-incident/adapter.py:157).
@@ -507,7 +620,11 @@ def _record_transcript(out_path):
         env["GROUNDWORKS_NS"] = "demo"
         env["GROUNDWORKS_DB"] = "demo"
         env["GROUNDWORKS_PANEL_ROOT"] = str(panel_root)
-        env.pop("GROUNDWORKS_DB_ACCESS", None)
+        # blocking finding 4: pin the closed set, then STRIP every other GROUNDWORKS_* the operator's
+        # shell may have exported (GROUNDWORKS_DB_ACCESS was the only one handled before, by name).
+        for key in [k for k in env if k.startswith("GROUNDWORKS_") and k not in PINNED_SERVER_ENV_KEYS]:
+            env.pop(key)
+        NO_TOOLS_DIR.mkdir(parents=True, exist_ok=True)     # empty, and stays empty: see the PATH pin
 
         async def drive():
             params = StdioServerParameters(command=sys.executable, args=["-m", "groundworks.mcp.server"],
@@ -550,13 +667,36 @@ def _record_transcript(out_path):
             raise NotExecuted("NOT EXECUTED: the harness left a surreal running (pid %d)" % proc.pid)
 
 
+def engine_state_in(path):
+    """(kind, reason) of `engine_code.on_disk_now` as the recorded health call reports it."""
+    for raw in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        row = json.loads(raw)
+        state = (row.get("envelope") or {}).get("data", {}).get("engine_code", {}).get("on_disk_now")
+        if isinstance(state, dict):
+            return state.get("kind"), state.get("reason")
+    return None, None
+
+
 def record_transcript(out_path):
-    """Same verification requirement as `record_goldens` (fix round, blocking finding 2)."""
+    """Same verification requirement as `record_goldens` (fix round, blocking finding 2), and -- round-2
+    blocking finding 2 -- a REFUSAL rather than a golden when the engine state the recording captured is not
+    the pinned constant. Without this a machine where the git probe behaves differently (this one times out
+    at code_state.GIT_TIMEOUT_S=15 inside the server; see docs/RUST_PORT.md section 4) silently bakes its own
+    environment into `verdict`, `problems`, `missing` and the nine refusal strings, and the next machine's
+    CONTROL goes red for a reason that has nothing to do with a candidate."""
     verify_oracle()
     run = subprocess.run([sys.executable, str(HERE / "differential.py"), "--_transcript", str(out_path)],
                          env=child_env(), cwd=str(ORACLE_DIR))
     if run.returncode != 0:
         raise NotExecuted("NOT EXECUTED: recording the transcript failed (see output above)")
+    kind, reason = engine_state_in(out_path)
+    if (kind, reason) != PINNED_ENGINE_STATE:
+        raise NotExecuted("NOT EXECUTED: the recording captured engine_code.on_disk_now = %r/%r, not the "
+                          "pinned %r/%r. The PATH pin (FIXED_ENV) did not take effect, so `verdict`, "
+                          "`problems`, `missing` and every refusal string in this recording describe THIS "
+                          "machine. Refusing to write it as a golden." % ((kind, reason) + PINNED_ENGINE_STATE))
     return pathlib.Path(out_path)
 
 
@@ -641,6 +781,39 @@ def mask_transcript(path):
     return lines, counts
 
 
+def mask_counts_disagreement(measured, committed):
+    """THE comparison of measured mask counts against the committed masks.json, in one place.
+
+    ROUND-2 BLOCKING FINDING 3: the `masks_json_disagrees` red arm used to tamper a copy of the counts dict
+    and then RETURN A HAND-WRITTEN FAILURE STRING -- it called no production code, so deleting the real
+    check left the arm still printing "RED (good)". The CONTROL, `--record-transcript`'s refusal and that
+    arm now all go through this function and `promote_transcript` below, so deleting either use turns the
+    arm GREEN. That is what the arm is for."""
+    if committed is None or measured == committed:
+        return []
+    return ["recorded mask counts %s != committed %s" % (canon(measured), canon(committed))]
+
+
+def promote_transcript(recorded, dest, masks_path, force=False):
+    """Move a freshly recorded transcript and its counts into place -- or REFUSE, writing NOTHING.
+
+    Returns (counts, failures). ROUND-2 MINOR (b): the refusal used to fire after `record_transcript` had
+    already overwritten the committed transcript, leaving a new transcript beside an old masks.json that
+    needed a `git checkout` to recover. Recording now happens to a temporary path and is promoted only when
+    the counts agree."""
+    recorded, dest, masks_path = pathlib.Path(recorded), pathlib.Path(dest), pathlib.Path(masks_path)
+    _, counts = mask_transcript(recorded)
+    committed = json.loads(masks_path.read_text(encoding="utf-8")) if masks_path.exists() else None
+    bad = [] if force else mask_counts_disagreement(counts, committed)
+    if bad:
+        return counts, ["REFUSED: %s (%s). Nothing was written. Re-run with --force-masks only after "
+                        "confirming the disagreement is expected." % (bad[0], masks_path.name)]
+    shutil.copyfile(str(recorded), str(dest))
+    with open(masks_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(counts, indent=2, sort_keys=True) + "\n")
+    return counts, []
+
+
 def diff_transcripts(left, right, left_name="oracle", right_name="candidate"):
     """Differences after the mask. The first differing line names its tool call."""
     lmask, lcounts = mask_transcript(left)
@@ -709,8 +882,7 @@ def self_test(tag=ORACLE_TAG):
                  % (name, "IDENTICAL" if not bad else "DIFFER", canon(lc), canon(rc)))
             failures += ["CONTROL transcript %s: %s" % (name, d) for d in bad]
         committed = json.loads(TRANSCRIPT_MASKS.read_text(encoding="utf-8")) if TRANSCRIPT_MASKS.exists() else None
-        if committed is not None and committed != lc:
-            failures.append("CONTROL transcript: recorded mask counts %s != committed %s" % (canon(lc), canon(committed)))
+        failures += ["CONTROL transcript: %s" % d for d in mask_counts_disagreement(lc, committed)]
 
         # ---- RED ARMS: each one must make the gate fail, by name -------------------------------
         def arm(name, run):
@@ -885,14 +1057,15 @@ def self_test(tag=ORACLE_TAG):
             because that IS what "the write landed" means on the wire."""
             broken, state = spoil_first_key("engine_guard_dropped", "status", lambda v: "ok",
                                             where=lambda v: v == "rejected_by_gate")
-
-            def is_write_call(raw):
-                row = json.loads(raw)
-                return row.get("tool") in WRITE_TOOLS_IN_SCRIPT
-
-            if not any(is_write_call(r) for r in TRANSCRIPT.read_text(encoding="utf-8").splitlines() if r.strip()):
-                raise NotExecuted("NOT EXECUTED: no write-tool call appears in the transcript; the call "
-                                  "script no longer exercises the guard")
+            # round-2 minor (a): this used to check only that SOME write tool appeared ANYWHERE in the
+            # transcript, while planting on the first `rejected_by_gate` it found. A read that started
+            # answering rejected_by_gate would have turned this silently into a read arm. Assert the row
+            # the plant actually landed on is a write call.
+            planted_tool = (state["call"] or "/").split("/", 1)[1]
+            if planted_tool not in WRITE_TOOLS_IN_SCRIPT:
+                raise NotExecuted("NOT EXECUTED: this arm planted on call %s, which is not one of the write "
+                                  "tools %s -- the call script no longer exercises the guard"
+                                  % (state["call"], ", ".join(WRITE_TOOLS_IN_SCRIPT)))
             bad = diff_transcripts(TRANSCRIPT, broken)[0]
             return ["(call %s: a write tool's rejected_by_gate -> ok, as a guardless candidate would "
                     "report) %s" % (state["call"], d) for d in bad if d.startswith("TRANSCRIPT")]
@@ -917,17 +1090,87 @@ def self_test(tag=ORACLE_TAG):
         arm("poisoned_oracle_untracked_file", poisoned_oracle_untracked_file)
 
         def masks_json_disagrees():
-            """Blocking finding 3's masks.json half: a committed masks.json that disagrees with the
-            counts a fresh recording actually measures must be caught, the same way the CONTROL's own
-            comparison above catches it -- proven here by tampering a COPY of the committed counts and
-            re-running the same comparison the CONTROL uses."""
-            tampered = dict(committed) if committed is not None else dict(lc)
-            key = next(iter(tampered))
+            """ROUND-2 BLOCKING FINDING 3. This arm used to tamper a copy of the counts dict and then
+            return a hand-written failure string, calling no production code -- deleting the real check
+            left it printing RED. It now drives `promote_transcript`, the SAME function
+            `--record-transcript` uses (:main), against a real recording and a tampered masks.json, and
+            asserts both that it refuses AND that it wrote nothing. Delete the
+            `mask_counts_disagreement` call inside `promote_transcript` and this arm goes GREEN: that is
+            the mutation this arm exists to detect."""
+            dest = tmp / "promote_dest.jsonl"
+            masks = tmp / "promote_masks.json"
+            dest.write_text("SENTINEL: promote_transcript must not overwrite me\n", encoding="utf-8")
+            tampered = dict(lc)
+            key = sorted(tampered)[0]
             tampered[key] = tampered[key] + 1
-            if tampered == lc:
-                raise NotExecuted("NOT EXECUTED: the tampered counts still equal what was measured")
-            return ["CONTROL transcript: recorded mask counts %s != committed %s" % (canon(lc), canon(tampered))]
+            masks.write_text(json.dumps(tampered, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            counts, bad = promote_transcript(run1, dest, masks, force=False)
+            if counts != lc:
+                raise NotExecuted("NOT EXECUTED: promote_transcript re-measured %s, not the CONTROL's %s"
+                                  % (canon(counts), canon(lc)))
+            untouched = (dest.read_text(encoding="utf-8").startswith("SENTINEL")
+                         and json.loads(masks.read_text(encoding="utf-8")) == tampered)
+            if not untouched:
+                return []            # it wrote anyway: a "refusal" that still re-baselines is not a refusal
+            return bad
         arm("masks_json_disagrees", masks_json_disagrees)
+
+        def poisoned_oracle_gitignored_file():
+            """ROUND-2 BLOCKING FINDING 1, kept as a permanent arm. `git status --porcelain` does not report
+            GITIGNORED paths, and `__pycache__/` is ignored -- and is where CPython loads code from. The
+            reviewer forged a .pyc with a matching PEP-552 header there and poisoned all three gates.surql
+            goldens while verification passed. The plant here is a real .pyc in a real __pycache__ directory,
+            in the same ignored location; verify_oracle must REFUSE."""
+            cache = ORACLE_DIR / "groundworks" / "__pycache__"
+            plant = cache / ("gates.cpython-%d%d.pyc" % sys.version_info[:2])
+            if plant.exists():
+                raise NotExecuted("NOT EXECUTED: %s already exists; the arm cannot tell its own plant from "
+                                  "a real file" % plant)
+            cache.mkdir(parents=True, exist_ok=True)
+            # a PEP-552 header carrying the REAL gates.py mtime+size, exactly as the reviewer's attack did,
+            # so nothing but "git does not track this" can be what catches it
+            import importlib.util as _ilu
+            src = (ORACLE_DIR / "groundworks" / "gates.py").stat()
+            plant.write_bytes(_ilu.MAGIC_NUMBER + (0).to_bytes(4, "little")
+                              + int(src.st_mtime).to_bytes(4, "little") + (src.st_size & 0xFFFFFFFF).to_bytes(4, "little")
+                              + b"\x00" * 16)
+            try:
+                verify_oracle()
+                return []                                # verify_oracle did NOT refuse: BAD
+            except NotExecuted as exc:
+                return [str(exc)]
+            finally:
+                plant.unlink(missing_ok=True)
+                shutil.rmtree(cache, ignore_errors=True)
+        arm("poisoned_oracle_gitignored_file", poisoned_oracle_gitignored_file)
+
+        def ambient_allow_unverified():
+            """ROUND-2 BLOCKING FINDING 4. With GROUNDWORKS_ALLOW_UNVERIFIED=1 exported in the operator's
+            shell, `child_env()` (which is `dict(os.environ)`) used to carry it into the server launch: the
+            banner said "writes ALLOWED BY OVERRIDE", the write calls returned status ok with real derived
+            ids, and the counts moved. FIXED_ENV now PINS it to "0", so this recording -- made with the
+            ambient value set to 1 -- must be BYTE-IDENTICAL to the committed transcript after the mask.
+
+            This arm is inverted: the "difference" it reports is the pin FAILING. It is listed with the red
+            arms because it is the same question -- can the gate still tell the truth under this input."""
+            was = os.environ.get("GROUNDWORKS_ALLOW_UNVERIFIED")
+            os.environ["GROUNDWORKS_ALLOW_UNVERIFIED"] = "1"
+            try:
+                ambient = record_transcript(tmp / "transcript_ambient.jsonl")
+            finally:
+                if was is None:
+                    os.environ.pop("GROUNDWORKS_ALLOW_UNVERIFIED", None)
+                else:
+                    os.environ["GROUNDWORKS_ALLOW_UNVERIFIED"] = was
+            bad, ac, _ = diff_transcripts(ambient, TRANSCRIPT, "ambient=1", "committed")
+            if bad:
+                failures.append("AMBIENT GROUNDWORKS_ALLOW_UNVERIFIED=1 changed the recording -- the pin in "
+                                "FIXED_ENV is not holding: %s" % bad[0].splitlines()[0])
+            print("PIN ARM %-28s %s  masks %s"
+                  % ("ambient_allow_unverified", "HELD (good)" if not bad else "LEAKED -- THE GATE IS NOT PINNED",
+                     canon(ac)))
+            return bad
+        ambient_allow_unverified()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -984,22 +1227,21 @@ def main(argv=None):
             return 0
         if args.record_transcript:
             verify_oracle(args.oracle)
-            record_transcript(TRANSCRIPT)
-            _, counts = mask_transcript(TRANSCRIPT)
-            # blocking finding 3 (fix round): this used to overwrite masks.json with whatever it just
-            # measured, so a re-record could never disagree with "the committed counts" -- the check at
-            # self_test's CONTROL was comparing a file to a copy of its own last write. Refuse instead,
-            # unless there is nothing committed yet (first --record-transcript ever) or --force-masks.
-            if TRANSCRIPT_MASKS.exists() and not args.force_masks:
-                committed = json.loads(TRANSCRIPT_MASKS.read_text(encoding="utf-8"))
-                if committed != counts:
-                    print("REFUSED: measured mask counts %s disagree with committed %s (%s). Re-run with "
-                          "--force-masks only after confirming the disagreement is expected."
-                          % (canon(counts), canon(committed), TRANSCRIPT_MASKS.name))
-                    return 1
-            else:
-                with open(TRANSCRIPT_MASKS, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(json.dumps(counts, indent=2, sort_keys=True) + "\n")
+            # round-1 blocking finding 3 + round-2 minor (b): this used to record straight over the
+            # committed transcript and only THEN decide whether the counts agreed, leaving a new
+            # transcript beside an old masks.json on a refusal. Record to a temporary path; promote only
+            # when the counts agree (or --force-masks). `promote_transcript` is the same function the
+            # `masks_json_disagrees` red arm drives.
+            staging = pathlib.Path(tempfile.mkdtemp(prefix="gw_record_"))
+            try:
+                recorded = record_transcript(staging / "transcript.jsonl")
+                counts, bad = promote_transcript(recorded, TRANSCRIPT, TRANSCRIPT_MASKS, force=args.force_masks)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+            if bad:
+                for line in bad:
+                    print(line)
+                return 1
             print("wrote %s (mask counts %s)" % (TRANSCRIPT.name, canon(counts)))
             if args.twice:
                 again = TRANSCRIPT.with_suffix(".second.jsonl")
