@@ -220,14 +220,13 @@ fn expand_where_stringifies_a_bool_the_python_way() {
 
 #[test]
 fn unit_names_dedup_follows_raw_set_bool_is_int() {
-    // checklist rule 6 / config.py:556: `set(names)` on the RAW values -- `1` and `true` hash-equal
-    // in Python, so `["a", true]` and `["a", 1]` are as much "one name repeated" as `["a", "a"]`
-    // would be, from `set()`'s point of view. This unit's `name` field, though, is compared through
-    // `unit["name"] == name` elsewhere as a plain value, and `is_id()`/`ID_RE` require a string
-    // shape besides -- so the practical, gate-relevant case is two unit dicts whose `name` is the
-    // identical NON-string value, which the port's `py_str_of`-based list-uniqueness check must
-    // still flag as a duplicate the same way `[1, true]` fails Python's `set()` (both stringify to
-    // legal-looking-but-colliding text and neither is a valid `[a-z0-9_]+` name regardless).
+    // checklist rule 6 / config.py:556-557: `names.append(unit["name"])` keeps the RAW value (never
+    // stringified), then `len(set(names)) != len(names)` dedups by Python equality/hash -- `True`
+    // and `1` hash-equal (bool-is-int), so `[true, 1]` is "one name repeated" from `set()`'s point of
+    // view even though `str(True) != str(1)`. Verified against the live oracle (v0.2.0): it emits
+    // BOTH "unit name True must match [a-z0-9_]+" (str(1) == "1" DOES match `[a-z0-9_]+`, so only the
+    // `true` unit's shape is refused) AND "unit names must be unique" -- proving the dedup runs on
+    // the raw values, not on `py_str_of`, which would never collide "True" against "1".
     let data = broken1(
         "units",
         json!([
@@ -235,8 +234,59 @@ fn unit_names_dedup_follows_raw_set_bool_is_int() {
             {"name": 1, "locator_fields": ["f"], "chunk_size": 1},
         ]),
     );
-    // Both are refused for their shape (`must match [a-z0-9_]+`) before uniqueness is even
-    // meaningful; the two problems together prove neither name silently normalized to something
-    // legal-looking, which would have hidden the dedup question entirely.
-    assert_refused(data, "must match");
+    match config::load_from_mapping(data) {
+        Ok(_) => panic!("expected a refusal"),
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(msg.contains("unit name True must match [a-z0-9_]+"), "got: {msg}");
+            assert!(msg.contains("unit names must be unique"), "got: {msg}");
+        }
+    }
+}
+
+// ---- round-2 review's 4 remaining "list-shaped key fed a bare string" divergences (checklist rule 4) --
+
+#[test]
+fn fidelity_order_and_confirming_as_bare_strings_use_string_semantics() {
+    // `config.py:559-565` uses `fid["order"]`/`fid["confirming"]` exactly as declared. A string
+    // iterates by character (`for g in "a"` yields `"a"`), and its `len()`/`in` follow STRING
+    // semantics (substring containment, code-point count), not list semantics. Verified against the
+    // live oracle (v0.2.0): both mutations below ACCEPT there. Before this fix, the candidate's
+    // `.and_then(Value::as_array)` silently turned a bare string into an empty list, which made
+    // `len(confirming) >= len(order)` (`0 >= 0`) true and wrongly refused the first case.
+    let data = broken(&[
+        ("fidelity__order", Some(json!("abc"))),
+        ("fidelity__confirming", Some(json!("a"))),
+        ("fidelity__agent_grades", Some(json!("c"))),
+    ]);
+    assert_accepted(data);
+}
+
+#[test]
+fn fidelity_confirming_not_in_order_still_refuses_with_a_bare_string_order() {
+    // Same duck-typing, the refusing side: `"s" not in ["a", "b", "c"]` is True (list membership),
+    // so this must still name the missing grade -- proving the fix didn't just make everything ACCEPT.
+    let data = broken(&[
+        ("fidelity__order", Some(json!(["a", "b", "c"]))),
+        ("fidelity__confirming", Some(json!("s"))),
+        ("fidelity__agent_grades", Some(json!(["x"]))),
+    ]);
+    assert_refused(data, "fidelity.confirming not in order: s");
+}
+
+#[test]
+fn status_values_and_usable_as_bare_strings_use_string_semantics() {
+    // `config.py:576-584`, the same pattern as `fidelity` above: `st["usable"]` substring-contained
+    // in `st["values"]`, and `len()` of each is a code-point count. Live-oracle-verified ACCEPT.
+    let data = broken(&[("status__values", Some(json!("abc"))), ("status__usable", Some(json!("a")))]);
+    assert_accepted(data);
+}
+
+#[test]
+fn vocabulary_tiers_as_a_bare_string_indexes_by_character() {
+    // `config.py:595-599`: `tiers = vocab.get("tiers") or []` keeps a string as a string; `tiers[0]`
+    // on `"012"` is the one-character string `"0"`, which is never `== 0` (str never equals int in
+    // Python) -- REFUSED, live-oracle-verified, even though the digits "look like" they start at 0.
+    let data = broken1("vocabulary__tiers", json!("012"));
+    assert_refused(data, "vocabulary.tiers must start at 0 (noise)");
 }

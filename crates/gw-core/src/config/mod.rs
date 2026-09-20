@@ -576,6 +576,11 @@ pub fn validate(data: Value) -> R<Value> {
     } else {
         let units_arr = units_arr.unwrap();
         let mut names: Vec<String> = Vec::new();
+        // `config.py:557`: `len(set(names)) != len(names)` where `names` holds each unit's RAW
+        // `name` value (never stringified) -- `set()` dedups by Python equality/hash, so
+        // `[{"name": 1}, {"name": true}]` collides (bool-is-int) but `{"name": "1"}` would not.
+        // Kept alongside the display-friendly `names: Vec<String>` above.
+        let mut raw_names: Vec<Value> = Vec::new();
         for unit in units_arr {
             let unit_obj = unit.as_object();
             let name_ok = unit_obj.map(|o| is_truthy_nonempty(o.get("name"))).unwrap_or(false);
@@ -586,6 +591,7 @@ pub fn validate(data: Value) -> R<Value> {
             let unit_obj = unit_obj.unwrap();
             let name = py_str_of(&unit_obj["name"]);
             names.push(name.clone());
+            raw_names.push(unit_obj["name"].clone());
             if !is_id(&name) {
                 problems.push(format!("unit name {} must match [a-z0-9_]+", py_repr_value(&unit_obj["name"])));
             }
@@ -600,8 +606,7 @@ pub fn validate(data: Value) -> R<Value> {
                 problems.push(format!("unit {name} needs a positive chunk_size"));
             }
         }
-        let uniq = sorted_unique_strs(names.iter().map(String::as_str));
-        if uniq.len() != names.len() {
+        if py_set_len(&raw_names) != raw_names.len() {
             problems.push("unit names must be unique".to_string());
         }
     }
@@ -613,24 +618,32 @@ pub fn validate(data: Value) -> R<Value> {
     if !order_ok || !confirming_ok || fid_obj.is_none() {
         problems.push("fidelity needs order (best first) and confirming".to_string());
     } else if let Some(fid_obj) = fid_obj {
-        let order: Vec<Value> = fid_obj.get("order").and_then(Value::as_array).cloned().unwrap_or_default();
-        let confirming: Vec<Value> = fid_obj.get("confirming").and_then(Value::as_array).cloned().unwrap_or_default();
-        let order_strs: Vec<String> = order.iter().map(py_str_of).collect();
-        let missing: Vec<String> =
-            confirming.iter().map(py_str_of).filter(|g| !order_strs.contains(g)).collect();
+        // `config.py:559-565`: `fid["order"]`/`fid["confirming"]` are used AS DECLARED, not coerced to
+        // a list first -- a string value iterates by character and its `len()`/`in` follow string
+        // semantics (substring, code-point count), not list semantics. `py_iter_elems`/`py_len`/
+        // `py_contains` give each raw value (`Value::Array` or `Value::String`) the same duck-typed
+        // behaviour Python's `for`/`len`/`in` give it here.
+        let order_val = fid_obj.get("order").cloned().unwrap_or(Value::Null);
+        let confirming_val = fid_obj.get("confirming").cloned().unwrap_or(Value::Null);
+        let confirming_elems = py_iter_elems(&confirming_val);
+        let missing: Vec<String> = confirming_elems
+            .iter()
+            .filter(|g| !py_contains(&order_val, g))
+            .map(py_str_of)
+            .collect();
         if !missing.is_empty() {
             problems.push(format!("fidelity.confirming not in order: {}", missing.join(", ")));
         }
-        if confirming.len() >= order.len() {
+        if py_len(&confirming_val) >= py_len(&order_val) {
             problems.push("fidelity.confirming cannot be every grade: some grade must be unable to establish".to_string());
         }
         if !is_truthy_nonempty(fid_obj.get("agent_grades")) {
             problems.push("fidelity needs agent_grades: the grades that are model output".to_string());
         } else {
-            let agent_grades: Vec<String> =
-                fid_obj.get("agent_grades").and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
-            let confirming_strs: Vec<String> = confirming.iter().map(py_str_of).collect();
-            let overlap = sorted_unique_strs(confirming_strs.iter().map(String::as_str).filter(|g| agent_grades.contains(&g.to_string())));
+            let agent_grades_val = fid_obj.get("agent_grades").cloned().unwrap_or(Value::Null);
+            let agent_grades_strs: Vec<String> = py_iter_elems(&agent_grades_val).iter().map(py_str_of).collect();
+            let confirming_strs: Vec<String> = confirming_elems.iter().map(py_str_of).collect();
+            let overlap = sorted_unique_strs(confirming_strs.iter().map(String::as_str).filter(|g| agent_grades_strs.iter().any(|a| a == g)));
             if !overlap.is_empty() {
                 problems.push(format!(
                     "agent output may never confirm: {} is in both confirming and agent_grades",
@@ -647,14 +660,19 @@ pub fn validate(data: Value) -> R<Value> {
     if !values_ok || !usable_ok || st_obj.is_none() {
         problems.push("status needs values and usable".to_string());
     } else if let Some(st_obj) = st_obj {
-        let values: Vec<Value> = st_obj.get("values").and_then(Value::as_array).cloned().unwrap_or_default();
-        let usable: Vec<Value> = st_obj.get("usable").and_then(Value::as_array).cloned().unwrap_or_default();
-        let values_strs: Vec<String> = values.iter().map(py_str_of).collect();
-        let missing: Vec<String> = usable.iter().map(py_str_of).filter(|s| !values_strs.contains(s)).collect();
+        // Same duck-typing as `fidelity.order`/`fidelity.confirming` above (`config.py:576-584`
+        // uses `st["values"]`/`st["usable"]` as declared, not coerced to a list).
+        let values_val = st_obj.get("values").cloned().unwrap_or(Value::Null);
+        let usable_val = st_obj.get("usable").cloned().unwrap_or(Value::Null);
+        let missing: Vec<String> = py_iter_elems(&usable_val)
+            .iter()
+            .filter(|s| !py_contains(&values_val, s))
+            .map(py_str_of)
+            .collect();
         if !missing.is_empty() {
             problems.push(format!("status.usable not in values: {}", missing.join(", ")));
         }
-        if usable.len() >= values.len() {
+        if py_len(&usable_val) >= py_len(&values_val) {
             problems.push("status.usable cannot be every status: 'true but unusable' must be expressible".to_string());
         }
     }
@@ -676,7 +694,10 @@ pub fn validate(data: Value) -> R<Value> {
                 }
             }
         }
-        let tiers: Vec<Value> = vocab_obj.get("tiers").and_then(Value::as_array).cloned().unwrap_or_default();
+        // `config.py:595`: `tiers = vocab.get("tiers") or []` -- the raw declared value (a string
+        // iterates by character below, matching `fidelity`/`status` above), not coerced to a list.
+        let tiers_raw = vocab_obj.get("tiers").cloned().unwrap_or(Value::Null);
+        let tiers: Vec<Value> = if is_truthy_nonempty(Some(&tiers_raw)) { py_iter_elems(&tiers_raw) } else { Vec::new() };
         if !tiers.is_empty() {
             // `config.py:597`: `if tiers and list(tiers) != sorted(tiers):`. `sorted()` compares
             // adjacent elements as it scans for the initial run; the FIRST incomparable pair (e.g. a
@@ -914,6 +935,82 @@ fn py_equals_number(v: &Value, n: f64) -> bool {
         Value::Number(x) => x.as_f64().map(|x| x == n).unwrap_or(false),
         _ => false,
     }
+}
+
+/// Python `a == b`, matching `bool`-is-`int` and int/float cross-type equality; everything else
+/// (including a string compared to a number) falls back to `serde_json::Value`'s structural
+/// equality, which agrees with Python for the only other case this schema exercises: two strings.
+fn py_value_eq(a: &Value, b: &Value) -> bool {
+    fn as_num(v: &Value) -> Option<f64> {
+        match v {
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        }
+    }
+    match (as_num(a), as_num(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// Python `for x in v`: a list yields its elements; a string yields its characters, each as its own
+/// one-character string (`list("012") == ["0", "1", "2"]`). Every other JSON shape a raw config value
+/// can take here (a mapping, a number, a bool, null) does not appear behind a `for`/`list()` call in
+/// `config.py`'s `fidelity`/`status`/`vocabulary.tiers` checks without a dict/list guard in front of
+/// it first, so this yields nothing for them rather than guessing at Python's `TypeError`.
+fn py_iter_elems(v: &Value) -> Vec<Value> {
+    match v {
+        Value::Array(items) => items.clone(),
+        Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Python `len(v)` for the shapes this schema puts through it: a list's element count, a string's
+/// length in Unicode code points (what Python's `len(str)` counts), or a mapping's key count.
+fn py_len(v: &Value) -> usize {
+    match v {
+        Value::Array(items) => items.len(),
+        Value::String(s) => s.chars().count(),
+        Value::Object(m) => m.len(),
+        _ => 0,
+    }
+}
+
+/// Python `item in container`: a list checks for an equal element (`py_value_eq`); a string checks
+/// substring containment, which Python only allows when `item` is itself a string (comparing a
+/// non-string probe against a string container would raise `TypeError` in Python -- every caller
+/// here only probes with a value that came out of `py_iter_elems` on a sibling field, so it is
+/// always array-element-or-one-character-string; a non-string probe is treated as not contained
+/// rather than reproducing the crash); a mapping checks its keys.
+fn py_contains(container: &Value, item: &Value) -> bool {
+    match container {
+        Value::Array(items) => items.iter().any(|v| py_value_eq(v, item)),
+        Value::String(s) => match item {
+            Value::String(t) => s.contains(t.as_str()),
+            _ => false,
+        },
+        Value::Object(m) => match item {
+            Value::String(k) => m.contains_key(k),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Python `len(set(items))` over RAW (not stringified) values, using `py_value_eq` so `True` and `1`
+/// collide the way a real Python `set` would (bool-is-int hashes/compares equal to the matching int)
+/// while a string like `"1"` does not collide with either. O(n^2) is fine: this only ever runs over a
+/// single instance's unit list.
+fn py_set_len(items: &[Value]) -> usize {
+    let mut uniq: Vec<&Value> = Vec::new();
+    for item in items {
+        if !uniq.iter().any(|u| py_value_eq(u, item)) {
+            uniq.push(item);
+        }
+    }
+    uniq.len()
 }
 
 fn validate_labels(data: &Value, problems: &mut Vec<String>) {
@@ -1974,4 +2071,242 @@ pub fn spec(inst: &Instance) -> Value {
         out.insert("unique".to_string(), Value::Object(unique_out));
     }
     Value::Object(out)
+}
+
+// ---- round-2 review BLOCKING 3 (GATE DEPTH): every const allow/deny table pinned ------------------
+//
+// The `--config` differential corpus only PROBES these tables through instances that happen to use
+// one of their members; it does not compare the table's full contents against the oracle. The
+// review planted 8 wrong loaders that each widened or narrowed exactly one such constant and the
+// corpus caught only 2 of them -- and 2 of round-1's own twelve mutations (`LENS_KEYS +'notes'`,
+// a `REQUIRED_TOP` fidelity<->status swap) are STILL green for the same reason. A unit test in the
+// same module as the constant (not an integration test, which can only see `pub` items) that
+// compares it, byte for byte, against the literal in `groundworks/config.py` closes that gap for
+// good: any edit to a table -- widen, narrow, or reorder where order is observable (message text,
+// `REQUIRED_TOP`'s declared-order refusal listing) -- fails this test by name before it can reach
+// the differential at all.
+#[cfg(test)]
+mod const_table_pins {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn set<'a>(items: &'a [&'a str]) -> BTreeSet<&'a str> {
+        items.iter().copied().collect()
+    }
+
+    // ---- ordered (a Python tuple/list; order is observable in a message or an iteration) ---------
+
+    #[test]
+    fn built_in_node_tables_pin() {
+        // config.py:42 + :84 (`+ ("document",)`)
+        assert_eq!(
+            BUILT_IN_NODE_TABLES,
+            ["unit", "label", "fact", "conclusion", "authority", "critique", "answer", "document"]
+        );
+    }
+
+    #[test]
+    fn built_in_edges_pin() {
+        // config.py:43-52
+        assert_eq!(
+            BUILT_IN_EDGES,
+            [
+                ("cites", "fact", "unit"),
+                ("supports", "fact", "conclusion"),
+                ("undercuts", "fact", "conclusion"),
+                ("attacks", "critique", "conclusion"),
+                ("answers", "answer", "critique"),
+                ("bears_on", "label", "conclusion"),
+                ("relies_on", "conclusion", "authority"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reserved_tables_pin() {
+        // config.py:53
+        assert_eq!(RESERVED_TABLES, ["agent"]);
+    }
+
+    #[test]
+    fn built_in_fields_pin() {
+        // config.py:59-79 + :85-88 (`document` added, `unit.document` added)
+        let expected: &[(&str, &[(&str, &str)])] = &[
+            (
+                "unit",
+                &[
+                    ("type", "string"), ("text", "string"), ("locator", "object"), ("status", "string"),
+                    ("grade", "string"), ("hash", "string"), ("meta", "object"), ("document", "record"),
+                ],
+            ),
+            (
+                "label",
+                &[
+                    ("unit", "record"), ("tier", "int"), ("dir", "string"), ("issues", "array"),
+                    ("targets", "array"), ("role", "string"), ("reason", "string"), ("quote", "string"),
+                    ("grade", "string"), ("chunk", "string"), ("run", "string"),
+                ],
+            ),
+            (
+                "fact",
+                &[
+                    ("statement", "string"), ("status", "string"), ("note", "string"), ("tried", "string"),
+                    ("evidence", "string"), ("reasoning_type", "string"), ("author", "string"),
+                    ("lens", "string"), ("learned_at", "datetime"),
+                ],
+            ),
+            ("conclusion", &[("statement", "string"), ("ready", "bool"), ("rating", "string"), ("author", "string")]),
+            ("authority", &[("citation", "string"), ("verified", "bool"), ("source_grade", "string")]),
+            (
+                "critique",
+                &[
+                    ("lens", "string"), ("head", "string"), ("verdict", "string"), ("text", "string"),
+                    ("author", "string"), ("answered", "bool"),
+                ],
+            ),
+            ("answer", &[("text", "string"), ("author", "string")]),
+            (
+                "document",
+                &[
+                    ("sha256", "string"), ("media_type", "string"), ("bytes", "int"), ("capture", "string"),
+                    ("source_uri", "string"), ("retrieved_at", "datetime"), ("original_name", "string"),
+                    ("integrity", "string"), ("verified_at", "datetime"),
+                ],
+            ),
+        ];
+        assert_eq!(BUILT_IN_FIELDS, expected);
+    }
+
+    #[test]
+    fn independence_between_pin() {
+        // config.py:113
+        assert_eq!(INDEPENDENCE_BETWEEN, ["credential", "principal"]);
+    }
+
+    #[test]
+    fn audit_tables_pin() {
+        // config.py:115
+        assert_eq!(AUDIT_TABLES, ["row_writer", "link_creator", "promotion_log", "promotion_head"]);
+    }
+
+    #[test]
+    fn field_types_pin() {
+        // config.py:129 -- FIELD_TYPES.join(", ") appears verbatim in a refusal message, so both
+        // membership AND order are observable here.
+        assert_eq!(FIELD_TYPES, ["string", "int", "float", "bool", "datetime"]);
+    }
+
+    #[test]
+    fn edge_reserved_fields_pin() {
+        // config.py:133
+        assert_eq!(EDGE_RESERVED_FIELDS, ["id", "in", "out"]);
+    }
+
+    #[test]
+    fn required_top_pin() {
+        // config.py:31-32 -- iterated in this order to name the FIRST missing section, so a swap
+        // (round-1's still-green fidelity<->status mutant) changes which key a refusal names.
+        assert_eq!(
+            REQUIRED_TOP,
+            ["instance", "units", "fidelity", "status", "vocabulary", "gates", "evaluator", "human_owned", "privacy"]
+        );
+    }
+
+    #[test]
+    fn must_be_human_owned_pin() {
+        // config.py:33
+        assert_eq!(MUST_BE_HUMAN_OWNED, ["gates", "fidelity", "status", "evaluator", "privacy"]);
+    }
+
+    #[test]
+    fn human_owned_if_present_pin() {
+        // config.py:35 + :81 (`+ ["originals"]`) + :83 (`+ ["labels"]`)
+        assert_eq!(HUMAN_OWNED_IF_PRESENT, ["verdicts", "unique", "assertions", "promotion_log", "originals", "labels"]);
+    }
+
+    #[test]
+    fn lens_kinds_pin() {
+        // config.py:211 -- LENS_KINDS.join(", ") appears verbatim in a refusal message.
+        assert_eq!(LENS_KINDS, ["perspective", "discipline", "framework"]);
+    }
+
+    #[test]
+    fn lens_backings_pin() {
+        // config.py:212 -- weakest first, and LENS_BACKINGS.join(", ") appears in a refusal message.
+        assert_eq!(LENS_BACKINGS, ["prompt", "source", "graph", "calibrated"]);
+    }
+
+    #[test]
+    fn lens_standard_keys_pin() {
+        // config.py:214
+        assert_eq!(LENS_STANDARD_KEYS, ["status", "grade"]);
+    }
+
+    #[test]
+    fn lens_filter_fields_pin() {
+        // config.py:215 -- label fields only.
+        assert_eq!(LENS_FILTER_FIELDS, ["tier", "dir", "issues", "targets", "role", "chunk"]);
+    }
+
+    #[test]
+    fn lens_filter_words_pin() {
+        // config.py:216-217
+        assert_eq!(
+            LENS_FILTER_WORDS,
+            ["AND", "OR", "NOT", "IN", "CONTAINS", "CONTAINSANY", "CONTAINSALL", "CONTAINSNOT", "NONE", "true", "false"]
+        );
+    }
+
+    // ---- unordered (a Python `{...}` set; membership only) -----------------------------------------
+
+    #[test]
+    fn independence_keys_pin() {
+        // config.py:114
+        assert_eq!(set(INDEPENDENCE_KEYS), set(&["between", "own_evidence"]));
+    }
+
+    #[test]
+    fn table_keys_pin() {
+        // config.py:130
+        assert_eq!(set(TABLE_KEYS), set(&["fields", "doc"]));
+    }
+
+    #[test]
+    fn edge_keys_pin() {
+        // config.py:131
+        assert_eq!(set(EDGE_KEYS), set(&["from", "to", "fields", "doc"]));
+    }
+
+    #[test]
+    fn field_keys_pin() {
+        // config.py:132
+        assert_eq!(set(FIELD_KEYS), set(&["type", "one_of", "optional", "doc"]));
+    }
+
+    #[test]
+    fn top_keys_pin() {
+        // config.py:27-30 + :80 (`| {"originals"}`)
+        assert_eq!(
+            set(TOP_KEYS),
+            set(&[
+                "instance", "units", "fidelity", "status", "vocabulary", "gates", "lenses", "roles",
+                "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access", "authority",
+                "staleness", "discovery", "tables", "edges", "verdicts", "unique", "assertions",
+                "promotion_log", "labels", "originals",
+            ])
+        );
+    }
+
+    #[test]
+    fn lens_keys_pin() {
+        // config.py:213 -- round-1's still-green `LENS_KEYS +'notes'` mutant, whose own test pinned
+        // only the literal key `"extra_thing"` rather than the table's full contents.
+        assert_eq!(
+            set(LENS_KEYS),
+            set(&[
+                "name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk", "signed",
+                "order",
+            ])
+        );
+    }
 }
