@@ -9,3 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+regex = "1"
+thiserror = "1"

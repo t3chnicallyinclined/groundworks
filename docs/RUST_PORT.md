@@ -153,6 +153,18 @@ A later ticket may overturn one **only with a logged reason**.
 
 Dependencies at impl-10: **none.** `gw-core` and `gw` have empty `[dependencies]`; `gw` takes `gw-core` by path.
 
+Dependencies added at impl-11 / port-01 (the config loader):
+
+| Dependency | Why |
+|---|---|
+| `serde_json` (workspace dep, already used by fleetview; `preserve_order` feature turned on for `gw-core`/`gw` only) | The parsed config's shape (mappings, lists, scalars) IS `serde_json::Value` -- no separate config AST type. `preserve_order` backs `Value::Object` with an insertion-ordered map so key iteration matches Python dict order, which `validate()`'s problem list depends on (Python dicts preserve insertion order; a sorted map would silently reorder the joined error text). Selective per-package builds (`-p gw-core -p gw`, never `--workspace`) keep this feature out of every other lane's build graph. |
+| `regex` (already used by fleetview) | `groundworks/config.py`'s lens-filter tokenizer (`LENS_FILTER_TOKEN`) and the gate `where`-clause parser (`_FIELD_IN`/`_FIELD_EQ`/`_LITERAL` in `gates.py`) are regexes in the oracle; hand-rolling a second implementation risks a second, slightly different one. |
+| `thiserror` | The "one `thiserror` enum per crate" decision above was written before any error type existed; `config::ConfigError` is gw-core's first. |
+
+**Not** `serde_yaml`: the config gate's error TEXT is compared (`bad_configs.txt`, byte-exact), and the oracle's `parse_yaml` is a hand-written strict subset (tabs refused, anchors refused, a specific "line N: ..." message per failure) that no general YAML parser reproduces. `groundworks/crates/gw-core/src/config/yaml.rs` is a line-for-line port of `parse_yaml`/`_parse_map`/`_parse_list`/`_scalar`/`_flow` instead.
+
+**The `--config` harness mode** (`groundworks/harness/differential.py --candidate <bin> --config`, this ticket's `gate:` line) did not exist before this ticket -- `--goldens`/`--mcp` were the only candidate-facing modes at impl-10, and `--mcp` was a stub. It runs the candidate's `gw config spec <instance.yaml>` for every instance the SurQL goldens cover and diffs the output against `goldens/config/<instance>.spec.json`; and it drives `gw config check <fixture.json>` (one call per `broken(...)` fixture in the oracle's `tests/test_config.py`, read out via a new child mode `--_config_fixtures` so the AST-eval step never imports the oracle package into the harness's own process and risks writing a `__pycache__` into the pinned checkout) to reproduce `goldens/config/bad_configs.txt`. Both go through the same byte-exact `diff_trees` every other golden tree uses.
+
 ---
 
 ## 4. The mask list (transcript only)
