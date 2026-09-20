@@ -85,6 +85,60 @@ count that stops matching. It has never driven a CANDIDATE.** `--goldens <dir>` 
 goldens/config half. The transcript half's candidate path (`--mcp --candidate <bin>`) stays NOT EXECUTED, and
 therefore unexercised, until the Rust front door exists at impl-12/port-09.
 
+### `--split`: the first gate that DOES drive a candidate — and the corpus pattern every port copies
+
+`--split` (port-04, `2026-09-18-groundworks-port-04-db-client`) is the first differential arm that actually
+runs a candidate binary (`<candidate> --split-statements`, stdin in / JSON array out) against the oracle's own
+`db.py::_split_statements`, one comparison per `(name, text)` entry from `_oracle_split_texts()`.
+
+**The shallow-gate lesson (blocking finding B3, review of 1358151).** At first the gate compared only 4
+inputs: the 2 shipped `.surql` files plus test_db.py's 2 `SplitTests` fixtures. None of the four contains a
+double-quoted string, a paren, or an unbalanced bracket. A reviewer built 9 plausible WRONG ports of
+`_split_statements` and ran them against exactly that fixture set: **4 of 9 passed anyway** (double quotes
+not treated as strings; `depth == 0` instead of `depth <= 0`; parens not nested; any quote closing any
+quote). A candidate can be RIGHT on the fixtures the gate happens to check and still be WRONG on real input —
+the fixtures were never adversarial, just convenient.
+
+**The fix: `_ADVERSARIAL_SPLIT_CASES` in `harness/differential.py`**, ~40 hand-built `(name, text)` cases,
+one class of failure per case (not exhaustive fuzzing — each case targets ONE way a splitter can be wrong):
+empty input and every line-boundary edge (no/one/many trailing newlines, CRLF, lone CR, mixed endings, only
+semicolons); every one of Python's OTHER `str.splitlines()` boundaries (`\x0b`/`\x0c`/`\x1c`-`\x1e`/``/
+` `/` `) closing a `--` comment (this is what caught blocking finding B1 for real, not a
+constructed example); which characters open a string and what closes it (single vs double quotes, a quote
+of one kind inside the other, an unterminated quote, a quote spanning lines); brace/bracket/paren depth
+including nesting, unmatched openers/closers, and depth going negative; a backslash before a closing quote
+(SurQL has no escaping — a candidate that assumes it does is wrong); and unicode in strings, comments and
+astral-plane code points. Two of the cases (`nested_parens_inner_close_then_semicolon`,
+`backslash_before_closing_*`) were purpose-built against a specific mutant below because the obvious version
+of the case did not actually diverge — see the comments on `_ADVERSARIAL_SPLIT_CASES` for why.
+
+**Mutation-proven, 2026-09-19** (each of the reviewer's 9 wrong splitters implemented as a throwaway patch to
+`gw_core::db`, `cargo build --release -p gw`, `--split` run, reverted with `git checkout` — never left in the
+tree):
+
+| Mutant | What it gets wrong | `--split` result | Caught by (adversarial cases, named) |
+|---|---|---|---|
+| M1 only single quotes are strings | `"` never opens/closes a string | RED | `double_quoted_semicolon`, `double_quoted_comment_marker`, `double_quote_spans_lines`, `unterminated_double_quote`, `mixed_quote_types_adjacent`, `double_quote_containing_single_quote` |
+| M2 `depth == 0` not `depth <= 0` | an unmatched closer (negative depth) never re-triggers splitting | RED | `unmatched_closer`, `depth_goes_negative_then_more_semicolons` |
+| M3 parens don't nest | `(` sets a flag instead of incrementing; an inner `)` looks like the outer one closed | RED | `nested_parens_inner_close_then_semicolon` (also caught for free by the shipped `archive_bin.surql`/`tms_propagation.surql`) |
+| M4 comments not stripped before splitting | `--` text can carry a semicolon into a statement | RED | every line-boundary and comment-boundary case (14 of them) |
+| M5 quotes not tracked in `strip_comments` | `--` inside a string is treated as a real comment | RED | `double_quoted_comment_marker`, `single_quoted_comment_marker` |
+| M6 fully naive `text.split(';')` | no quote/depth/comment tracking at all | RED | 9 cases spanning quotes, nesting and comments |
+| M7 any quote closes any quote | a `'` can close a `"` and vice versa | RED | `double_quote_containing_single_quote`, `single_quote_containing_double_quote` |
+| M8 `python_splitlines` is `str::split('\n')` | keeps a phantom trailing empty line; misses the other line boundaries | RED | every line-boundary/comment-boundary case (14 of them) |
+| M9 backslash escapes the following quote | SurQL has no escaping; a quote followed by content it should have closed stays open | RED | `backslash_before_closing_quote`, `backslash_before_closing_double_quote` (built specifically for this mutant — see the corpus comment) |
+
+All 9 go RED **by name** (a named adversarial case, or in M3's case also a shipped `.surql` file), and the
+baseline is GREEN again after every revert (`git status --porcelain` empty on `db.rs` after each `git
+checkout`). `cargo gw-test` (18 tests) and `cargo clippy -D warnings` stay clean throughout.
+
+**This is the pattern ports 01-09 copy, not just this file's corpus.** Any port whose gate compares a
+candidate against a pure text/data function should: (1) start from the oracle's own fixtures, (2) ask "what
+adversarial input would a plausible WRONG port still pass on these fixtures", (3) write one case per failure
+class rather than fuzzing blindly, and (4) actually implement 3-10 plausible wrong ports as throwaway
+mutations and prove each goes RED by name before trusting the gate. A gate that has never been shown to catch
+anything is a gate that has never been tested — see `gate-discipline`.
+
 ### What is compared
 
 1. **SurQL goldens, no normalization, ever** — `goldens/surql/<instance>/<component>.surql`, one file per

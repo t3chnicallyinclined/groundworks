@@ -517,8 +517,22 @@ _ADVERSARIAL_SPLIT_CASES = [
     ("adversarial::double_quote_containing_single_quote", 'SELECT "it\'s fine"; SELECT 2;'),
     ("adversarial::dash_not_comment", "SELECT 1 - 2; SELECT 3;"),
     ("adversarial::single_dash_before_quote", "SELECT 1 -'a'; SELECT 2;"),
+    # SurQL text has no backslash-escaping (db.py's quote tracking is naive: ANY occurrence of the
+    # open quote character closes it, backslash or no); a candidate that assumes a backslash escapes
+    # the following quote (a plausible habit carried over from a language that does) keeps the quote
+    # open past where the oracle closes it. That is only visible once something AFTER the
+    # backslash-quote depends on quote state -- here, a `--` on the same line that the oracle treats
+    # as a real comment (the quote already closed) but the mutant still thinks is inside the string
+    # (so it survives into the statement text instead of being stripped).
+    ("adversarial::backslash_before_closing_quote", "SELECT 'a\\' -- comment\nSELECT 2;"),
+    ("adversarial::backslash_before_closing_double_quote", 'SELECT "a\\" -- comment\nSELECT 2;'),
     # -- brace/bracket/paren depth: nesting, unmatched, and negative depth ---------------------
     ("adversarial::nested_parens", "SELECT (1, (2, (3;4), 5)); SELECT 2;"),
+    # A wrong splitter that treats parens as a single non-nesting flag (rather than counting) closes
+    # the OUTER paren as soon as the INNER one closes; the semicolon right after that inner close then
+    # looks like it is at depth 0 (so it wrongly splits) when the real depth is still 1 (still inside
+    # the outer paren, so the oracle does not split there).
+    ("adversarial::nested_parens_inner_close_then_semicolon", "SELECT (1, (2), 3;4); SELECT 5;"),
     ("adversarial::nested_mixed_brackets", "UPDATE x SET f = {a: [1, (2;3), {b: 4}], c: 'd;e'}; SELECT 1;"),
     ("adversarial::unmatched_closer", "SELECT 1); SELECT 2;"),
     ("adversarial::unmatched_opener", "SELECT (1; SELECT 2;"),
