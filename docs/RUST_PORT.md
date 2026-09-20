@@ -241,6 +241,11 @@ Dependencies added at impl-11 / port-01 (the config loader):
 
 **The `--config` harness mode** (`groundworks/harness/differential.py --candidate <bin> --config`, this ticket's `gate:` line) did not exist before this ticket -- `--goldens`/`--mcp` were the only candidate-facing modes at impl-10, and `--mcp` was a stub. It runs the candidate's `gw config spec <instance.yaml>` for every instance the SurQL goldens cover and diffs the output against `goldens/config/<instance>.spec.json`; and it drives `gw config check <fixture.json>` (one call per `broken(...)` fixture in the oracle's `tests/test_config.py`, read out via a new child mode `--_config_fixtures` so the AST-eval step never imports the oracle package into the harness's own process and risks writing a `__pycache__` into the pinned checkout) to reproduce `goldens/config/bad_configs.txt`. Both go through the same byte-exact `diff_trees` every other golden tree uses.
 
+**Known limitations carried, not fixed (round-2 review minors)** -- each is cited inline at its site:
+
+* **`float("inf"/"-inf"/"nan")`**: Python's `int()`/`float()` accept these and produce a real, unbounded-magnitude scalar; `serde_json::Number` has no non-finite representation (`Number::from_f64` returns `None`), so `config/yaml.rs`'s scalar parser degrades a non-finite YAML/JSON scalar to a plain `Value::String` instead. No fixture in the current corpus depends on it.
+* **A digit-only integer literal past even `u64::MAX`** (e.g. `chunk_size: 10**30`) on the JSON `gw config check` path: `serde_json` parses it as an `f64` indistinguishable from a genuinely fractional/exponent literal of the same magnitude, so `config::py_int_like` (`config/mod.rs`) returns `None` (REFUSED) where the oracle's unbounded Python `int` ACCEPTs. The YAML path (`config/yaml.rs`'s `py_int`) keeps the literal as text and so can clamp it to `i64::MAX` instead of losing its int-ness entirely; `py_int_like` now does the same clamp for the narrower gap of a value that fits `u64` but not `i64` (still digit-only, e.g. `18446744073709551615`), which is the part reachable without a new dependency. Closing the wider gap needs `serde_json`'s `arbitrary_precision` feature to keep the original digits instead of a lossy `f64` -- a new dependency line this ticket's scope does not call for.
+
 ---
 
 ## 4. The mask list (transcript only)

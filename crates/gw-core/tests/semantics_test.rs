@@ -290,3 +290,14 @@ fn vocabulary_tiers_as_a_bare_string_indexes_by_character() {
     let data = broken1("vocabulary__tiers", json!("012"));
     assert_refused(data, "vocabulary.tiers must start at 0 (noise)");
 }
+
+#[test]
+fn chunk_size_past_i64_but_within_u64_is_still_accepted() {
+    // round-2 review minor: `py_int_like` special-cased `is_i64()`/`is_u64()` together and then
+    // called `n.as_i64()`, which is `None` for a value that fits `u64` but not `i64` (e.g.
+    // `18446744073709551615`, `u64::MAX`) -- silently REFUSING a chunk_size the oracle's unbounded
+    // Python `int` ACCEPTs, even though `serde_json` parsed it as a genuine whole number (not the
+    // `f64`-degrades-everything-past-`u64::MAX` case, which is a documented, unfixed limitation).
+    let data = broken1("units", json!([{"name": "line", "locator_fields": ["f"], "chunk_size": 18_446_744_073_709_551_615u64}]));
+    assert_accepted(data);
+}

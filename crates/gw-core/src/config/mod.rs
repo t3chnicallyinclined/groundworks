@@ -304,10 +304,22 @@ fn py_truthy_bool(v: &Value) -> bool {
 /// Python `isinstance(x, int)` for the JSON-shaped value space: true for `bool` (a subtype of `int`)
 /// and for a whole-numbered `Number`, false for a `float`-shaped `Number` (`5.0` parses as a JSON
 /// float, `is_i64()`/`is_u64()` is false) or anything else. Returns the Python `int(x)` value.
+///
+/// KNOWN LIMITATION (round-2 review minor, documented not fixed -- see `docs/RUST_PORT.md`): a
+/// digit-only integer literal past even `u64::MAX` (e.g. `chunk_size: 10**30`, `10` followed by 29
+/// zeroes) has no whole-number `serde_json::Number` representation at all -- `serde_json` parses it
+/// as an `f64` indistinguishable from a genuinely fractional/exponent literal of the same magnitude,
+/// so this returns `None` (REFUSED) where the oracle's unbounded Python `int` ACCEPTs. This is the
+/// same class of low-impact precision loss as the `inf`/`nan` scalar case elsewhere in this port; a
+/// real fix needs `serde_json`'s `arbitrary_precision` feature (a new dependency line this ticket's
+/// scope does not call for) to keep the literal's own text instead of a lossy `f64`. `u64::MAX` and
+/// below (i.e. still digit-only, just past `i64::MAX`) IS fixed here, matching `yaml.rs`'s own
+/// `py_int` clamp-to-`i64::MAX` for a YAML integer scalar in the same range.
 pub fn py_int_like(v: &Value) -> Option<i64> {
     match v {
         Value::Bool(b) => Some(if *b { 1 } else { 0 }),
-        Value::Number(n) if n.is_i64() || n.is_u64() => n.as_i64(),
+        Value::Number(n) if n.is_i64() => n.as_i64(),
+        Value::Number(n) if n.is_u64() => Some(n.as_u64().map(|u| u.min(i64::MAX as u64) as i64).unwrap_or(i64::MAX)),
         _ => None,
     }
 }
