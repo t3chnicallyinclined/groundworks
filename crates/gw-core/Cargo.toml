@@ -9,3 +9,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The SurrealDB HTTP /sql endpoint this crate talks to is always plain http:// on localhost
+# (db.py's own default, and every caller in this repo); TLS is not a decision this crate needs to make.
+ureq = { version = "2", default-features = false }
+serde_json.workspace = true
+thiserror = "1"

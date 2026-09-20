@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 gw-core = { path = "../gw-core" }
+serde_json.workspace = true

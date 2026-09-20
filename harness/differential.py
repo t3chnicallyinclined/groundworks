@@ -461,6 +461,115 @@ def diff_trees(left, right, left_name="oracle", right_name="candidate"):
 
 
 # ---------------------------------------------------------------------------------------------
+# --split: db.py's `_split_statements`, byte for byte, against a Rust candidate's own splitter
+# ---------------------------------------------------------------------------------------------
+# port-04 (`_tickets/2026-09-18-groundworks-port-04-db-client.md`) ports db.py's text functions
+# (`_strip_comments` / `_split_statements`) to `gw_core::db`. This is the one piece of that port the
+# owner's gate checks directly, on real input: every `.surql` file the oracle ships, plus every
+# fixture `tests/test_db.py`'s `SplitTests` feeds to `_split_statements` (read out by AST, so a new
+# fixture is picked up without a copy that could drift).
+
+def _oracle_split_texts():
+    """[(name, text), ...] for every input the split gate compares: one entry per `.surql` file the
+    oracle ships (there are two at v0.2.0, both under `groundworks/patterns/`), plus one entry per
+    `text = ...` fixture inside `tests/test_db.py`'s `SplitTests` class."""
+    entries = []
+    for path in sorted(ORACLE_DIR.rglob("*.surql")):
+        entries.append((path.relative_to(ORACLE_DIR).as_posix(), path.read_text(encoding="utf-8")))
+    src_path = ORACLE_DIR / "tests" / "test_db.py"
+    source = src_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "SplitTests":
+            for item in node.body:
+                if not isinstance(item, ast.FunctionDef):
+                    continue
+                for stmt in item.body:
+                    if isinstance(stmt, ast.Assign) and any(
+                        isinstance(t, ast.Name) and t.id == "text" for t in stmt.targets
+                    ):
+                        entries.append(("tests/test_db.py::%s" % item.name, ast.literal_eval(stmt.value)))
+    if not entries:
+        raise NotExecuted("NOT EXECUTED: found no .surql files and no SplitTests fixtures to split")
+    return entries
+
+
+def _emit_split(work_dir):
+    """Runs INSIDE the child, with the oracle importable: writes `out.json`, a {name: [statements]}
+    map from db.py's own `_split_statements`, for the entries `run_split` wrote to `in.json`."""
+    from groundworks import db as dbmod
+    work_dir = pathlib.Path(work_dir)
+    entries = json.loads((work_dir / "in.json").read_text(encoding="utf-8"))
+    result = {name: dbmod._split_statements(text) for name, text in entries}
+    (work_dir / "out.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+
+def _resolve_candidate(candidate):
+    """A candidate path that `subprocess.run` can actually launch. On Windows, CreateProcess does not
+    search PATH or append an extension for a relative path with no suffix (`target/release/gw`, the
+    cargo build output and this ticket's own gate command) -- `.exe` is tried explicitly, absolute or
+    not, before giving up."""
+    path = pathlib.Path(candidate)
+    if path.exists():
+        return str(path.resolve())
+    if os.name == "nt" and path.suffix == "":
+        with_exe = path.with_suffix(".exe")
+        if with_exe.exists():
+            return str(with_exe.resolve())
+    raise NotExecuted("NOT EXECUTED: candidate binary not found: %s" % candidate)
+
+
+def run_split(candidate):
+    """Byte-identical statement splitting: the oracle's `_split_statements` (run in a child on the
+    pinned checkout) against `<candidate> --split-statements` (fed each text on stdin, expected to
+    print a JSON array of strings on stdout) -- one comparison per entry from `_oracle_split_texts`.
+    Returns a list of differences, empty if none."""
+    candidate = _resolve_candidate(candidate)
+    entries = _oracle_split_texts()
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="gw_split_"))
+    try:
+        (tmp / "in.json").write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+        run = subprocess.run([sys.executable, str(HERE / "differential.py"), "--_split", str(tmp)],
+                             env=child_env(), cwd=str(ORACLE_DIR), capture_output=True, text=True)
+        if run.returncode != 0:
+            raise NotExecuted("NOT EXECUTED: the oracle's own split failed:\n%s\n%s"
+                              % (run.stdout[-2000:], run.stderr[-2000:]))
+        oracle_result = json.loads((tmp / "out.json").read_text(encoding="utf-8"))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    out = []
+    for name, text in entries:
+        # bytes in, bytes out: `text=True` would have subprocess re-translate "\n" to the platform
+        # line separator on the way into the candidate's stdin (os.linesep == "\r\n" on Windows),
+        # which is not what `dbmod._split_statements` ever saw in-process -- it silently added a
+        # byte the oracle side never had. Measured: it turned identical splits into a false MISSING
+        # on every .surql fixture (an extra "\r" in the first statement of both shipped patterns).
+        proc = subprocess.run([candidate, "--split-statements"], input=text.encode("utf-8"),
+                              capture_output=True)
+        if proc.returncode != 0:
+            out.append("%s: candidate exited %d: %s"
+                       % (name, proc.returncode, proc.stderr.decode("utf-8", "replace")[-500:]))
+            continue
+        try:
+            candidate_parts = json.loads(proc.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            out.append("%s: candidate did not print a JSON array of statements: %r (%s)"
+                       % (name, proc.stdout[:300], exc))
+            continue
+        oracle_parts = oracle_result[name]
+        if candidate_parts == oracle_parts:
+            continue
+        i = next((i for i in range(min(len(candidate_parts), len(oracle_parts)))
+                 if candidate_parts[i] != oracle_parts[i]), min(len(candidate_parts), len(oracle_parts)))
+        oracle_at = oracle_parts[i] if i < len(oracle_parts) else "<missing>"
+        candidate_at = candidate_parts[i] if i < len(candidate_parts) else "<missing>"
+        out.append("%s: statement %d of %d/%d differs\n  oracle:    %r\n  candidate: %r"
+                   % (name, i, len(oracle_parts), len(candidate_parts), oracle_at, candidate_at))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
 # the transcript: one seeded single-agent MCP session against the oracle front door
 # ---------------------------------------------------------------------------------------------
 
@@ -1201,8 +1310,13 @@ def main(argv=None):
     parser.add_argument("--mcp", action="store_true", help="replay the call script against a candidate")
     parser.add_argument("--candidate", help="the candidate binary (with --mcp)")
     parser.add_argument("--goldens", help="compare this tree against the committed goldens")
+    parser.add_argument("--split", action="store_true",
+                       help="byte-identical statement splitting (db.py's _split_statements) between "
+                            "--candidate and the oracle, on every .surql file the oracle ships and "
+                            "the test_db.py SplitTests fixtures")
     parser.add_argument("--_emit", help=argparse.SUPPRESS)
     parser.add_argument("--_transcript", help=argparse.SUPPRESS)
+    parser.add_argument("--_split", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     if args._emit:                                   # child mode
@@ -1210,6 +1324,9 @@ def main(argv=None):
         return 0
     if args._transcript:                             # child mode
         _record_transcript(args._transcript)
+        return 0
+    if args._split:                                  # child mode
+        _emit_split(args._split)
         return 0
 
     if args.oracle != ORACLE_TAG:
@@ -1258,6 +1375,17 @@ def main(argv=None):
             bad = diff_trees(GOLDENS, args.goldens, "committed", "candidate")
             for line in bad:
                 print(line)
+            return 1 if bad else 0
+        if args.split:
+            verify_oracle(args.oracle)
+            if not args.candidate:
+                print("NOT EXECUTED: --split needs --candidate <bin>")
+                return 2
+            bad = run_split(args.candidate)
+            for line in bad:
+                print(line)
+            if not bad:
+                print("SPLIT GREEN: candidate matches db.py's _split_statements on every fixture")
             return 1 if bad else 0
         if args.mcp:
             verify_oracle(args.oracle)
