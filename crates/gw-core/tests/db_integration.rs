@@ -8,8 +8,12 @@
 //!
 //! `cargo gw-test` runs this file. If no SurrealDB binary is found (`GROUNDWORKS_SURREAL`, `PATH`, or
 //! the per-user Windows install location -- the same order as the oracle's `surreal_bin.find()`), the
-//! surreal-backed tests print NOT EXECUTED and pass trivially rather than failing a machine that has
-//! never installed the database; the fake-server test needs no external binary and always runs.
+//! surreal-backed tests FAIL LOUDLY (`panic!`, not a silent early `return`) rather than reading as a
+//! pass -- `differential.py`'s own convention is that a missing dependency is a `NotExecuted`, which
+//! exits nonzero, never a green gate (`2026-09-18-groundworks-port-04-db-client`, blocking finding
+//! B4: `cargo test -p gw-core --test db_integration` with no surreal on PATH used to report "3
+//! passed" in 0.03s, silently skipping both the denied-write and the reconnect done-when items). The
+//! fake-server test needs no external binary and always runs.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -108,16 +112,19 @@ impl Drop for Throwaway {
     }
 }
 
+/// Fails the test (not a silent `return`) when no SurrealDB binary can be found, so the absence of a
+/// database is reported as a FAILURE, never as a pass. Matches `differential.py`'s own convention
+/// (`NotExecuted` -> nonzero exit): a done-when item that never ran must not read as green.
 macro_rules! skip_without_surreal {
     () => {
         match find_surreal() {
             Some(bin) => bin,
-            None => {
-                eprintln!(
-                    "NOT EXECUTED: SurrealDB binary not found. Install it or set GROUNDWORKS_SURREAL."
-                );
-                return;
-            }
+            None => panic!(
+                "NOT EXECUTED (fails this test, not a pass): SurrealDB binary not found. Install it, or \
+                 set GROUNDWORKS_SURREAL to its path. This test cannot prove its done-when item without a \
+                 real server, and a missing dependency must fail the gate rather than silently report \
+                 success (see differential.py's NotExecuted -> exit 2 convention)."
+            ),
         }
     };
 }

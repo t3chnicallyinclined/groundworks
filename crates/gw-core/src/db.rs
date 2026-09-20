@@ -61,18 +61,29 @@ fn truncate(text: &str, max_chars: usize) -> String {
 
 /// The leading write verb of a statement (case-insensitive, on a word boundary), or `None`. Ports
 /// `db.py`'s `WRITE_RE = re.compile(r"^\s*(CREATE|UPSERT|UPDATE|RELATE|DELETE|INSERT)\b", re.I)`.
+///
+/// Char-safe, not byte-safe: an earlier version used `str::split_at(verb.len())`, a BYTE index,
+/// which panics ("byte index N is not a char boundary") whenever a multi-byte UTF-8 character sits
+/// at that offset -- reachable from `denied()` on the very first non-ASCII status-OK empty-result
+/// block it sees under record auth (`2026-09-18-groundworks-port-04-db-client`, blocking finding
+/// B2). All six verbs are ASCII, so comparing by `char` (not `u8`) is both correct and never a
+/// narrower match than the byte version was.
 fn write_verb(statement: &str) -> Option<&'static str> {
     let trimmed = statement.trim_start();
+    let chars: Vec<char> = trimmed.chars().collect();
     for verb in WRITE_VERBS {
-        if trimmed.len() < verb.len() {
+        let verb_len = verb.len(); // every WRITE_VERBS entry is pure ASCII: chars == bytes
+        if chars.len() < verb_len {
             continue;
         }
-        let (head, rest) = trimmed.split_at(verb.len());
-        if head.eq_ignore_ascii_case(verb) {
-            let boundary = rest
-                .chars()
-                .next()
-                .map(|c| !(c.is_alphanumeric() || c == '_'))
+        let head_matches = chars[..verb_len]
+            .iter()
+            .zip(verb.chars())
+            .all(|(c, v)| c.eq_ignore_ascii_case(&v));
+        if head_matches {
+            let boundary = chars
+                .get(verb_len)
+                .map(|c| !(c.is_alphanumeric() || *c == '_'))
                 .unwrap_or(true);
             if boundary {
                 return Some(verb);
@@ -82,13 +93,20 @@ fn write_verb(statement: &str) -> Option<&'static str> {
     None
 }
 
-/// Ports Python's `str.splitlines()` closely enough for SurQL text: `\n`, `\r\n` and lone `\r` are
-/// each ONE line break, and a trailing terminator does not produce a phantom empty final line the
-/// way `str::split('\n')` would (`"a\n".splitlines() == ["a"]`, not `["a", ""]`). `_strip_comments`
+/// Ports Python's `str.splitlines()` for SurQL text: `\n`, `\r\n` and lone `\r` are each ONE line
+/// break, and a trailing terminator does not produce a phantom empty final line the way
+/// `str::split('\n')` would (`"a\n".splitlines() == ["a"]`, not `["a", ""]`). `_strip_comments`
 /// below relies on exactly this: it is what makes the oracle drop one trailing newline rather than
-/// keep it (measured against `groundworks/patterns/*.surql`, which all end in `\n`). Unicode's other
-/// line-boundary code points (`\x0b`, `\x0c`, `\x1c`-`\x1e`, `\u{85}`, `\u{2028}`, `\u{2029}`) are not
-/// handled: SurQL text does not contain them, and the oracle's own fixtures never exercise them.
+/// keep it (measured against `groundworks/patterns/*.surql`, which all end in `\n`).
+///
+/// Every OTHER line boundary `str.splitlines()` recognises is handled too (`\x0b` vertical tab,
+/// `\x0c` form feed, `\x1c`-`\x1e` file/group/record separator, `\u{85}` NEL, `\u{2028}` line
+/// separator, `\u{2029}` paragraph separator) -- an earlier version claimed "SurQL text does not
+/// contain them" and skipped them, which is not safe: a line break is what ENDS a `--` comment.
+/// Proven on the built candidate (`2026-09-18-groundworks-port-04-db-client`, blocking finding B1):
+/// `"SELECT 1; -- c\x0cSELECT 2;\n"` split the oracle's way keeps `SELECT 2`, but treating `\x0c` as
+/// ordinary text swallows the rest of the script into the comment and `script()` reports SUCCESS
+/// having sent nothing -- silent statement loss, rule 5.
 fn python_splitlines(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
@@ -101,7 +119,8 @@ fn python_splitlines(text: &str) -> Vec<String> {
                 }
                 lines.push(std::mem::take(&mut current));
             }
-            '\n' => lines.push(std::mem::take(&mut current)),
+            '\n' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}'
+            | '\u{2029}' => lines.push(std::mem::take(&mut current)),
             _ => current.push(ch),
         }
     }
@@ -219,8 +238,9 @@ pub fn version_problem_for(url: &str, reported: &str) -> Option<String> {
     let found = find_version(reported);
     match found {
         None => Some(format!(
-            "the server at {} reports its version as {:?}, which does not contain one",
-            url, reported
+            "the server at {} reports its version as {}, which does not contain one",
+            url,
+            python_repr_str(reported)
         )),
         Some((major, minor, _patch)) => {
             if major != MEASURED_MAJOR {
@@ -304,9 +324,15 @@ impl Db {
         &self.url
     }
 
+    /// Ports db.py:69's `base = self.url[:-4] if self.url.endswith("/sql") else self.url.rstrip("/")`
+    /// exactly: the trailing-slash trim applies ONLY on the else branch. An earlier version always
+    /// trimmed a trailing slash, which is harmless for every URL this repo actually uses (nothing
+    /// ends `/sql/`) but diverges from the oracle on that input (minor m5).
     fn base_url(&self) -> String {
-        let trimmed = self.url.strip_suffix("/sql").unwrap_or(&self.url);
-        trimmed.trim_end_matches('/').to_string()
+        match self.url.strip_suffix("/sql") {
+            Some(trimmed) => trimmed.to_string(),
+            None => self.url.trim_end_matches('/').to_string(),
+        }
     }
 
     // ---- plumbing --------------------------------------------------------------------------
@@ -332,9 +358,14 @@ impl Db {
             Err(ureq::Error::Status(code, response)) => {
                 let detail = truncate(&response.into_string().unwrap_or_default(), 300);
                 return Err(DbError::db(format!(
-                    "signin refused for agent {:?} via access {:?} on {}/{} (HTTP {}: {}); the credential \
+                    "signin refused for agent {} via access {} on {}/{} (HTTP {}: {}); the credential \
                      may be revoked, expired or mistyped",
-                    self.user, self.access, self.ns, self.db, code, detail
+                    python_repr_str(&self.user),
+                    python_repr_opt_str(&self.access),
+                    self.ns,
+                    self.db,
+                    code,
+                    detail
                 )));
             }
             Err(ureq::Error::Transport(t)) => {
@@ -354,8 +385,8 @@ impl Db {
                 Ok(t)
             }
             None => Err(DbError::db(format!(
-                "signin for agent {:?} returned no token: {}",
-                self.user,
+                "signin for agent {} returned no token: {}",
+                python_repr_str(&self.user),
                 truncate(&raw, 300)
             ))),
         }
@@ -424,7 +455,7 @@ impl Db {
         let value = self.post(&body, true)?;
         let blocks = value
             .as_array()
-            .ok_or_else(|| DbError::db(format!("unexpected response shape: {}", value_type_name(&value))))?
+            .ok_or_else(|| DbError::db(format!("unexpected response shape: {}", python_type_name(&value))))?
             .clone();
         let first_is_use_ok = blocks
             .first()
@@ -469,9 +500,9 @@ impl Db {
             if is_ok && is_empty {
                 if let Some(verb) = write_verb(text) {
                     return Some(format!(
-                        "{} refused by datastore permissions for agent {:?} (or the record does not exist): {}",
+                        "{} refused by datastore permissions for agent {} (or the record does not exist): {}",
                         verb,
-                        self.user,
+                        python_repr_str(&self.user),
                         truncate(text, 200)
                     ));
                 }
@@ -490,7 +521,7 @@ impl Db {
                 return Err(DbError::db(format!(
                     "statement {} failed: {}\n  statement: {}",
                     index + 1,
-                    block.get("result").cloned().unwrap_or(Value::Null),
+                    python_str_value(&block.get("result").cloned().unwrap_or(Value::Null)),
                     truncate(statement, 300)
                 )));
             }
@@ -515,7 +546,7 @@ impl Db {
         };
         for block in &blocks {
             if block.get("status").and_then(Value::as_str) != Some("OK") {
-                let message = block.get("result").cloned().unwrap_or(Value::Null).to_string();
+                let message = python_str_value(&block.get("result").cloned().unwrap_or(Value::Null));
                 return Ok((false, message));
             }
         }
@@ -607,26 +638,111 @@ impl Db {
         Ok(true)
     }
 
+    /// Ports db.py:227's `rows[0]["n"] if rows else 0`: `0` ONLY when the query returned no row at
+    /// all (an empty table with `GROUP ALL` still returns one row in this repo's measured series, so
+    /// that is the "nothing to count" case, not "something went wrong"). If a row came back but has
+    /// no readable `n`, Python's dict indexing would raise `KeyError`; the earlier `.unwrap_or(0)`
+    /// instead reported "0", the exact silence-as-knowledge this file forbids (minor m3) -- an
+    /// unreadable count and an empty table must not look the same.
     pub fn count(&self, table: &str) -> Result<i64, DbError> {
-        let rows = self.sql(&format!("SELECT count() AS n FROM {} GROUP ALL", table), Some(1))?;
-        let n = rows[0]
-            .as_array()
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("n"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        Ok(n)
+        let blocks = self.sql(&format!("SELECT count() AS n FROM {} GROUP ALL", table), Some(1))?;
+        let rows = blocks[0].as_array().cloned().unwrap_or_default();
+        match rows.first() {
+            None => Ok(0),
+            Some(row) => row.get("n").and_then(Value::as_i64).ok_or_else(|| {
+                DbError::db(format!("count() on {:?} got a row with no readable n: {}", table, row))
+            }),
+        }
     }
 }
 
-fn value_type_name(value: &Value) -> &'static str {
+/// `type(x).__name__` for the JSON-decoded shapes `_run` can see, matching Python's own names
+/// (db.py:120 `type(blocks).__name__`) rather than serde's -- `dict`/`str`/`list`, not
+/// `object`/`string`/`array` (minor m4).
+fn python_type_name(value: &Value) -> &'static str {
     match value {
-        Value::Null => "null",
+        Value::Null => "NoneType",
         Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                "int"
+            } else {
+                "float"
+            }
+        }
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+
+/// Python's `repr()` for a `str`: single-quoted, unless the string holds a `'` and no `"` (then
+/// double-quoted instead, exactly as CPython's `unicode_repr` picks its quote), with `\`, the chosen
+/// quote character, and the common control escapes backslash-escaped (minor m1: `db.py` uses `%r`
+/// for the agent/access identifiers and the reported version string; Rust's `{:?}` renders
+/// `"agent"`, not Python's `'agent'`).
+fn python_repr_str(s: &str) -> String {
+    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Python's `%r` on `Optional[str]` (`self.access`): `None` bare, a string quoted per
+/// `python_repr_str` (minor m1).
+fn python_repr_opt_str(value: &Option<String>) -> String {
+    match value {
+        Some(s) => python_repr_str(s),
+        None => "None".to_string(),
+    }
+}
+
+/// Python's `repr()` on a JSON-decoded value -- used for elements nested inside a list/dict, the way
+/// Python's own `list.__repr__`/`dict.__repr__` call `repr()` on every element.
+fn python_repr_value(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => python_repr_str(s),
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(python_repr_value).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let parts: Vec<String> =
+                map.iter().map(|(k, v)| format!("{}: {}", python_repr_str(k), python_repr_value(v))).collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
+/// Python's `str()` on a JSON-decoded value: a top-level string renders bare (no quotes), everything
+/// else renders the way `repr()` would (`None`, `True`/`False`, a bare number, or a `list`/`dict`
+/// literal with `repr()`'d elements) -- ports the `%s` formatting `db.py` uses for a failed block's
+/// `result` in `sql`/`try_sql` (minor m2: rendering it via `serde_json::Value`'s `Display` instead
+/// gives a JSON string double-quoted where Python's `%s` gives it bare).
+fn python_str_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => python_repr_value(other),
     }
 }
 
@@ -682,6 +798,27 @@ mod tests {
             .filter(|s| !s.is_empty())
             .collect();
         assert_eq!(parts.len(), 2);
+    }
+
+    #[test]
+    fn a_dash_dash_comment_ends_at_every_python_line_boundary_not_just_lf_crlf_cr() {
+        // Regression for blocking finding B1: a line break other than \n/\r\n/\r ALSO ends a `--`
+        // comment (it is one of Python's other str.splitlines() boundaries), so the statement after
+        // it must survive, not be swallowed into the comment.
+        for boundary in ['\u{0b}', '\u{0c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let text = format!("SELECT 1; -- c{boundary}SELECT 2;\n");
+            let parts: Vec<String> = split_statements(&text)
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            assert_eq!(
+                parts,
+                vec!["SELECT 1".to_string(), "SELECT 2".to_string()],
+                "boundary {:?} must end the comment, not swallow the next statement",
+                boundary
+            );
+        }
     }
 
     // ---- UnreachableTests -------------------------------------------------------------------
@@ -754,6 +891,18 @@ mod tests {
         assert_eq!(write_verb("CREATED_AT x=1"), None, "must not match a prefix of a longer word");
         assert_eq!(write_verb("SELECT * FROM a"), None);
         assert_eq!(write_verb("RELATE a->b->c"), Some("RELATE"));
+    }
+
+    #[test]
+    fn write_verb_never_panics_on_a_multi_byte_character_at_the_verb_boundary() {
+        // Regression for blocking finding B2: the byte offset right after a 6-byte verb ("CREATE",
+        // "UPDATE", ...) used to be sliced with a raw `str::split_at`, which panics
+        // ("byte index N is not a char boundary") whenever that offset lands mid-codepoint.
+        let text = format!("{}{}{}", "aaaaa", '\u{e9}', "bbb"); // e-acute is 2 bytes in UTF-8
+        assert_eq!(write_verb(&text), None);
+        // Same hazard one character earlier, right where a verb WOULD match.
+        let text2 = format!("CREAT{}bbb", '\u{e9}');
+        assert_eq!(write_verb(&text2), None);
     }
 
     #[test]

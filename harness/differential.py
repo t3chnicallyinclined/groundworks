@@ -469,10 +469,76 @@ def diff_trees(left, right, left_name="oracle", right_name="candidate"):
 # fixture `tests/test_db.py`'s `SplitTests` feeds to `_split_statements` (read out by AST, so a new
 # fixture is picked up without a copy that could drift).
 
+# ADVERSARIAL SPLIT CORPUS (fix round on `2026-09-18-groundworks-port-04-db-client`, blocking finding
+# B3). The 4 fixtures above (2 shipped .surql files + 2 test_db.py SplitTests cases) contain no
+# double-quoted string, no paren, and no unbalanced bracket -- shallow enough that 4 of 9 plausible
+# WRONG ports of `_split_statements` pass the gate anyway (a reviewer built and ran them: "only
+# single quotes are strings", "depth == 0 instead of depth <= 0", "parens do not nest", "any quote
+# closes any quote"). Every case below targets one class of thing a candidate splitter can get wrong.
+# This corpus is the PRECEDENT for ports 01-09 (see groundworks/docs/RUST_PORT.md section 5): copy
+# the pattern -- deepen with real adversarial inputs, then prove each class of wrong implementation
+# actually goes RED, not just "the case exists".
+#
+# Every text here is run through the SAME oracle `_split_statements` as the shipped fixtures (via
+# `_emit_split` in the child process below), so "what the right answer is" is never hand-computed --
+# only the INPUTS are hand-picked to stress a specific failure mode.
+_ADVERSARIAL_SPLIT_CASES = [
+    # -- empty / line-boundary edge cases ------------------------------------------------------
+    ("adversarial::empty", ""),
+    ("adversarial::single_newline", "\n"),
+    ("adversarial::no_trailing_newline", "SELECT 1; SELECT 2"),
+    ("adversarial::trailing_newline", "SELECT 1;\nSELECT 2;\n"),
+    ("adversarial::double_trailing_newline", "SELECT 1;\nSELECT 2;\n\n"),
+    ("adversarial::crlf", "SELECT 1;\r\nSELECT 2;\r\n"),
+    ("adversarial::lone_cr", "SELECT 1;\rSELECT 2;\r"),
+    ("adversarial::mixed_line_endings", "SELECT 1;\nSELECT 2;\r\nSELECT 3;\rSELECT 4;\n"),
+    ("adversarial::only_semicolons", ";;;"),
+    ("adversarial::empty_statements_between_semicolons", ";;SELECT 1;;;SELECT 2;;"),
+    # -- Python's other str.splitlines() boundaries (B1: each one ENDS a `--` comment) ---------
+    ("adversarial::comment_closed_by_vertical_tab", "SELECT 1; -- c\x0bSELECT 2;\n"),
+    ("adversarial::comment_closed_by_form_feed", "SELECT 1; -- c\x0cSELECT 2;\n"),
+    ("adversarial::comment_closed_by_file_separator", "SELECT 1; -- c\x1cSELECT 2;\n"),
+    ("adversarial::comment_closed_by_group_separator", "SELECT 1; -- c\x1dSELECT 2;\n"),
+    ("adversarial::comment_closed_by_record_separator", "SELECT 1; -- c\x1eSELECT 2;\n"),
+    ("adversarial::comment_closed_by_nel", "SELECT 1; -- cSELECT 2;\n"),
+    ("adversarial::comment_closed_by_line_separator", "SELECT 1; -- c SELECT 2;\n"),
+    ("adversarial::comment_closed_by_paragraph_separator", "SELECT 1; -- c SELECT 2;\n"),
+    ("adversarial::comment_at_end_no_newline", "SELECT 1;\n--"),
+    # -- quotes: which characters are strings, and what closes them ---------------------------
+    ("adversarial::double_quoted_semicolon", 'SELECT "a;b" FROM x; SELECT 2;'),
+    ("adversarial::double_quoted_comment_marker", 'SELECT "a--b" FROM x; SELECT 2;'),
+    ("adversarial::single_quoted_comment_marker", "SELECT 'a--b' FROM x; SELECT 2;"),
+    ("adversarial::unterminated_single_quote", "SELECT 'a;b FROM x; SELECT 2;"),
+    ("adversarial::unterminated_double_quote", 'SELECT "a;b FROM x; SELECT 2;'),
+    ("adversarial::quote_spans_lines", "SELECT 'a\nb;c' FROM x; SELECT 2;"),
+    ("adversarial::double_quote_spans_lines", 'SELECT "a\nb;c" FROM x; SELECT 2;'),
+    ("adversarial::mixed_quote_types_adjacent", "SELECT 'a', \"b;c\", 'd' FROM x; SELECT 2;"),
+    ("adversarial::single_quote_containing_double_quote", "SELECT 'it\"s fine'; SELECT 2;"),
+    ("adversarial::double_quote_containing_single_quote", 'SELECT "it\'s fine"; SELECT 2;'),
+    ("adversarial::dash_not_comment", "SELECT 1 - 2; SELECT 3;"),
+    ("adversarial::single_dash_before_quote", "SELECT 1 -'a'; SELECT 2;"),
+    # -- brace/bracket/paren depth: nesting, unmatched, and negative depth ---------------------
+    ("adversarial::nested_parens", "SELECT (1, (2, (3;4), 5)); SELECT 2;"),
+    ("adversarial::nested_mixed_brackets", "UPDATE x SET f = {a: [1, (2;3), {b: 4}], c: 'd;e'}; SELECT 1;"),
+    ("adversarial::unmatched_closer", "SELECT 1); SELECT 2;"),
+    ("adversarial::unmatched_opener", "SELECT (1; SELECT 2;"),
+    ("adversarial::depth_goes_negative_then_more_semicolons", "SELECT 1)); SELECT 2; SELECT 3;"),
+    ("adversarial::bracket_then_paren_unbalanced", "SELECT [1); SELECT 2;"),
+    # -- unicode content, in strings, comments and identifiers ---------------------------------
+    ("adversarial::unicode_in_string", "SELECT 'héllo wörld ☺' FROM x; SELECT 2;"),
+    ("adversarial::unicode_in_comment_before_semicolon",
+     "SELECT 1; -- ünïcödé café \U0001f389 comment; with a semicolon\nSELECT 2;"),
+    ("adversarial::astral_plane_emoji", "SELECT '\U0001f600\U0001f389'; SELECT 2;"),
+]
+
+
 def _oracle_split_texts():
     """[(name, text), ...] for every input the split gate compares: one entry per `.surql` file the
-    oracle ships (there are two at v0.2.0, both under `groundworks/patterns/`), plus one entry per
-    `text = ...` fixture inside `tests/test_db.py`'s `SplitTests` class."""
+    oracle ships (there are two at v0.2.0, both under `groundworks/patterns/`), one entry per
+    `text = ...` fixture inside `tests/test_db.py`'s `SplitTests` class, and the adversarial corpus
+    above (empty/line-boundary edges, every quote/comment interaction, brace/bracket/paren depth
+    including unmatched and negative, and unicode) that a shallow candidate splitter can get right on
+    the shipped fixtures alone while still being wrong -- see the comment on `_ADVERSARIAL_SPLIT_CASES`."""
     entries = []
     for path in sorted(ORACLE_DIR.rglob("*.surql")):
         entries.append((path.relative_to(ORACLE_DIR).as_posix(), path.read_text(encoding="utf-8")))
@@ -489,6 +555,7 @@ def _oracle_split_texts():
                         isinstance(t, ast.Name) and t.id == "text" for t in stmt.targets
                     ):
                         entries.append(("tests/test_db.py::%s" % item.name, ast.literal_eval(stmt.value)))
+    entries.extend(_ADVERSARIAL_SPLIT_CASES)
     if not entries:
         raise NotExecuted("NOT EXECUTED: found no .surql files and no SplitTests fixtures to split")
     return entries
