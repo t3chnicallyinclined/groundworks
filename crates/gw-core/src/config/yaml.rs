@@ -25,6 +25,67 @@ const SCALAR_TRUE: &[&str] = &["true", "yes", "on"];
 const SCALAR_FALSE: &[&str] = &["false", "no", "off"];
 const SCALAR_NULL: &[&str] = &["null", "none", "~", ""];
 
+/// Python `str.isspace()` / `\s` (ASCII range only -- this subset's inputs are configs, not
+/// arbitrary Unicode text, so the non-ASCII whitespace table `crates/ops-core/src/py/mod.rs`
+/// carries is not duplicated here; `\x1c`-`\x1f`, which Rust's `char::is_whitespace` excludes, IS
+/// covered). Ported from (not a dependency on) `ops_core::py::is_space` -- see docs/RUST_PORT.md
+/// section 3, "Attempted, then reverted: a path dependency on `crates/ops-core`".
+fn is_space(c: char) -> bool {
+    if c.is_ascii() {
+        matches!(c, '\t' | '\n' | '\x0b' | '\x0c' | '\r' | '\x1c'..='\x1f' | ' ')
+    } else {
+        c.is_whitespace()
+    }
+}
+
+/// Python `str.strip()` with no argument: strips `is_space` from both ends.
+fn py_strip(s: &str) -> &str {
+    s.trim_matches(is_space)
+}
+
+/// Python `str.rstrip()` with no argument: strips `is_space` from the RIGHT end only, leaving any
+/// leading whitespace (indentation) untouched -- `config.py`'s `_strip_comment` is `"".join(out).rstrip()`,
+/// not a full `.strip()`; the leading run is what `parse_yaml` measures indentation from next.
+fn py_rstrip(s: &str) -> &str {
+    s.trim_end_matches(is_space)
+}
+
+/// Python `str.splitlines()`: splits on more boundaries than Rust's `str::lines()` (`\n`/`\r\n`
+/// only) -- also `\r` alone, `\v`/`\f` (0x0b/0x0c), the C1 boundaries 0x1c-0x1e, NEL (U+0085), and
+/// the Unicode line/paragraph separators U+2028/U+2029. `config.py:235` reads
+/// `text.splitlines()` for line numbering, so a config containing any of those bytes inside a
+/// quoted scalar shifted every following line number under plain `.lines()`.
+fn py_splitlines(text: &str) -> Vec<&str> {
+    fn is_boundary(c: char) -> bool {
+        matches!(
+            c,
+            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+    }
+    let indices: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < indices.len() {
+        let (byte_idx, ch) = indices[i];
+        if is_boundary(ch) {
+            out.push(&text[start..byte_idx]);
+            let mut next = i + 1;
+            if ch == '\r' && next < indices.len() && indices[next].1 == '\n' {
+                next += 1;
+            }
+            start = if next < indices.len() { indices[next].0 } else { text.len() };
+            i = next;
+            continue;
+        }
+        i += 1;
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
+}
+
 struct Line {
     number: usize,
     indent: usize,
@@ -33,17 +94,17 @@ struct Line {
 
 pub fn parse_yaml(text: &str) -> R<Value> {
     let mut lines: Vec<Line> = Vec::new();
-    for (i, raw) in text.lines().enumerate() {
+    for (i, raw) in py_splitlines(text).into_iter().enumerate() {
         let number = i + 1;
         let before_comment = raw.split('#').next().unwrap_or("");
         if before_comment.contains('\t') {
             return Err(YamlError(format!("line {number}: tabs are not allowed for indentation")));
         }
         let stripped = strip_comment(raw);
-        if stripped.trim().is_empty() {
+        if py_strip(&stripped).is_empty() {
             continue;
         }
-        let lstripped = stripped.trim_start();
+        let lstripped = py_lstrip(&stripped);
         if lstripped.starts_with('&') || lstripped.starts_with('*') || lstripped.starts_with("---") {
             return Err(YamlError(format!(
                 "line {number}: anchors, aliases and documents are not supported"
@@ -52,8 +113,11 @@ pub fn parse_yaml(text: &str) -> R<Value> {
         if ends_with_block_scalar_marker(&stripped) {
             return Err(YamlError(format!("line {number}: multi-line scalars are not supported")));
         }
-        let indent = stripped.len() - lstripped.len();
-        lines.push(Line { number, indent, content: lstripped.trim_end().to_string() });
+        // `len(stripped) - len(stripped.lstrip())` in Python counts CODE POINTS, not bytes -- a
+        // line indented with a multi-byte space character (e.g. U+00A0 NBSP, which Python's
+        // whitespace class also strips) would otherwise get a larger indent than the oracle sees.
+        let indent = stripped.chars().count() - lstripped.chars().count();
+        lines.push(Line { number, indent, content: py_strip(&stripped).to_string() });
     }
     if lines.is_empty() {
         let (value, index) = parse_block(&lines, 0, 0)?;
@@ -70,14 +134,27 @@ pub fn parse_yaml(text: &str) -> R<Value> {
     Ok(value)
 }
 
+/// Python `str.lstrip()` with no argument: strip only the CODE-POINT-classified whitespace prefix
+/// (`ops_core::py::is_space`, which -- unlike Rust's `char::is_whitespace` -- also covers
+/// `\x1c`-`\x1f`), leaving the rest of the string exactly as it was (byte-indexed, so the result
+/// stays a valid `&str` slice).
+fn py_lstrip(s: &str) -> &str {
+    match s.char_indices().find(|&(_, c)| !is_space(c)) {
+        Some((i, _)) => &s[i..],
+        None => "",
+    }
+}
+
 /// `re.search(r":\s*[|>]\s*$", stripped)` -- a colon, optional whitespace, then `|` or `>`, then only
-/// whitespace to end of line, ANYWHERE in the line (not anchored to start).
+/// whitespace to end of line, ANYWHERE in the line (not anchored to start). Python's `re` `\s` for a
+/// `str` pattern is the same class as `str.isspace()`/`strip()` (`ops_core::py::is_space`), which
+/// includes `\x1c`-`\x1f` where Rust's `char::is_whitespace` does not.
 fn ends_with_block_scalar_marker(stripped: &str) -> bool {
     let bytes: Vec<char> = stripped.chars().collect();
     let n = bytes.len();
     // trailing whitespace run
     let mut end = n;
-    while end > 0 && bytes[end - 1].is_whitespace() {
+    while end > 0 && is_space(bytes[end - 1]) {
         end -= 1;
     }
     if end == 0 {
@@ -88,7 +165,7 @@ fn ends_with_block_scalar_marker(stripped: &str) -> bool {
         return false;
     }
     let mut i = end - 1;
-    while i > 0 && bytes[i - 1].is_whitespace() {
+    while i > 0 && is_space(bytes[i - 1]) {
         i -= 1;
     }
     i > 0 && bytes[i - 1] == ':'
@@ -115,7 +192,7 @@ fn strip_comment(line: &str) -> String {
         }
         out.push(ch);
     }
-    out.trim_end().to_string()
+    py_rstrip(&out).to_string()
 }
 
 fn parse_block(lines: &[Line], index: usize, indent: usize) -> R<(Value, usize)> {
@@ -147,8 +224,8 @@ fn parse_map(lines: &[Line], mut index: usize, indent: usize) -> R<(Value, usize
         let Some(colon) = content.find(':') else {
             return Err(YamlError(format!("line {number}: expected 'key: value'")));
         };
-        let key = content[..colon].trim().to_string();
-        let rest = content[colon + 1..].trim().to_string();
+        let key = py_strip(&content[..colon]).to_string();
+        let rest = py_strip(&content[colon + 1..]).to_string();
         if out.contains_key(&key) {
             return Err(YamlError(format!("line {number}: duplicate key {}", py_repr_str(&key))));
         }
@@ -182,15 +259,15 @@ fn parse_list(lines: &[Line], mut index: usize, indent: usize) -> R<(Value, usiz
             return Err(YamlError(format!("line {}: unexpected indentation", line.number)));
         }
         let number = line.number;
-        let item = if line.content == "-" { String::new() } else { line.content[2..].trim().to_string() };
+        let item = if line.content == "-" { String::new() } else { py_strip(&line.content[2..]).to_string() };
         let starts_flow = item.starts_with('{')
             || item.starts_with('[')
             || item.starts_with('"')
             || item.starts_with('\'');
         if !item.is_empty() && item.contains(':') && !starts_flow {
             let colon = item.find(':').unwrap();
-            let key = item[..colon].trim().to_string();
-            let rest = item[colon + 1..].trim().to_string();
+            let key = py_strip(&item[..colon]).to_string();
+            let rest = py_strip(&item[colon + 1..]).to_string();
             let mut entry = Map::new();
             if !rest.is_empty() {
                 entry.insert(key, scalar(&rest, number)?);
@@ -219,7 +296,7 @@ fn parse_list(lines: &[Line], mut index: usize, indent: usize) -> R<(Value, usiz
 }
 
 fn scalar(text: &str, number: usize) -> R<Value> {
-    let text = text.trim();
+    let text = py_strip(text);
     if text.starts_with('[') || text.starts_with('{') {
         return flow(text, number);
     }
@@ -242,9 +319,30 @@ fn scalar(text: &str, number: usize) -> R<Value> {
         return Ok(Value::Null);
     }
     if let Some(n) = py_int(text) {
-        return Ok(Value::Number(n.into()));
+        // `int(text)` in Python is unbounded; `serde_json::Number` (this config's value space) is
+        // not. A magnitude outside `i64` (e.g. `10**30`) is ACCEPTED by the oracle as a real (if
+        // enormous) int -- clamped here to the nearest representable i64 rather than refused, which
+        // is the same class of documented, low-impact precision loss as the `inf`/`nan` scalar case
+        // below (no fixture in the current corpus depends on exact magnitude past i64::MAX).
+        let clamped = if n > i64::MAX as i128 {
+            i64::MAX
+        } else if n < i64::MIN as i128 {
+            i64::MIN
+        } else {
+            n as i64
+        };
+        return Ok(Value::Number(clamped.into()));
     }
     if let Some(f) = py_float(text) {
+        // KNOWN LIMITATION (documented, not fixed here -- see docs/RUST_PORT.md): Python's
+        // `float("inf"/"-inf"/"nan")` succeeds and produces a real float; `serde_json::Number` has no
+        // representation for a non-finite f64 (`from_f64` returns `None` for inf/NaN, matching JSON's
+        // own inability to encode them), so this parses the SCALAR correctly but degrades it to a
+        // `Value::String` rather than a number. A config that relies on an `inf`/`nan` scalar (e.g. an
+        // unbounded `chunk_size`) will therefore diverge on TYPE (`str` here vs `float` in the
+        // oracle), not on value. Fixing this needs a config-local value type that can hold it, which
+        // is a bigger change than this ticket's scope; unexercised by the current instance/fixture
+        // corpus.
         if let Some(num) = serde_json::Number::from_f64(f) {
             return Ok(Value::Number(num));
         }
@@ -255,24 +353,55 @@ fn scalar(text: &str, number: usize) -> R<Value> {
     Ok(Value::String(text.to_string()))
 }
 
-/// Python `int(text)`: optional sign, ASCII digits only (no leading/trailing junk, no float syntax).
-fn py_int(text: &str) -> Option<i64> {
-    let t = text.trim();
+/// Python `int(text)`, base 10: optional sign, ASCII digits, and a single underscore legal BETWEEN
+/// two digits as a grouping separator (`1_000` == 1000) -- not leading, trailing, doubled, or
+/// adjacent to the sign (`_1`, `1_`, `1__0`, `-_1` all raise in real Python). `i128` so a value
+/// past `i64` range can still be detected and clamped by the caller rather than silently wrapping.
+/// Ported from (not a dependency on) `ops_core::py::text::py_int` -- that version also accepts
+/// Unicode decimal digits via a generated table this crate does not carry; see docs/RUST_PORT.md
+/// section 3. ASCII-only is the documented, lower-impact gap left here.
+fn py_int(text: &str) -> Option<i128> {
+    let t = py_strip(text);
     if t.is_empty() {
         return None;
     }
+    let neg = t.starts_with('-');
     let body = t.strip_prefix(['+', '-']).unwrap_or(t);
-    if body.is_empty() || !body.chars().all(|c| c.is_ascii_digit()) {
+    if body.is_empty() {
         return None;
     }
-    t.parse::<i64>().ok()
+    let chars: Vec<char> = body.chars().collect();
+    if chars[0] == '_' || chars[chars.len() - 1] == '_' {
+        return None;
+    }
+    let mut prev_underscore = false;
+    let mut digits = String::with_capacity(chars.len());
+    for &c in &chars {
+        if c == '_' {
+            if prev_underscore {
+                return None;
+            }
+            prev_underscore = true;
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return None;
+        }
+        prev_underscore = false;
+        digits.push(c);
+    }
+    let val: i128 = digits.parse().ok()?;
+    Some(if neg { -val } else { val })
 }
 
 /// Python `float(text)`, restricted to the forms that matter here: standard decimal/exponent syntax.
-/// (Python's `float()` also accepts "inf"/"nan" case-insensitively; matched here too since the
-/// scalar has already failed the null/bool checks by this point.)
+/// Python's `float()` also accepts "inf"/"nan" case-insensitively (matched here too since the
+/// scalar has already failed the null/bool checks by this point), and a single underscore BETWEEN
+/// two ASCII digits as a grouping separator (`1_0.5` == 10.5) -- checked the same way `py_int`
+/// above checks it for integers, then stripped before the numeric parse (Rust's own
+/// `f64::from_str` does not accept underscores at all).
 fn py_float(text: &str) -> Option<f64> {
-    let t = text.trim();
+    let t = py_strip(text);
     if t.is_empty() {
         return None;
     }
@@ -281,15 +410,28 @@ fn py_float(text: &str) -> Option<f64> {
     if body == "inf" || body == "infinity" || body == "nan" {
         return t.parse::<f64>().ok();
     }
+    let chars: Vec<char> = t.chars().collect();
+    let mut cleaned = String::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+            let next_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
+            if !(prev_digit && next_digit) {
+                return None;
+            }
+            continue;
+        }
+        cleaned.push(c);
+    }
     // Reject things Rust's f64 parser accepts but Python's float() text form here should not need
     // (hex floats aren't part of this subset's inputs); a plain decimal/exponent check is enough.
-    if !t.chars().all(|c| c.is_ascii_digit() || "+-.eE".contains(c)) {
+    if !cleaned.chars().all(|c| c.is_ascii_digit() || "+-.eE".contains(c)) {
         return None;
     }
-    if !t.chars().any(|c| c.is_ascii_digit()) {
+    if !cleaned.chars().any(|c| c.is_ascii_digit()) {
         return None;
     }
-    t.parse::<f64>().ok()
+    cleaned.parse::<f64>().ok()
 }
 
 /// One-line `[a, b]` or `{a: b, c: [d]}`, via JSON after quoting bare words (`_flow`).
@@ -324,7 +466,7 @@ fn flow(text: &str, number: usize) -> R<Value> {
             i += 1;
         }
         let word: String = chars[start..i].iter().collect();
-        let bare = word.trim();
+        let bare = py_strip(&word);
         let low = bare.to_lowercase();
         if SCALAR_TRUE.contains(&low.as_str()) {
             out.push_str("true");

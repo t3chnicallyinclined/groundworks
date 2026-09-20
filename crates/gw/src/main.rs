@@ -39,7 +39,7 @@ fn config_command(rest: Vec<String>) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    eprintln!("ConfigError: {e}");
+                    eprintln!("{}: {e}", e.kind);
                     ExitCode::FAILURE
                 }
             }
@@ -69,7 +69,7 @@ fn config_command(rest: Vec<String>) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
-                    println!("REFUSE  ->  ConfigError: {e}");
+                    println!("REFUSE  ->  {}: {e}", e.kind);
                     ExitCode::SUCCESS
                 }
             }

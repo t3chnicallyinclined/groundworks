@@ -253,7 +253,10 @@ so no asserted value could be checked as legal; assert an enumerated field"
                 }
             }
         }
-        let enforce_ok = spec_obj.get("enforce").map(|v| v.is_boolean()).unwrap_or(true);
+        // `assertions.py:192`: `spec.get("enforce", False) not in (True, False)`. Python's `in` on a
+        // tuple of bools uses `==`, and `True == 1`/`False == 0` (bool is an int subtype), so
+        // `enforce: 1` and `enforce: 0` are ACCEPTED, not just literal `true`/`false`.
+        let enforce_ok = spec_obj.get("enforce").map(super::py_equals_bool).unwrap_or(true);
         if !enforce_ok {
             problems.push(format!("{where_}: enforce must be true or false"));
         }

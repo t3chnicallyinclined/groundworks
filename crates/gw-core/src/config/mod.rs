@@ -22,24 +22,38 @@ pub use yaml::parse_yaml;
 // ---- errors --------------------------------------------------------------------------------------
 
 /// `groundworks/config.py`'s `ConfigError`: the config is unusable, message lists every problem.
-#[derive(Debug, Clone)]
-pub struct ConfigError(pub String);
+///
+/// `kind` carries the Python exception TYPE NAME the oracle would have raised (`type(exc).__name__`
+/// in `differential.py`'s golden text) -- `YamlError` for a strict-YAML-subset refusal (`YamlError`
+/// subclasses `ConfigError` in the oracle), `ConfigError` for everything else. `gw config check`
+/// prints it so `REFUSE -> YamlError: ...` and `REFUSE -> ConfigError: ...` are told apart exactly as
+/// the oracle's own text does, instead of a literal `"ConfigError"` on every refusal.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{message}")]
+pub struct ConfigError {
+    pub kind: &'static str,
+    pub message: String,
+}
 
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl ConfigError {
+    pub fn new(message: impl Into<String>) -> Self {
+        ConfigError { kind: "ConfigError", message: message.into() }
     }
 }
-impl std::error::Error for ConfigError {}
+
+#[allow(non_snake_case)]
+fn ConfigError(message: String) -> ConfigError {
+    ConfigError::new(message)
+}
 
 impl From<yaml::YamlError> for ConfigError {
     fn from(e: yaml::YamlError) -> Self {
-        ConfigError(e.0)
+        ConfigError { kind: "YamlError", message: e.0 }
     }
 }
 impl From<evaluator_support::RegressionFileError> for ConfigError {
     fn from(e: evaluator_support::RegressionFileError) -> Self {
-        ConfigError(e.0)
+        ConfigError::new(e.0)
     }
 }
 
@@ -172,7 +186,7 @@ pub fn py_repr_value(v: &Value) -> String {
     match v {
         Value::Null => "None".to_string(),
         Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        Value::Number(n) => n.to_string(),
+        Value::Number(n) => py_number_str(n),
         Value::String(s) => py_repr_str(s),
         Value::Array(items) => format!("[{}]", items.iter().map(py_repr_value).collect::<Vec<_>>().join(", ")),
         Value::Object(map) => format!(
@@ -191,13 +205,122 @@ pub fn py_str_of(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Null => "None".to_string(),
         Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        Value::Number(n) => n.to_string(),
+        Value::Number(n) => py_number_str(n),
         other => py_repr_value(other),
     }
 }
 
+/// `str(n)` for a JSON number as Python would print the `int`/`float` it parsed from: an integer
+/// prints as itself, a float goes through `float_repr` (CPython's `repr(float)` algorithm), which
+/// diverges from `serde_json::Number`'s own `Display` on the exponent form (`1e30` here vs
+/// Python's `1e+30`) and on whether a whole-valued float keeps its trailing `.0` (`1.0`, never
+/// bare `1`).
+fn py_number_str(n: &serde_json::Number) -> String {
+    if n.is_i64() || n.is_u64() {
+        n.to_string()
+    } else {
+        float_repr(n.as_f64().unwrap_or(0.0))
+    }
+}
+
+/// `repr(float)` / `str(float)` (CPython's 'r' format, shortest round-tripping decimal, at most 17
+/// significant digits) -- ported from `crates/ops-core/src/py/text.rs::float_repr` (kept local
+/// rather than taken as a dependency; see docs/RUST_PORT.md section 3, "Attempted, then reverted").
+fn float_repr(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".into();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf".into() } else { "-inf".into() };
+    }
+    let sci = format!("{x:e}"); // shortest round-trip digits, e.g. "-1.5e16", "0e0"
+    let (neg, sci) = match sci.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, sci.as_str()),
+    };
+    let (mant, exp) = sci.split_once('e').unwrap();
+    let exp: i32 = exp.parse().unwrap();
+    let digits: String = mant.chars().filter(|c| *c != '.').collect();
+    let decpt = exp + 1;
+    let mut s = String::new();
+    if neg {
+        s.push('-');
+    }
+    if decpt <= -4 || decpt > 16 {
+        let mut d = digits.chars();
+        s.push(d.next().unwrap());
+        let rest: String = d.collect();
+        if !rest.is_empty() {
+            s.push('.');
+            s.push_str(&rest);
+        }
+        let e = decpt - 1;
+        s.push('e');
+        s.push(if e < 0 { '-' } else { '+' });
+        s.push_str(&format!("{:02}", e.abs()));
+    } else if decpt <= 0 {
+        s.push_str("0.");
+        for _ in 0..(-decpt) {
+            s.push('0');
+        }
+        s.push_str(&digits);
+    } else if decpt as usize >= digits.len() {
+        s.push_str(&digits);
+        for _ in 0..(decpt as usize - digits.len()) {
+            s.push('0');
+        }
+        s.push_str(".0");
+    } else {
+        s.push_str(&digits[..decpt as usize]);
+        s.push('.');
+        s.push_str(&digits[decpt as usize..]);
+    }
+    s
+}
+
+/// True when `v == True` or `v == False` under Python equality: `bool` is an `int` subtype, so
+/// `True == 1` and `False == 0` (and `== 1.0` / `== 0.0`) are also true. Used wherever the oracle
+/// writes `x not in (True, False)` rather than `isinstance(x, bool)` -- the two are NOT the same
+/// refusal (`assertions.py:192`'s `enforce` accepts `1`/`0`; `config.py`'s `promotion_log` does not,
+/// because it also has an explicit `isinstance(..., bool)` check).
+pub fn py_equals_bool(v: &Value) -> bool {
+    match v {
+        Value::Bool(_) => true,
+        Value::Number(n) => n.as_f64().map(|f| f == 0.0 || f == 1.0).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// `bool(v)` for a `v` already known to equal `True` or `False` (`py_equals_bool` passed) --
+/// `bool(1) == True`, `bool(0) == False`, same as the literal bools.
+fn py_truthy_bool(v: &Value) -> bool {
+    match v {
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Python `isinstance(x, int)` for the JSON-shaped value space: true for `bool` (a subtype of `int`)
+/// and for a whole-numbered `Number`, false for a `float`-shaped `Number` (`5.0` parses as a JSON
+/// float, `is_i64()`/`is_u64()` is false) or anything else. Returns the Python `int(x)` value.
+pub fn py_int_like(v: &Value) -> Option<i64> {
+    match v {
+        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
+        Value::Number(n) if n.is_i64() || n.is_u64() => n.as_i64(),
+        _ => None,
+    }
+}
+
+/// `ID_RE.match(s)` (`config.py:25`, `^[a-z0-9_]+$`). Python's `$` (no `re.MULTILINE`) matches at
+/// the end of the string OR immediately before a SINGLE trailing `\n` -- `re.match(r"^x$", "x\n")`
+/// succeeds. `"demo\n"` is therefore a legal `instance.id`, `unit` name, gate id, lens name, table
+/// name, field name, access-role name and frame-node id (every ID_RE call site); only a genuinely
+/// embedded newline (more than the one trailing one) still fails, because it is not in the
+/// `[a-z0-9_]+` character class.
 fn is_id(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    let body = s.strip_suffix('\n').unwrap_or(s);
+    !body.is_empty() && body.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn sorted_unique_strs<'a>(items: impl Iterator<Item = &'a str>) -> Vec<String> {
@@ -272,13 +395,15 @@ fn field_spec(value: &Value) -> (Option<Value>, Option<String>) {
         }
     }
     let optional = obj.get("optional").cloned().unwrap_or(Value::Bool(false));
-    if optional != Value::Bool(true) && optional != Value::Bool(false) {
+    // `_field_spec`: `optional not in (True, False)` -- accepts `1`/`0` too (bool-is-int); the
+    // stored value is then `bool(optional)`, so `optional: 1` becomes `true` in the spec.
+    if !py_equals_bool(&optional) {
         return (None, Some("optional must be true or false".to_string()));
     }
     let mut spec = Map::new();
     spec.insert("type".to_string(), Value::String(kind));
     spec.insert("one_of".to_string(), one_of.cloned().unwrap_or(Value::Null));
-    spec.insert("optional".to_string(), Value::Bool(optional == Value::Bool(true)));
+    spec.insert("optional".to_string(), Value::Bool(py_truthy_bool(&optional)));
     (Some(Value::Object(spec)), None)
 }
 
@@ -467,10 +592,10 @@ pub fn validate(data: Value) -> R<Value> {
             if !is_truthy_nonempty(unit_obj.get("locator_fields")) {
                 problems.push(format!("unit {name} needs locator_fields a program can resolve"));
             }
-            let size_ok = match unit_obj.get("chunk_size") {
-                Some(Value::Number(n)) => n.as_i64().map(|v| v > 0).unwrap_or(false) && !matches!(unit_obj.get("chunk_size"), Some(Value::Bool(_))),
-                _ => false,
-            };
+            // `config.py:553-555`: `size = unit.get("chunk_size", 0); if not isinstance(size, int) or
+            // size <= 0`. `isinstance(True, int)` is True in Python (bool is an int subtype), so
+            // `chunk_size: true` is ACCEPTED as 1; only `chunk_size: false` (0) is refused.
+            let size_ok = unit_obj.get("chunk_size").and_then(py_int_like).map(|v| v > 0).unwrap_or(false);
             if !size_ok {
                 problems.push(format!("unit {name} needs a positive chunk_size"));
             }
@@ -553,11 +678,27 @@ pub fn validate(data: Value) -> R<Value> {
         }
         let tiers: Vec<Value> = vocab_obj.get("tiers").and_then(Value::as_array).cloned().unwrap_or_default();
         if !tiers.is_empty() {
-            let is_sorted = tiers.windows(2).all(|w| number_le(&w[0], &w[1]));
+            // `config.py:597`: `if tiers and list(tiers) != sorted(tiers):`. `sorted()` compares
+            // adjacent elements as it scans for the initial run; the FIRST incomparable pair (e.g. a
+            // number next to a string) raises `TypeError` straight out of Python's `validate()` --
+            // an outcome distinct from a `ConfigError` refusal, not a bug to swallow as "already
+            // sorted" (`gate-discipline`/the sweep's rule 14). `tiers[i] < tiers[i-1]` is the
+            // direction sorted() actually checks; mirrored here pairwise in the same order.
+            for w in tiers.windows(2) {
+                if let Err((a_type, b_type)) = py_less_than(&w[1], &w[0]) {
+                    return Err(ConfigError {
+                        kind: "TypeError",
+                        message: format!("'<' not supported between instances of '{a_type}' and '{b_type}'"),
+                    });
+                }
+            }
+            let is_sorted = tiers.windows(2).all(|w| py_less_than(&w[1], &w[0]) == Ok(false));
             if !is_sorted {
                 problems.push("vocabulary.tiers must ascend".to_string());
             }
-            if !matches!(&tiers[0], Value::Number(n) if n.as_i64() == Some(0)) {
+            // `tiers[0] != 0` in Python: `False == 0` and `0.0 == 0` both satisfy it (bool-is-int,
+            // and numeric equality across int/float).
+            if !py_equals_number(&tiers[0], 0.0) {
                 problems.push("vocabulary.tiers must start at 0 (noise)".to_string());
             }
         }
@@ -641,14 +782,18 @@ case where a role reaches for the one with no meaning attached",
         }
     }
 
-    let owned: Vec<String> =
-        data.get("human_owned").and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
+    // `config.py:647-649`: `owned = data["human_owned"] or []; ... if k not in owned`. `owned` keeps
+    // whatever TYPE `human_owned` was declared as (falsy collapses to `[]`); Python's `in` on that
+    // value is type-dependent -- a STRING checks substring containment, not element equality, so
+    // `human_owned: "gates and fidelity and status and evaluator and privacy"` is ACCEPTED for every
+    // key that appears as a substring. `owned()` below reproduces that per-type `in`.
+    let owned = human_owned_value(&data);
     let mut missing: Vec<String> =
-        MUST_BE_HUMAN_OWNED.iter().filter(|k| !owned.contains(&k.to_string())).map(|s| s.to_string()).collect();
+        MUST_BE_HUMAN_OWNED.iter().filter(|k| !human_owned_contains(&owned, k)).map(|s| s.to_string()).collect();
     missing.extend(
         HUMAN_OWNED_IF_PRESENT
             .iter()
-            .filter(|k| data_obj.contains_key(**k) && !owned.contains(&k.to_string()))
+            .filter(|k| data_obj.contains_key(**k) && !human_owned_contains(&owned, k))
             .map(|s| s.to_string()),
     );
     if !missing.is_empty() {
@@ -695,7 +840,9 @@ case where a role reaches for the one with no meaning attached",
                     problems.push(format!("access role {name} may not write label: only the loader writes labels"));
                 }
                 if let Some(lb) = spec_obj.get("lens_bound") {
-                    if !lb.is_null() && lb != &Value::Bool(true) && lb != &Value::Bool(false) {
+                    // `spec.get("lens_bound") not in (None, True, False)`: null passes (not present /
+                    // explicit `~`), and `1`/`0` pass too (bool-is-int against `True`/`False`).
+                    if !lb.is_null() && !py_equals_bool(lb) {
                         problems.push(format!("access role {name}: lens_bound must be true or false"));
                     }
                 }
@@ -738,9 +885,35 @@ fn type_name(v: &Value) -> &'static str {
     }
 }
 
-fn number_le(a: &Value, b: &Value) -> bool {
-    let (Some(a), Some(b)) = (a.as_f64(), b.as_f64()) else { return true };
-    a <= b
+/// Python `a < b` for the two shapes `vocabulary.tiers` may legally and illegally hold: numbers
+/// (`bool` counts, bool-is-int) compare numerically; strings compare lexicographically; anything
+/// else is a `TypeError` in real Python, returned here as `Err((type(a), type(b)))` rather than
+/// silently treated as "already in order" -- `sorted([0, "a"])` does not return `[0, "a"]`, it raises.
+fn py_less_than(a: &Value, b: &Value) -> Result<bool, (String, String)> {
+    fn as_num(v: &Value) -> Option<f64> {
+        match v {
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        }
+    }
+    match (as_num(a), as_num(b)) {
+        (Some(x), Some(y)) => Ok(x < y),
+        _ => match (a, b) {
+            (Value::String(x), Value::String(y)) => Ok(x < y),
+            _ => Err((type_name(a).to_string(), type_name(b).to_string())),
+        },
+    }
+}
+
+/// Python `v == n` for a numeric literal `n`, matching `bool`-is-`int` (`False == 0`) and
+/// int/float cross-type equality (`0.0 == 0`).
+fn py_equals_number(v: &Value, n: f64) -> bool {
+    match v {
+        Value::Bool(b) => (if *b { 1.0 } else { 0.0 }) == n,
+        Value::Number(x) => x.as_f64().map(|x| x == n).unwrap_or(false),
+        _ => false,
+    }
 }
 
 fn validate_labels(data: &Value, problems: &mut Vec<String>) {
@@ -792,6 +965,30 @@ fn validate_labels(data: &Value, problems: &mut Vec<String>) {
                 }
             }
         }
+    }
+}
+
+/// `data["human_owned"] or []` -- the raw section value, with anything Python treats as falsy
+/// (missing, `null`, `false`, `0`, `""`, `[]`, `{}`) replaced by an empty list.
+fn human_owned_value(data: &Value) -> Value {
+    let raw = data.get("human_owned").cloned().unwrap_or(Value::Null);
+    if is_truthy_nonempty(Some(&raw)) {
+        raw
+    } else {
+        Value::Array(vec![])
+    }
+}
+
+/// Python `key in owned` for whatever shape `human_owned` was declared as: a list checks for an equal
+/// element, a string checks substring containment, a mapping checks its keys. Anything else (a lone
+/// number or bool, which Python's `for`/`in` cannot iterate at all and would raise `TypeError` on) is
+/// treated as not containing the key -- config.py itself would crash first in that case.
+fn human_owned_contains(owned: &Value, key: &str) -> bool {
+    match owned {
+        Value::Array(items) => items.iter().any(|v| matches!(v, Value::String(s) if s == key)),
+        Value::String(s) => s.contains(key),
+        Value::Object(m) => m.contains_key(key),
+        _ => false,
     }
 }
 
@@ -1500,6 +1697,21 @@ impl Instance {
     pub fn unit_names(&self) -> Vec<String> {
         self.data["units"].as_array().map(|a| a.iter().filter_map(|u| u.get("name")).map(py_str_of).collect()).unwrap_or_default()
     }
+    /// `config.py:439 unit_type`: the declared unit whose `name` equals `name`, or `None` (the
+    /// oracle raises `KeyError`; a missing unit is a programming error here too, not a config
+    /// refusal, so callers that need the oracle's exact message can match on `None` themselves).
+    pub fn unit_type(&self, name: &str) -> Option<&Value> {
+        self.data["units"].as_array()?.iter().find(|u| u.get("name").map(py_str_of).as_deref() == Some(name))
+    }
+    /// `config.py:445 allowed_vocabulary`: every declared vocabulary list, plus `grades` and
+    /// `statuses` (which are not literally under `vocabulary:` but are part of what a label
+    /// validator accepts).
+    pub fn allowed_vocabulary(&self) -> Map<String, Value> {
+        let mut vocab = self.data.get("vocabulary").and_then(Value::as_object).cloned().unwrap_or_default();
+        vocab.insert("grades".to_string(), Value::Array(self.grades()));
+        vocab.insert("statuses".to_string(), Value::Array(self.status_values()));
+        vocab
+    }
     pub fn gate_rules(&self) -> Vec<Value> {
         self.data["gates"].as_array().cloned().unwrap_or_default()
     }
@@ -1509,19 +1721,36 @@ impl Instance {
     pub fn declared_edges(&self) -> Map<String, Value> {
         declared_edges_of(&self.data)
     }
+    /// `config.py:471 table_fields`: the declared fields of a declared node table; `{}` for a
+    /// built-in (its fields are the engine's).
+    pub fn table_fields(&self, table: &str) -> Value {
+        self.declared_tables().get(table).cloned().unwrap_or(Value::Object(Map::new()))
+    }
+    /// `config.py:475 edge_fields`: the declared fields of a declared edge type; `{}` for a
+    /// built-in (they carry none).
+    pub fn edge_fields(&self, edge: &str) -> Value {
+        self.declared_edges()
+            .get(edge)
+            .and_then(|e| e.get("fields"))
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()))
+    }
     pub fn node_tables(&self) -> Vec<String> {
         node_tables_of(&self.data)
     }
     pub fn edge_map(&self) -> Map<String, Value> {
         edge_map_of(&self.data)
     }
+    /// `groundworks/config.py:479 unique_fields`: table -> [field, ...] in DECLARED order (the oracle
+    /// does not sort here -- `gates.py:1235 spec()` sorts when it renders the gate spec; sorting here
+    /// too would be invisible to `gw config spec` but would corrupt any consumer that emits SurQL
+    /// `DEFINE INDEX ... FIELDS a, b` in declared order, such as port-02's unique_surql).
     pub fn unique_fields(&self) -> Map<String, Value> {
         let mut out = Map::new();
         if let Some(section) = self.data.get("unique").and_then(Value::as_object) {
             for (table, fields) in section {
-                let mut sorted: Vec<String> = fields.as_array().map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
-                sorted.sort();
-                out.insert(table.clone(), Value::Array(sorted.into_iter().map(Value::String).collect()));
+                let strs: Vec<String> = fields.as_array().map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
+                out.insert(table.clone(), Value::Array(strs.into_iter().map(Value::String).collect()));
             }
         }
         out
@@ -1539,7 +1768,8 @@ impl Instance {
                 let mut m = Map::new();
                 m.insert("read".to_string(), spec.get("read").cloned().unwrap_or(Value::Array(vec![])));
                 m.insert("write".to_string(), spec.get("write").cloned().unwrap_or(Value::Array(vec![])));
-                m.insert("lens_bound".to_string(), Value::Bool(spec.get("lens_bound") == Some(&Value::Bool(true))));
+                // `config.py:499`: `bool(spec.get("lens_bound"))` -- Python truthiness, not `== True`.
+                m.insert("lens_bound".to_string(), Value::Bool(is_truthy_nonempty(spec.get("lens_bound"))));
                 out.insert(name.clone(), Value::Object(m));
             }
         }
@@ -1730,7 +1960,18 @@ pub fn spec(inst: &Instance) -> Value {
     }
     let unique = inst.unique_fields();
     if !unique.is_empty() {
-        out.insert("unique".to_string(), Value::Object(unique));
+        // `gates.py:1235`: `{table: sorted(fields) for table, fields in sorted(inst.unique_fields().items())}`
+        // -- unique_fields() itself is declared order (config.py:479); spec() sorts both axes here.
+        let mut tables: Vec<&String> = unique.keys().collect();
+        tables.sort();
+        let mut unique_out = Map::new();
+        for table in tables {
+            let mut fields: Vec<String> =
+                unique.get(table).and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
+            fields.sort();
+            unique_out.insert(table.clone(), Value::Array(fields.into_iter().map(Value::String).collect()));
+        }
+        out.insert("unique".to_string(), Value::Object(unique_out));
     }
     Value::Object(out)
 }

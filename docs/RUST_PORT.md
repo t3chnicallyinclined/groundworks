@@ -136,6 +136,26 @@ groundworks/docs/RUST_PORT.md     this file
 * **gw holds NO ticket, claim or lane code.** That is `ops-core`, reached through `gw-board-store` (G3).
 * Dependency direction: `ops-core <- gw-board-store -> gw-core <- gw`. All path dependencies.
 
+### 2a. The `config/*_support.rs` slivers: one owning ticket each, EXTEND don't re-port
+
+port-01 (this ticket) ported `config.py` whole, plus only the handful of functions/constants four OTHER
+oracle files that `config.py` itself imports at validation time. Each sliver file below is the **single
+Rust home** for everything `config.py` needed from its oracle file; the ticket named for that oracle
+file ports the REST of it into the SAME file, by adding to it, not by starting a second port of the
+same source elsewhere in the tree:
+
+| Sliver (this crate) | Oracle file | What it holds today (port-01) | Owning ticket — EXTENDS this file |
+|---|---|---|---|
+| `config/gates_support.rs` | `groundworks/gates.py` | `CRITIQUE_VERDICTS`, `FACT_STATUSES`, `_value_literal` (`value_literal`), `_split_top_level` (`split_top_level`), `_list_literals`, `_where_terms` (`where_terms`) | **port-02**: the SurQL emitters, `gate_expression`, the traversal builder, the rest of `gates.py` |
+| `config/assertions_support.rs` | `groundworks/assertions.py` | `fields_of`, `field_domain`, `validate` (the `assertions:` section) | **port-05**: the write-time check, the SurQL emission, the report |
+| `config/originals_support.rs` | `groundworks/originals.py` | `config_problems` (the `originals:` section) | **port-07**: the document schema, the content-addressed store, `verify()` |
+| `config/evaluator_support.rs` | `groundworks/evaluator.py` | `FORMAT`, `read_file`/`RegressionFileError` (the regression-file format check) | **port-09**: the rest of the evaluator (recording, comparison, the queue integration) |
+
+A later ticket that needs one more function from `gates.py`/`assertions.py`/`originals.py`/`evaluator.py`
+adds it to that file (with the same `oracle_file.py:LINE function_name` citation style already used
+there), rather than creating e.g. a second `gates.rs` alongside `gates_support.rs`. If the eventual full
+port outgrows the `_support` name, renaming is a one-ticket move, not a fork.
+
 ---
 
 ## 3. Dependencies, and the decisions fixed here
@@ -159,7 +179,9 @@ Dependencies added at impl-11 / port-01 (the config loader):
 |---|---|
 | `serde_json` (workspace dep, already used by fleetview; `preserve_order` feature turned on for `gw-core`/`gw` only) | The parsed config's shape (mappings, lists, scalars) IS `serde_json::Value` -- no separate config AST type. `preserve_order` backs `Value::Object` with an insertion-ordered map so key iteration matches Python dict order, which `validate()`'s problem list depends on (Python dicts preserve insertion order; a sorted map would silently reorder the joined error text). Selective per-package builds (`-p gw-core -p gw`, never `--workspace`) keep this feature out of every other lane's build graph. |
 | `regex` (already used by fleetview) | `groundworks/config.py`'s lens-filter tokenizer (`LENS_FILTER_TOKEN`) and the gate `where`-clause parser (`_FIELD_IN`/`_FIELD_EQ`/`_LITERAL` in `gates.py`) are regexes in the oracle; hand-rolling a second implementation risks a second, slightly different one. |
-| `thiserror` | The "one `thiserror` enum per crate" decision above was written before any error type existed; `config::ConfigError` is gw-core's first. |
+| `thiserror` | The "one `thiserror` enum per crate" decision above was written before any error type existed; `config::ConfigError` is gw-core's first, and derives `thiserror::Error` (`#[error("{message}")]`) rather than hand-implementing `Display`/`std::error::Error` -- a fix-round correction: the dependency was declared but unused (a hand-written impl) until then, which would have made the line above false. |
+
+**Attempted, then reverted: a path dependency on `crates/ops-core`.** `_tickets/notes/2026-09-19-python-semantics-divergence-checklist.md` (§4) correctly found `config/yaml.rs` re-implementing four CPython text/number behaviours (`str.splitlines()`, `str.strip()`'s whitespace class, `int(str)`'s underscore rule, `repr(float)`) that `crates/ops-core/src/py/text.rs` already ports, two of them wrongly (rejected `1_000`, byte- instead of code-point-counted indentation). Taking `ops-core` as a `gw-core` dependency to reuse them broke THIS TICKET'S OWN GATE: `cargo clippy -p gw-core -p gw --all-targets -- -D warnings` still builds every crate in the dependency graph through `clippy-driver` (a workspace path dependency is not `--no-deps`-exempt), and `ops-core` has five pre-existing clippy findings of its own (`board_native.rs:247,542`, `py/re.rs:281`, `py/text.rs:83`, `py/time.rs:193` -- none of them in the `py::text` functions this ticket wanted) that `-D warnings` turns into a hard compile failure. Fixing them is another lane's file, outside `groundworks/`, and this ticket's `gate:` line cannot be changed to add `--no-deps` (the line is the ticket's own contract). The fix round therefore PORTS THE SAME BEHAVIOUR locally instead (`config/yaml.rs`'s `py_splitlines`/`py_lstrip`/`is_space`, `config/mod.rs`'s `py_number_str`/`float_repr`), each citing the `ops-core` function it mirrors so the two can be de-duplicated in one move once `ops-core`'s own clippy findings are cleaned up (that clean-up is that lane's ticket, not this one's). No new dependency was added.
 
 **Not** `serde_yaml`: the config gate's error TEXT is compared (`bad_configs.txt`, byte-exact), and the oracle's `parse_yaml` is a hand-written strict subset (tabs refused, anchors refused, a specific "line N: ..." message per failure) that no general YAML parser reproduces. `groundworks/crates/gw-core/src/config/yaml.rs` is a line-for-line port of `parse_yaml`/`_parse_map`/`_parse_list`/`_scalar`/`_flow` instead.
 

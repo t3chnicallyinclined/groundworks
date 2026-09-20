@@ -93,7 +93,10 @@ pub fn split_top_level(text: &str, comma: bool) -> Vec<String> {
         i += 1;
     }
     parts.push(buf);
-    parts
+    // `gates.py:695`: `return [p.strip() for p in parts]` -- every part is stripped, not just the
+    // whole text. Without this, `where_terms`'s empty-term check and the literal text in its error
+    // messages both diverge from the oracle on leading/trailing whitespace around a term.
+    parts.into_iter().map(|p| p.trim().to_string()).collect()
 }
 
 /// `groundworks/gates.py:704 _list_literals`.

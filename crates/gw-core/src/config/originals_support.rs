@@ -48,7 +48,10 @@ pub fn config_problems(data: &Value, problems: &mut Vec<String>) {
             super::py_repr_value(body_obj.get("mode").unwrap_or(&Value::Null))
         ));
     }
-    if let Some(store) = body_obj.get("store") {
+    // `originals.py:102-104`: `store = body.get("store"); if store is not None and not isinstance(store,
+    // (str, dict)): ...` -- an explicit `store: null` is ACCEPTED (the guard is `is not None`, not
+    // "present"), so a Value::Null here must be skipped exactly like a missing key.
+    if let Some(store) = body_obj.get("store").filter(|v| !v.is_null()) {
         if !(store.is_string() || store.is_object()) {
             problems.push("originals.store must be a path or a mapping with a backend".to_string());
         }
