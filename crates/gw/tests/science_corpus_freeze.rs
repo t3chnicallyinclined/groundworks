@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static TEMP_ROOT_ID: AtomicUsize = AtomicUsize::new(0);
 
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_gw"))
@@ -10,7 +13,13 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 
 fn temp_root() -> PathBuf {
-    let path = std::env::temp_dir().join(format!("gw-freeze-{}", std::process::id()));
+    let path = std::env::temp_dir()
+        .join(format!(
+            "gw-freeze-{}-{}",
+            std::process::id(),
+            TEMP_ROOT_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+        .join("source");
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
     path
@@ -141,11 +150,32 @@ fn explicit_includes_select_only_files_and_preserve_request_order() {
     fs::write(root.join("nested/b.txt"), b"b").unwrap();
     fs::write(root.join("ignored.txt"), b"ignored").unwrap();
     let out = root.parent().unwrap().join("gw-includes.json");
-    let args = ["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", "nested/b.txt", "--include", "a.txt"];
+    let args = [
+        "corpus",
+        "freeze",
+        "--collection",
+        "x",
+        "--source",
+        root.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        "--include",
+        "nested/b.txt",
+        "--include",
+        "a.txt",
+    ];
     assert!(run(&args).status.success());
     let json: serde_json::Value = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
-    assert_eq!(json["selection"]["includes"], serde_json::json!(["nested/b.txt", "a.txt"]));
-    let paths: Vec<_> = json["originals"].as_array().unwrap().iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(
+        json["selection"]["includes"],
+        serde_json::json!(["nested/b.txt", "a.txt"])
+    );
+    let paths: Vec<_> = json["originals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
     assert_eq!(paths, ["a.txt", "nested/b.txt"]);
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_file(out);
@@ -158,12 +188,41 @@ fn include_validation_rejects_invalid_selections() {
     fs::write(root.join("file.txt"), b"x").unwrap();
     for include in ["", "../file.txt", "missing.txt", "dir"] {
         let out = root.parent().unwrap().join("gw-invalid-include.json");
-        assert!(!run(&["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", include]).status.success(), "{include}");
+        assert!(
+            !run(&[
+                "corpus",
+                "freeze",
+                "--collection",
+                "x",
+                "--source",
+                root.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--include",
+                include
+            ])
+            .status
+            .success(),
+            "{include}"
+        );
         let _ = fs::remove_file(&out);
     }
     let absolute = root.join("file.txt");
     let out = root.parent().unwrap().join("gw-invalid-absolute.json");
-    assert!(!run(&["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", absolute.to_str().unwrap()]).status.success());
+    assert!(!run(&[
+        "corpus",
+        "freeze",
+        "--collection",
+        "x",
+        "--source",
+        root.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        "--include",
+        absolute.to_str().unwrap()
+    ])
+    .status
+    .success());
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_file(out);
 }
@@ -176,7 +235,20 @@ fn include_validation_rejects_symlink() {
     fs::write(root.join("real.txt"), b"x").unwrap();
     symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
     let out = root.parent().unwrap().join("gw-invalid-link.json");
-    assert!(!run(&["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", "link.txt"]).status.success());
+    assert!(!run(&[
+        "corpus",
+        "freeze",
+        "--collection",
+        "x",
+        "--source",
+        root.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        "--include",
+        "link.txt"
+    ])
+    .status
+    .success());
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_file(out);
 }
