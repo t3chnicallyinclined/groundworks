@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 const NON_EXTRACTED: [&str; 3] = ["failed", "retry", "ocr_required"];
 
@@ -30,7 +30,8 @@ pub fn extract(manifest_path: &Path, out: &Path, captured_at: &str) -> Result<()
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or("missing source supplied_path")?;
-    let source_root = Path::new(supplied_path);
+    let source_root =
+        fs::canonicalize(supplied_path).map_err(|_| "invalid source supplied_path")?;
     if !source_root.is_dir() {
         return Err("invalid source supplied_path".into());
     }
@@ -53,8 +54,8 @@ pub fn extract(manifest_path: &Path, out: &Path, captured_at: &str) -> Result<()
             .get("sha256")
             .and_then(|v| v.as_str())
             .ok_or("original hash missing")?;
-        let data = fs::read(source_root.join(path))
-            .map_err(|e| format!("original bytes unavailable: {e}"))?;
+        let source_path = resolve_original_path(&source_root, path)?;
+        let data = fs::read(source_path).map_err(|e| format!("original bytes unavailable: {e}"))?;
         let actual = format!("{:x}", Sha256::digest(&data));
         let length = original
             .get("bytes")
@@ -149,4 +150,24 @@ pub fn extract(manifest_path: &Path, out: &Path, captured_at: &str) -> Result<()
         serde_json::to_string_pretty(&artifact).unwrap() + "\n",
     )
     .map_err(|e| e.to_string())
+}
+
+fn resolve_original_path(root: &Path, value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("original path must be root-relative".into());
+    }
+    let resolved = fs::canonicalize(root.join(path))
+        .map_err(|e| format!("original bytes unavailable: {e}"))?;
+    if !resolved.starts_with(root) || !resolved.is_file() {
+        return Err("original path escapes source root".into());
+    }
+    Ok(resolved)
 }

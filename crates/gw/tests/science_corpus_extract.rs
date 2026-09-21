@@ -47,6 +47,17 @@ fn synthetic_subprocess_validation_and_determinism() {
     let mut missing = fixture(&root, "application/pdf", serde_json::json!([]));
     missing["extractor"] = serde_json::json!({"name":"synthetic"});
     assert!(!run(&root, missing, "missing").status.success());
+    let outside = root.parent().unwrap().join("gw-extract-outside.pdf");
+    fs::write(&outside, b"synthetic").unwrap();
+    let mut escaped = fixture(
+        &root,
+        "application/pdf",
+        serde_json::json!([{"path":"../gw-extract-outside.pdf","page":1,"status":"extracted","text":"hello","locator":{"page":1,"offset_start":0,"offset_end":5}}]),
+    );
+    escaped["originals"][0]["path"] = serde_json::json!("../gw-extract-outside.pdf");
+    let escaped = run(&root, escaped, "escaped");
+    assert!(!escaped.status.success());
+    assert!(String::from_utf8_lossy(&escaped.stderr).contains("root-relative"));
     for records in [
         serde_json::json!([]),
         serde_json::json!([{"path":"a.pdf","page":1,"status":"extracted","text":"hello"}]),
@@ -79,4 +90,5 @@ fn synthetic_subprocess_validation_and_determinism() {
             .contains("pending")
     );
     let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_file(outside);
 }
