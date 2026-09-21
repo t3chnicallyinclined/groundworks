@@ -21,6 +21,12 @@ fn run(root: &std::path::Path, manifest: serde_json::Value, name: &str) -> std::
         .output()
         .unwrap()
 }
+
+fn assert_rejected(output: std::process::Output, expected: &str) {
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+}
+
 fn fixture(root: &std::path::Path, media: &str, records: serde_json::Value) -> serde_json::Value {
     let b = b"synthetic";
     fs::write(root.join("a.pdf"), b).unwrap();
@@ -43,10 +49,13 @@ fn synthetic_subprocess_validation_and_determinism() {
     assert_eq!(bytes, fs::read(root.join("two/extraction.json")).unwrap());
     let mut changed = fixture(&root, "application/pdf", serde_json::json!([]));
     changed["originals"][0]["sha256"] = serde_json::json!("00");
-    assert!(!run(&root, changed, "changed").status.success());
+    assert_rejected(
+        run(&root, changed, "changed"),
+        "hash or byte length changed",
+    );
     let mut missing = fixture(&root, "application/pdf", serde_json::json!([]));
     missing["extractor"] = serde_json::json!({"name":"synthetic"});
-    assert!(!run(&root, missing, "missing").status.success());
+    assert_rejected(run(&root, missing, "missing"), "missing extractor version");
     let outside = root.parent().unwrap().join("gw-extract-outside.pdf");
     fs::write(&outside, b"synthetic").unwrap();
     let mut escaped = fixture(
@@ -56,18 +65,27 @@ fn synthetic_subprocess_validation_and_determinism() {
     );
     escaped["originals"][0]["path"] = serde_json::json!("../gw-extract-outside.pdf");
     let escaped = run(&root, escaped, "escaped");
-    assert!(!escaped.status.success());
-    assert!(String::from_utf8_lossy(&escaped.stderr).contains("root-relative"));
-    for records in [
-        serde_json::json!([]),
-        serde_json::json!([{"path":"a.pdf","page":1,"status":"extracted","text":"hello"}]),
-    ] {
-        assert!(
-            !run(&root, fixture(&root, "application/pdf", records), "bad")
-                .status
-                .success()
-        );
-    }
+    assert_rejected(escaped, "root-relative");
+    assert_rejected(
+        run(
+            &root,
+            fixture(&root, "application/pdf", serde_json::json!([])),
+            "missing-page",
+        ),
+        "exactly one record",
+    );
+    assert_rejected(
+        run(
+            &root,
+            fixture(
+                &root,
+                "application/pdf",
+                serde_json::json!([{"path":"a.pdf","page":1,"status":"extracted","text":"hello"}]),
+            ),
+            "bad-locator",
+        ),
+        "invalid/unresolved page locator",
+    );
     let failed = run(
         &root,
         fixture(
