@@ -9,22 +9,37 @@ fn main() {
             let mut manifest = None;
             let mut output = None;
             let mut captured_at = None;
+            let mut pdfinfo = None;
+            let mut pdftotext = None;
             while let Some(argument) = args.next() {
                 match argument.as_str() {
                     "--manifest" => manifest = args.next(),
                     "--out" => output = args.next(),
                     "--captured-at" => captured_at = args.next(),
+                    "--pdfinfo" | "--pdfinfo-executable" => pdfinfo = args.next(),
+                    "--pdftotext" | "--pdftotext-executable" => pdftotext = args.next(),
                     _ => {
                         eprintln!("gw: unknown argument {argument}");
                         std::process::exit(2)
                     }
                 }
             }
-            if let Err(error) = science_corpus_extract::extract(
-                std::path::Path::new(manifest.as_deref().unwrap_or("")),
-                std::path::Path::new(output.as_deref().unwrap_or("")),
-                captured_at.as_deref().unwrap_or(""),
-            ) {
+            let result = if let (Some(pi), Some(pt)) = (pdfinfo, pdftotext) {
+                science_corpus_extract::extract_native(
+                    std::path::Path::new(manifest.as_deref().unwrap_or("")),
+                    std::path::Path::new(output.as_deref().unwrap_or("")),
+                    captured_at.as_deref().unwrap_or(""),
+                    std::path::Path::new(&pi),
+                    std::path::Path::new(&pt),
+                )
+            } else {
+                science_corpus_extract::extract(
+                    std::path::Path::new(manifest.as_deref().unwrap_or("")),
+                    std::path::Path::new(output.as_deref().unwrap_or("")),
+                    captured_at.as_deref().unwrap_or(""),
+                )
+            };
+            if let Err(error) = result {
                 eprintln!("gw: {error}");
                 std::process::exit(2)
             }
