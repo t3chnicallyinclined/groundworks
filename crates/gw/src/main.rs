@@ -1,34 +1,52 @@
-//! gw: the Groundworks command line (the Rust candidate the differential gate runs).
-//!
-//! Mostly EMPTY BY DESIGN still (impl-10): the front door itself (`--mcp --candidate <bin>`) lands at
-//! port-09/impl-12. `--oracle` exists so the gate has a candidate entry point to point at.
-//!
-//! `--split-statements` is port-04's own entry point: it reads a whole script from stdin, splits it
-//! exactly the way `gw_core::db::split_statements` (the Rust port of `db.py::_split_statements`)
-//! does, and writes the pieces to stdout as a JSON array of strings -- one array element per
-//! statement, in order, never trimmed -- so `harness/differential.py --split` can diff it byte for
-//! byte against the oracle's own `_split_statements` on the same input.
-
+//! gw command line.
 use std::io::Read;
-
+mod science_corpus_freeze;
 fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
+        Some("corpus") if args.next().as_deref() == Some("freeze") => {
+            let mut c = None;
+            let mut s = None;
+            let mut o = None;
+            let mut t = String::from("1970-01-01T00:00:00Z");
+            while let Some(a) = args.next() {
+                match a.as_str() {
+                    "--collection" => c = args.next(),
+                    "--source" => s = args.next(),
+                    "--out" => o = args.next(),
+                    "--capture-time" | "--captured-at" => t = args.next().unwrap_or_default(),
+                    _ => {
+                        eprintln!("gw: unknown argument {a}");
+                        std::process::exit(2)
+                    }
+                }
+            }
+            let r = science_corpus_freeze::freeze(
+                c.as_deref().unwrap_or(""),
+                std::path::Path::new(s.as_deref().unwrap_or("")),
+                std::path::Path::new(o.as_deref().unwrap_or("")),
+                &t,
+            );
+            if let Err(e) = r {
+                eprintln!("gw: {e}");
+                std::process::exit(2)
+            }
+        }
         Some("--oracle") => println!("{} {}", gw_core::ORACLE_TAG, gw_core::ORACLE_COMMIT),
         Some("--split-statements") => {
-            let mut input = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut input) {
-                eprintln!("gw: could not read stdin: {e}");
-                std::process::exit(2);
-            }
-            let parts = gw_core::db::split_statements(&input);
-            let json = serde_json::to_string(&parts).expect("Vec<String> always serializes");
-            println!("{json}");
+            let mut i = String::new();
+            if std::io::stdin().read_to_string(&mut i).is_err() {
+                std::process::exit(2)
+            };
+            println!(
+                "{}",
+                serde_json::to_string(&gw_core::db::split_statements(&i)).unwrap()
+            )
         }
-        Some(other) => {
-            eprintln!("gw: unknown argument {other}; the port has not started (impl-10)");
-            std::process::exit(2);
+        Some(x) => {
+            eprintln!("gw: unknown argument {x}");
+            std::process::exit(2)
         }
-        None => println!("gw: no engine yet (impl-10 builds the gate first); try --oracle"),
+        None => println!("gw: no engine yet"),
     }
 }
