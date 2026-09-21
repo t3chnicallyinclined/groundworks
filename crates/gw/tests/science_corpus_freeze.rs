@@ -132,3 +132,51 @@ fn validation_rejects_symlink_escape() {
     let _ = fs::remove_dir_all(outside);
     let _ = fs::remove_file(out);
 }
+
+#[test]
+fn explicit_includes_select_only_files_and_preserve_request_order() {
+    let root = temp_root();
+    fs::create_dir_all(root.join("nested")).unwrap();
+    fs::write(root.join("a.txt"), b"a").unwrap();
+    fs::write(root.join("nested/b.txt"), b"b").unwrap();
+    fs::write(root.join("ignored.txt"), b"ignored").unwrap();
+    let out = root.parent().unwrap().join("gw-includes.json");
+    let args = ["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", "nested/b.txt", "--include", "a.txt"];
+    assert!(run(&args).status.success());
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
+    assert_eq!(json["selection"]["includes"], serde_json::json!(["nested/b.txt", "a.txt"]));
+    let paths: Vec<_> = json["originals"].as_array().unwrap().iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, ["a.txt", "nested/b.txt"]);
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_file(out);
+}
+
+#[test]
+fn include_validation_rejects_invalid_selections() {
+    let root = temp_root();
+    fs::create_dir_all(root.join("dir")).unwrap();
+    fs::write(root.join("file.txt"), b"x").unwrap();
+    for include in ["", "../file.txt", "missing.txt", "dir"] {
+        let out = root.parent().unwrap().join("gw-invalid-include.json");
+        assert!(!run(&["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", include]).status.success(), "{include}");
+        let _ = fs::remove_file(&out);
+    }
+    let absolute = root.join("file.txt");
+    let out = root.parent().unwrap().join("gw-invalid-absolute.json");
+    assert!(!run(&["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", absolute.to_str().unwrap()]).status.success());
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_file(out);
+}
+
+#[cfg(unix)]
+#[test]
+fn include_validation_rejects_symlink() {
+    use std::os::unix::fs::symlink;
+    let root = temp_root();
+    fs::write(root.join("real.txt"), b"x").unwrap();
+    symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
+    let out = root.parent().unwrap().join("gw-invalid-link.json");
+    assert!(!run(&["corpus", "freeze", "--collection", "x", "--source", root.to_str().unwrap(), "--out", out.to_str().unwrap(), "--include", "link.txt"]).status.success());
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_file(out);
+}

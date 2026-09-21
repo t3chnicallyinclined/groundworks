@@ -8,6 +8,7 @@ pub fn freeze(
     source: &Path,
     output: &Path,
     captured_at: &str,
+    includes: &[String],
 ) -> Result<(), String> {
     if collection.is_empty() || !valid_captured_at(captured_at) {
         return Err(
@@ -22,9 +23,29 @@ pub fn freeze(
     if out_abs.starts_with(&root) {
         return Err("output path must be outside source root".into());
     }
-    let mut files = Vec::new();
-    walk(&root, &root, &mut files)?;
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut files = if includes.is_empty() {
+        let mut files = Vec::new();
+        walk(&root, &root, &mut files)?;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
+    } else {
+        let mut files = Vec::new();
+        for requested in includes {
+            let rel = validate_include(requested)?;
+            let path = root.join(&rel);
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|_| format!("included path does not exist: {requested}"))?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!("included path is a symlink: {requested}"));
+            }
+            if !metadata.is_file() {
+                return Err(format!("included path is not a regular file: {requested}"));
+            }
+            files.push((rel, fs::read(path).map_err(|e| e.to_string())?));
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
+    };
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     let mut entries = Vec::new();
     for (path, bytes) in files {
@@ -52,6 +73,7 @@ pub fn freeze(
             "canonical_path": root.to_string_lossy(),
             "identity": format!("canonical-path:{}", root.to_string_lossy())
         },
+        "selection": { "includes": includes },
         "originals": entries
     });
     if let Some(parent) = output.parent() {
@@ -183,6 +205,29 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) -> Result<(),
         }
     }
     Ok(())
+}
+
+fn validate_include(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("include path must not be empty".into());
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err("include path must be root-relative".into());
+    }
+    let mut clean = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => clean.push(part.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            Component::ParentDir => return Err("include path must not contain parent traversal".into()),
+            _ => return Err("include path must be root-relative".into()),
+        }
+    }
+    if clean.is_empty() {
+        return Err("include path must not be empty".into());
+    }
+    Ok(clean.join("/"))
 }
 
 fn media_type(path: &str) -> &'static str {

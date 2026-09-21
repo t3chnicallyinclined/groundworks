@@ -9,12 +9,14 @@ fn main() {
             let mut s = None;
             let mut o = None;
             let mut t = String::from("1970-01-01T00:00:00Z");
+            let mut includes = Vec::new();
             while let Some(a) = args.next() {
                 match a.as_str() {
                     "--collection" => c = args.next(),
                     "--source" => s = args.next(),
                     "--out" => o = args.next(),
                     "--capture-time" | "--captured-at" => t = args.next().unwrap_or_default(),
+                    "--include" => includes.push(args.next().unwrap_or_default()),
                     _ => {
                         eprintln!("gw: unknown argument {a}");
                         std::process::exit(2)
@@ -26,6 +28,7 @@ fn main() {
                 std::path::Path::new(s.as_deref().unwrap_or("")),
                 std::path::Path::new(o.as_deref().unwrap_or("")),
                 &t,
+                &includes,
             );
             if let Err(e) = r {
                 eprintln!("gw: {e}");
