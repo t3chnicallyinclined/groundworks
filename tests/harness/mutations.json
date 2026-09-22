@@ -3475,6 +3475,118 @@
    "commit": "uncommitted",
    "source": "2026-09-16 agreement direction group (suggested by the SUPERGUN instance; proven by hand on a tree copy)",
    "needs_db": false
+  },
+  {
+   "id": "M364",
+   "guard": "a quote is refused unless found word for word in its unit",
+   "defect": "planted misquote passes",
+   "file": "groundworks/ask/check.py",
+   "anchor": "        if text not in _norm(unit.get(\"text\")):\n",
+   "replacement": "        if text not in _norm(unit.get(\"text\")) and False:\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_planted_misquote_refused_by_unit_id"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M365",
+   "guard": "a quote may not cite a unit the reader did not read",
+   "defect": "cite to unread unit passes",
+   "file": "groundworks/ask/check.py",
+   "anchor": "        if uid not in read_ids:\n            errors.append({\"unit\": uid, \"quote\": n, \"error\": \"quote %d cites unit %s that was not read\" % (n, uid)})\n",
+   "replacement": "        if uid not in read_ids:\n            pass\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_cite_to_unread_unit_refused"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M366",
+   "guard": "an empty or missing read.jsonl is NOT EXECUTED, never a pass",
+   "defect": "empty read reads as clean",
+   "file": "groundworks/ask/check.py",
+   "anchor": "    if info[\"retrieved\"] and not reads:\n",
+   "replacement": "    if info[\"retrieved\"] and not reads and False:\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_empty_read_is_not_executed"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M367",
+   "guard": "a query no unit matches ranks nothing, never the first rows of the corpus",
+   "defect": "zero hits filled silently",
+   "file": "groundworks/retrieve.py",
+   "anchor": "        return sorted(acc.items(), key=lambda kv: (-kv[1], kv[0]))[:top]\n",
+   "replacement": "        return (sorted(acc.items(), key=lambda kv: (-kv[1], kv[0])) or [(i, 0.0) for i in range(min(top, self.n))])[:top]\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_zero_hits_reported_not_silent"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M368",
+   "guard": "every unit of every slice must appear in read.jsonl",
+   "defect": "partial coverage passes",
+   "file": "groundworks/ask/check.py",
+   "anchor": "            if uid not in read_ids:\n                errors.append({\"unit\": uid, \"slice\": sl[\"id\"], \"error\": \"slice %s: unit %s was not read\" % (sl[\"id\"], uid)})\n",
+   "replacement": "            if uid not in read_ids:\n                pass\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_two_slice_coverage_enforced"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M369",
+   "guard": "the report states how much of the corpus was not read",
+   "defect": "not_read reported as zero",
+   "file": "groundworks/ask/check.py",
+   "anchor": "        \"not_read\": info[\"corpus_total\"] - len(read_ids),\n",
+   "replacement": "        \"not_read\": 0,\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_header_counts_disagree_with_green"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M370",
+   "guard": "a support quote from a unit outside the usable statuses is refused",
+   "defect": "status axis ignored by ask",
+   "file": "groundworks/ask/check.py",
+   "anchor": "            if use == \"support\" and not row[\"usable\"]:\n",
+   "replacement": "            if use == \"support\" and not row[\"usable\"] and False:\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_support_from_unusable_unit_refused_but_a_note_is_allowed"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
+  },
+  {
+   "id": "M371",
+   "guard": "a scope keeps only the units inside it; the excluded count is what the scope removed",
+   "defect": "scope filter ignored",
+   "file": "groundworks/ask/packet.py",
+   "anchor": "    units = [u for u in corpus if in_scope(u, types, where)] if (types or where) else corpus\n",
+   "replacement": "    units = corpus\n",
+   "must_fail": [
+    "tests.test_ask.AskCase.test_a_scope_ranks_only_units_inside_it_and_counts_what_it_excluded"
+   ],
+   "commit": "uncommitted",
+   "source": "2026-09-22 ask v0 scope (proven by hand on a tree copy with tests.harness.mutate run)",
+   "needs_db": false
   }
  ]
 }

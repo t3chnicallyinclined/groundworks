@@ -14,6 +14,9 @@
     groundworks drift INSTANCE.yaml SKILLS_DIR [DOC ...]
     groundworks evaluate INSTANCE_DIR --memory PORT | --url URL --ns NS | --check
                              the instance's regression file: every error it has made, checked again
+    groundworks ask open "QUESTION" --units UNITS.jsonl --out DIR [--instance I.yaml] [--k 200]
+    groundworks ask check DIR [--instance I.yaml]     a reader's read.jsonl + answer.json audited: every quote
+    groundworks ask render DIR [--instance I.yaml]    found word for word, every slice unit read; else red
     groundworks mutate lint | run [--no-db] [--ids ..] [--changed-since REV] | canaries
                              the mutation registry: one named break per guard (tests/harness/mutate.py)
     groundworks test [--require-db] [--require-privacy]
@@ -163,6 +166,7 @@ COMMANDS = {
     "skills": _skills,
     "drift": lambda a: _module("groundworks.drift", a),
     "evaluate": lambda a: _module("groundworks.evaluator", a),
+    "ask": lambda a: _module("groundworks.ask", a),
     "mutate": lambda a: _module("tests.harness.mutate", a),
     "test": _test,
 }

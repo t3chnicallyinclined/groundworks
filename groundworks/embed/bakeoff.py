@@ -29,7 +29,6 @@ import json
 import math
 import pathlib
 import random
-import re
 import sys
 import time
 
@@ -42,45 +41,10 @@ KS = (5, 10, 20)
 METRICS = ("recall@5", "recall@10", "recall@20", "mrr@10", "ndcg@10")
 RRF_K = 60
 POOL = 1000          # depth of each list fed to fusion
-TOKEN = re.compile(r"\w+", re.UNICODE)
+from groundworks.retrieve import BM25, TOKEN, tokenize  # noqa: E402,F401  (moved 2026-09-22; `ask` shares it)
 
 
 # ---------------------------------------------------------------- rankers
-
-def tokenize(text):
-    return TOKEN.findall(text.lower())
-
-
-class BM25:
-    def __init__(self, docs, k1=1.2, b=0.75):
-        self.k1, self.b = k1, b
-        self.n = len(docs)
-        self.lens = [len(d) for d in docs]
-        self.avg = (sum(self.lens) / self.n) if self.n else 0.0
-        self.post = {}
-        for i, toks in enumerate(docs):
-            tf = {}
-            for t in toks:
-                tf[t] = tf.get(t, 0) + 1
-            for t, c in tf.items():
-                self.post.setdefault(t, []).append((i, c))
-        self.idf = {t: math.log(1 + (self.n - len(p) + 0.5) / (len(p) + 0.5)) for t, p in self.post.items()}
-
-    def scores(self, query_tokens):
-        acc = {}
-        for t in set(query_tokens):
-            idf = self.idf.get(t)
-            if idf is None:
-                continue
-            for i, c in self.post[t]:
-                norm = self.k1 * (1 - self.b + self.b * self.lens[i] / self.avg) if self.avg else self.k1
-                acc[i] = acc.get(i, 0.0) + idf * c * (self.k1 + 1) / (c + norm)
-        return acc
-
-    def rank(self, query_tokens, top=POOL):
-        acc = self.scores(query_tokens)
-        return [i for i, _ in sorted(acc.items(), key=lambda kv: (-kv[1], kv[0]))[:top]]
-
 
 def rrf(lists, k=RRF_K, top=POOL):
     """Reciprocal-rank fusion: score(d) = sum over lists of 1 / (k + rank), rank from 1."""
