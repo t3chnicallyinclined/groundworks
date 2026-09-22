@@ -522,19 +522,19 @@ pub fn expand_where(data: &Value, where_: Option<&str>) -> String {
             values.iter().map(|v| format!("'{}'", py_str_of(v).replace('\'', "\\'"))).collect();
         format!("[{}]", items.join(", "))
     }
+    // Duck-typed like `validate`'s own fidelity.confirming/status.usable reads (round 3 blocking 1):
+    // a bare string iterates its characters, not `Value::as_array`'s silent empty list.
     let confirming: Vec<Value> = data
         .get("fidelity")
         .and_then(Value::as_object)
         .and_then(|f| f.get("confirming"))
-        .and_then(Value::as_array)
-        .cloned()
+        .map(py_iter_elems)
         .unwrap_or_default();
     let usable: Vec<Value> = data
         .get("status")
         .and_then(Value::as_object)
         .and_then(|s| s.get("usable"))
-        .and_then(Value::as_array)
-        .cloned()
+        .map(py_iter_elems)
         .unwrap_or_default();
     where_.unwrap_or("").replace("$confirming", &lit(&confirming)).replace("$usable", &lit(&usable))
 }
@@ -967,11 +967,14 @@ fn py_value_eq(a: &Value, b: &Value) -> bool {
 }
 
 /// Python `for x in v`: a list yields its elements; a string yields its characters, each as its own
-/// one-character string (`list("012") == ["0", "1", "2"]`). Every other JSON shape a raw config value
-/// can take here (a mapping, a number, a bool, null) does not appear behind a `for`/`list()` call in
-/// `config.py`'s `fidelity`/`status`/`vocabulary.tiers` checks without a dict/list guard in front of
-/// it first, so this yields nothing for them rather than guessing at Python's `TypeError`.
-fn py_iter_elems(v: &Value) -> Vec<Value> {
+/// one-character string (`list("012") == ["0", "1", "2"]`). That is NOT what the oracle does for
+/// every other JSON shape, so do not read the fallback below as "safe": a mapping iterates its KEYS
+/// (`list({"a": 1})` -> `["a"]`), and a number/bool/`None` raises `TypeError: 'int' object is not
+/// iterable` (per type). Round 3's live-oracle sweep confirmed both (dict -> its keys; int -> the
+/// TypeError). This function returns an empty `Vec` for those shapes instead of reproducing either
+/// one, which is a real, measured divergence from the oracle (round 3: 14/40 matrix cases, all in the
+/// dict/int/nested-list class) -- tracked as a separate follow-up sweep, not fixed here.
+pub(crate) fn py_iter_elems(v: &Value) -> Vec<Value> {
     match v {
         Value::Array(items) => items.clone(),
         Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
@@ -2320,5 +2323,118 @@ mod const_table_pins {
                 "order",
             ])
         );
+    }
+
+    // ---- the pins keep themselves honest (round 3 minor a) -----------------------------------------
+    //
+    // Every pin above is a human-written literal next to the constant it pins, so a pin can rot
+    // without anyone noticing: the reviewer planted 3 mutants against `const_table_pins` itself and
+    // all 3 passed the WHOLE gate, clippy included -- a pin rewritten to assert the wrong table
+    // (`lens_kinds_pin` asserting `LENS_BACKINGS`), a pin that checks only a `.len()` (so any same-
+    // size swap is invisible), and a brand-new `&[&str]` constant that is actually USED (to widen an
+    // allow-list) with no pin at all. This test re-derives, straight from this file's own source, the
+    // one fact a pin can't be allowed to drift from: which quoted strings the constant it names
+    // actually holds. It requires nothing more than the naming convention every pin above already
+    // follows (`SOME_CONST` -> `some_const_pin`), so adding a new `&[&str]` table with no matching pin,
+    // or weakening an existing pin to a length check, or swapping in a different table's literal, all
+    // fail HERE, by the specific constant's name, before they can reach any other gate.
+    #[test]
+    fn every_str_slice_const_has_a_matching_pin() {
+        let src = include_str!("mod.rs");
+        let decl_re =
+            regex::Regex::new(r#"(?ms)^(?:pub(?:\(crate\))?\s+)?const ([A-Z_]+): &\[&str\]\s*=\s*&\[(.*?)\];"#)
+                .unwrap();
+        let str_re = regex::Regex::new(r#""((?:[^"\\]|\\.)*)""#).unwrap();
+        let fn_re = regex::Regex::new(r#"(?ms)fn (\w+_pin)\s*\(\)\s*\{(.*?)\n    \}"#).unwrap();
+
+        // Scope pin lookup to this module's own text so a constant's declaration line (which also
+        // contains its quoted elements) is never mistaken for its pin.
+        let pins_start =
+            src.find("mod const_table_pins {").expect("const_table_pins module not found in mod.rs");
+        let pins_src = &src[pins_start..];
+        let pin_bodies: std::collections::HashMap<String, String> = fn_re
+            .captures_iter(pins_src)
+            .map(|cap| (cap[1].to_string(), cap[2].to_string()))
+            .collect();
+
+        let mut checked = 0;
+        for cap in decl_re.captures_iter(src) {
+            let name = &cap[1];
+            let expected: BTreeSet<String> =
+                str_re.captures_iter(&cap[2]).map(|m| m[1].to_string()).collect();
+            let pin_fn = format!("{}_pin", name.to_lowercase());
+            let body = pin_bodies.get(&pin_fn).unwrap_or_else(|| {
+                panic!(
+                    "const {name} (a `&[&str]` allow/deny table) has no `{pin_fn}` test in \
+                     const_table_pins -- an unpinned table rots silently (round 3 minor a)"
+                )
+            });
+            // Strip `//` line comments first -- a comment quoting an example (e.g. `FIELD_TYPES.join(", ")`)
+            // is not an assertion and must not count as pinned content.
+            let code_only: String = body
+                .lines()
+                .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let actual: BTreeSet<String> =
+                str_re.captures_iter(&code_only).map(|m| m[1].to_string()).collect();
+            assert_eq!(
+                actual, expected,
+                "{pin_fn} does not pin {name}'s actual contents (asserts a different table, checks \
+                 only a length, or is stale) -- {name}'s real value is {expected:?}"
+            );
+            checked += 1;
+        }
+        // A regression on the regex itself (e.g. a formatting change this pattern can't parse) must
+        // not silently check zero constants and report green.
+        assert!(checked >= 20, "expected to find at least 20 `&[&str]` const declarations, found {checked}");
+    }
+}
+
+/// Round 3 blocking 1: the round-2 duck-typing fix (a bare string iterates by character, not
+/// `Value::as_array`'s silent empty list) landed at the four `validate()` sites but not at
+/// `expand_where` (config.py:757, this ticket's own core -- not a sliver) or at
+/// `assertions_support::field_domain`'s five same-key reads. Both now go through `py_iter_elems`;
+/// these are direct unit tests of that fix, narrower than the full `validate()` pipeline so they
+/// isolate exactly the two consumers round 3 named.
+#[cfg(test)]
+mod round3_duck_typed_consumers {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn expand_where_iterates_bare_string_confirming_and_usable_by_character() {
+        let data = json!({"fidelity": {"confirming": "ab"}, "status": {"usable": "c"}});
+        assert_eq!(
+            expand_where(&data, Some("grade IN $confirming AND status IN $usable")),
+            "grade IN ['a', 'b'] AND status IN ['c']"
+        );
+    }
+
+    #[test]
+    fn field_domain_unit_grade_treats_a_bare_string_order_as_its_characters() {
+        // config.py:757 + assertions.py:74 (`("unit", "grade")` reads `fidelity.order`).
+        let data = json!({"fidelity": {"order": "abc"}});
+        assert_eq!(
+            assertions_support::field_domain(&data, "unit", "grade"),
+            Some(vec![json!("a"), json!("b"), json!("c")])
+        );
+    }
+
+    #[test]
+    fn field_domain_unit_status_treats_a_bare_string_status_values_as_its_characters() {
+        let data = json!({"status": {"values": "xy"}});
+        assert_eq!(
+            assertions_support::field_domain(&data, "unit", "status"),
+            Some(vec![json!("x"), json!("y")])
+        );
+    }
+
+    #[test]
+    fn field_domain_label_fields_treat_bare_string_vocabulary_lists_as_their_characters() {
+        let data = json!({"vocabulary": {"tiers": "01", "directions": "fg", "roles": "hi"}});
+        assert_eq!(assertions_support::field_domain(&data, "label", "tier"), Some(vec![json!("0"), json!("1")]));
+        assert_eq!(assertions_support::field_domain(&data, "label", "dir"), Some(vec![json!("f"), json!("g")]));
+        assert_eq!(assertions_support::field_domain(&data, "label", "role"), Some(vec![json!("h"), json!("i")]));
     }
 }

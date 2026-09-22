@@ -54,8 +54,8 @@ pub fn field_domain(data: &Value, table: &str, field: &str) -> Option<Vec<Value>
         .unwrap_or_default();
     let values: Option<Vec<Value>> = match (table, field) {
         ("unit", "type") => Some(unit_names),
-        ("unit", "status") => status.and_then(|s| s.get("values")).and_then(Value::as_array).cloned(),
-        ("unit", "grade") => fidelity.and_then(|f| f.get("order")).and_then(Value::as_array).cloned(),
+        ("unit", "status") => status.and_then(|s| s.get("values")).map(super::py_iter_elems),
+        ("unit", "grade") => fidelity.and_then(|f| f.get("order")).map(super::py_iter_elems),
         ("fact", "status") => Some(FACT_STATUSES.iter().map(|s| Value::String(s.to_string())).collect()),
         ("critique", "verdict") => {
             Some(CRITIQUE_VERDICTS.iter().map(|s| Value::String(s.to_string())).collect())
@@ -63,9 +63,9 @@ pub fn field_domain(data: &Value, table: &str, field: &str) -> Option<Vec<Value>
         ("critique", "answered") | ("conclusion", "ready") | ("authority", "verified") => {
             Some(vec![Value::Bool(true), Value::Bool(false)])
         }
-        ("label", "tier") => vocab.and_then(|v| v.get("tiers")).and_then(Value::as_array).cloned(),
-        ("label", "dir") => vocab.and_then(|v| v.get("directions")).and_then(Value::as_array).cloned(),
-        ("label", "role") => vocab.and_then(|v| v.get("roles")).and_then(Value::as_array).cloned(),
+        ("label", "tier") => vocab.and_then(|v| v.get("tiers")).map(super::py_iter_elems),
+        ("label", "dir") => vocab.and_then(|v| v.get("directions")).map(super::py_iter_elems),
+        ("label", "role") => vocab.and_then(|v| v.get("roles")).map(super::py_iter_elems),
         _ => None,
     };
     values.filter(|v| !v.is_empty())
