@@ -10,8 +10,11 @@ workspace = true
 
 [dependencies]
 gw-core = { path = "../gw-core" }
-serde_json.workspace = true
+# preserve_order (port-01): the oracle's json.dumps keeps insertion order, so a candidate that
+# sorts or reorders keys would differ from Python on output the differential compares byte for byte.
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2 = "0.10"
+
 [[test]]
 name = "science_corpus_freeze"
 path = "tests/science_corpus_freeze.rs"

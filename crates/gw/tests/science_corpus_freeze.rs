@@ -52,7 +52,7 @@ fn synthetic_freeze_is_deterministic_and_records_provenance() {
     assert!(run(&args2).status.success());
     assert_eq!(fs::read(&out1).unwrap(), fs::read(&out2).unwrap());
     let json: serde_json::Value = serde_json::from_slice(&fs::read(&out1).unwrap()).unwrap();
-    assert_eq!(json["source"]["canonical_path"].as_str().is_some(), true);
+    assert!(json["source"]["canonical_path"].as_str().is_some());
     assert_eq!(json["captured_at"], "2026-09-20T21:10:00Z");
     assert_eq!(json["originals"].as_array().unwrap().len(), 3);
     assert!(json["originals"]

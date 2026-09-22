@@ -136,7 +136,7 @@ pub fn extract(manifest_path: &Path, out: &Path, captured_at: &str) -> Result<()
             r.get("path").and_then(|v| v.as_str()) == Some(path)
                 && r.get("page")
                     .and_then(|v| v.as_u64())
-                    .map_or(true, |p| p == 0 || p > pages as u64)
+                    .is_none_or(|p| p == 0 || p > pages as u64)
         }) {
             return Err("record references unknown page".into());
         }

@@ -23,7 +23,7 @@ pub fn freeze(
     if out_abs.starts_with(&root) {
         return Err("output path must be outside source root".into());
     }
-    let mut files = if includes.is_empty() {
+    let files = if includes.is_empty() {
         let mut files = Vec::new();
         walk(&root, &root, &mut files)?;
         files.sort_by(|a, b| a.0.cmp(&b.0));

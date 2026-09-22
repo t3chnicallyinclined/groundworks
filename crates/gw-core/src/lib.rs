@@ -11,6 +11,9 @@
 //! * the datastore is SurrealDB over HTTP `/sql` with a blocking client, not the async crate.
 //! * gw holds NO ticket, claim or lane code: that is `ops-core`, reached through `gw-board-store`.
 
+/// port-01 (this ticket): the instance config loader, ported from `groundworks/config.py`.
+pub mod config;
+
 /// The oracle this crate is ported from. The harness refuses to compare against anything else
 /// (`harness/differential.py --ensure-oracle`, `git describe --exact-match` must say this).
 pub const ORACLE_TAG: &str = "v0.2.0";

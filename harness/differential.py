@@ -370,6 +370,130 @@ def _bad_config_verdicts():
     return "\n".join(lines) + "\n"
 
 
+def _emit_config_fixtures(out_path):
+    """Runs INSIDE the child (oracle importable): every `broken(...)` fixture in tests/test_config.py,
+    as JSON-safe data (or the exception raised building it). `--config`'s parent process reads this so
+    it can drive a CANDIDATE through `gw config check` the same way `_bad_config_verdicts` drives the
+    oracle through `config.load` -- without importing the oracle's `groundworks` package into the
+    parent process, which would risk writing a `__pycache__` into the pinned checkout (exactly the
+    poisoning class `verify_oracle` exists to catch; see docs/RUST_PORT.md section 1)."""
+    from groundworks import config
+    src_path = ORACLE_DIR / "tests" / "test_config.py"
+    source = src_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    ns = {"config": config, "__file__": str(src_path), "__name__": "gw_oracle_test_config"}
+    exec(compile(ast.parse(source.split("class ", 1)[0]), str(src_path), "exec"), ns)  # MINIMAL + broken()
+    calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "broken":
+            calls.append((node.lineno, ast.get_source_segment(source, node)))
+    fixtures = []
+    for lineno, text in sorted(set(calls)):
+        one = " ".join(text.split())
+        try:
+            data = eval(text, dict(ns))                             # noqa: S307 -- the oracle's own test source
+        except Exception as exc:                                    # noqa: BLE001
+            fixtures.append({"lineno": lineno, "one": one, "raised": "%s: %s" % (type(exc).__name__, exc)})
+            continue
+        fixtures.append({"lineno": lineno, "one": one, "data": data})
+    payload = {"src_name": src_path.name, "fixtures": fixtures}
+    pathlib.Path(out_path).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _config_instance_dirs():
+    """Every instance directory the config golden covers, in the same order `_emit_goldens` sees them
+    (CONFIRMED at v0.2.0: only `_template` and `demo-incident` carry an `instance.yaml` under
+    `instances/`; `fixtures/audit-on` is this harness's own)."""
+    instances = sorted(p for p in (ORACLE_DIR / "instances").iterdir() if (p / "instance.yaml").exists())
+    instances += sorted(p.parent for p in (ORACLE_DIR / "tests").rglob("instance.yaml"))
+    instances += sorted(p.parent for p in (HERE / "fixtures").rglob("instance.yaml"))
+    return instances
+
+
+def _candidate_bad_config_text(candidate):
+    """`goldens/config/bad_configs.txt`'s text, produced by running each `tests/test_config.py`
+    fixture through the CANDIDATE's `gw config check` instead of the oracle's `config.load`."""
+    work = pathlib.Path(tempfile.mkdtemp(prefix="gw_config_fixtures_"))
+    try:
+        out_path = work / "fixtures.json"
+        run = subprocess.run([sys.executable, str(HERE / "differential.py"), "--_config_fixtures", str(out_path)],
+                             env=child_env(), capture_output=True, text=True, cwd=str(ORACLE_DIR))
+        if run.returncode != 0:
+            raise NotExecuted("NOT EXECUTED: reading bad-config fixtures failed:\n%s\n%s"
+                              % (run.stdout[-3000:], run.stderr[-3000:]))
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        lines = ["# tests/test_config.py bad-config fixtures at %s: verdict and verbatim error" % ORACLE_TAG]
+        for row in payload["fixtures"]:
+            lineno, one = row["lineno"], row["one"]
+            if "raised" in row:
+                lines.append("%s:%d  FIXTURE-RAISED %s" % (payload["src_name"], lineno, row["raised"]))
+                continue
+            data_path = work / ("fixture_%d.json" % lineno)
+            data_path.write_text(json.dumps(row["data"]), encoding="utf-8")
+            cand = subprocess.run([candidate, "config", "check", str(data_path)], capture_output=True, text=True)
+            if cand.returncode != 0:
+                raise NotExecuted("NOT EXECUTED: candidate `config check` failed on line %d:\n%s\n%s"
+                                  % (lineno, cand.stdout[-2000:], cand.stderr[-2000:]))
+            verdict = cand.stdout.rstrip("\n")
+            if verdict == "ACCEPT":
+                lines.append("%s:%d  ACCEPT  %s" % (payload["src_name"], lineno, one))
+            elif verdict.startswith("REFUSE"):
+                lines.append("%s:%d  REFUSE  %s%s" % (payload["src_name"], lineno, one, verdict[len("REFUSE"):]))
+            else:
+                raise NotExecuted("NOT EXECUTED: candidate produced an unrecognised verdict on line %d: %r"
+                                  % (lineno, verdict))
+        return "\n".join(lines) + "\n"
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _resolve_candidate(candidate):
+    """The ticket's own gate line spells the candidate without an extension (`target/release/gw`),
+    which `subprocess.Popen` on Windows will not find by itself (no PATHEXT search on a relative/absolute
+    path with `shell=False`) -- and as a RELATIVE path it must also resolve against THIS PROCESS's cwd,
+    same as any other relative path on the command line. Absolute, `.exe`-suffixed on Windows if that is
+    what exists; otherwise returned unchanged so a real "no such candidate" still surfaces as NOT EXECUTED
+    rather than a silent wrong path."""
+    path = pathlib.Path(candidate)
+    if not path.is_absolute():
+        path = pathlib.Path.cwd() / path
+    if os.name == "nt" and not path.exists():
+        with_exe = path.with_name(path.name + ".exe")
+        if with_exe.exists():
+            path = with_exe
+    return str(path)
+
+
+def diff_config(candidate):
+    """`--config`: the candidate's `gw config spec <instance>` against every committed
+    `goldens/config/<instance>.spec.json`, plus `gw config check` against every `tests/test_config.py`
+    bad-config fixture. Byte-exact, via the same `diff_trees` every other golden tree uses."""
+    verify_oracle()
+    candidate = _resolve_candidate(candidate)
+    if not pathlib.Path(candidate).is_file():
+        raise NotExecuted("NOT EXECUTED: no candidate binary at %s" % candidate)
+    work = pathlib.Path(tempfile.mkdtemp(prefix="gw_config_out_"))
+    try:
+        cfg_dir = work / "config"
+        cfg_dir.mkdir()
+        problems = []
+        for inst_dir in _config_instance_dirs():
+            yaml_path = inst_dir / "instance.yaml"
+            run = subprocess.run([candidate, "config", "spec", str(yaml_path)], capture_output=True, text=True)
+            if run.returncode != 0:
+                problems.append("CANDIDATE FAILED `config spec` on %s: rc=%s\n%s\n%s"
+                               % (inst_dir.name, run.returncode, run.stdout[-1000:], run.stderr[-1000:]))
+                continue
+            text = run.stdout if run.stdout.endswith("\n") else run.stdout + "\n"
+            with open(cfg_dir / ("%s.spec.json" % inst_dir.name), "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        with open(cfg_dir / "bad_configs.txt", "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(_candidate_bad_config_text(candidate))
+        return problems + diff_trees(GOLDENS / "config", cfg_dir, "committed", "candidate")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def child_env():
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ORACLE_DIR)
@@ -1391,12 +1515,16 @@ def main(argv=None):
     parser.add_argument("--mcp", action="store_true", help="replay the call script against a candidate")
     parser.add_argument("--candidate", help="the candidate binary (with --mcp)")
     parser.add_argument("--goldens", help="compare this tree against the committed goldens")
+    parser.add_argument("--config", action="store_true",
+                       help="port-01: diff a candidate's `gw config spec`/`config check` against the "
+                            "committed config goldens (needs --candidate)")
     parser.add_argument("--split", action="store_true",
                        help="byte-identical statement splitting (db.py's _split_statements) between "
                             "--candidate and the oracle, on every .surql file the oracle ships and "
                             "the test_db.py SplitTests fixtures")
     parser.add_argument("--_emit", help=argparse.SUPPRESS)
     parser.add_argument("--_transcript", help=argparse.SUPPRESS)
+    parser.add_argument("--_config_fixtures", help=argparse.SUPPRESS)
     parser.add_argument("--_split", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
@@ -1405,6 +1533,9 @@ def main(argv=None):
         return 0
     if args._transcript:                             # child mode
         _record_transcript(args._transcript)
+        return 0
+    if args._config_fixtures:                        # child mode
+        _emit_config_fixtures(args._config_fixtures)
         return 0
     if args._split:                                  # child mode
         _emit_split(args._split)
@@ -1456,6 +1587,21 @@ def main(argv=None):
             bad = diff_trees(GOLDENS, args.goldens, "committed", "candidate")
             for line in bad:
                 print(line)
+            return 1 if bad else 0
+        if args.config:
+            if not args.candidate:
+                print("NOT EXECUTED: --config needs --candidate <bin>")
+                return 2
+            bad = diff_config(args.candidate)
+            for line in bad:
+                print(line)
+            if not bad:
+                # A gate that passes in SILENCE is indistinguishable from a gate that did not run:
+                # on 2026-09-21 this mode exited 0 with no output at all and the lead could not
+                # tell it apart from a no-op (it had, in fact, just been handed a stale binary).
+                # --split already says so; say it here too, and name what was actually compared.
+                print(f"CONFIG GREEN: candidate matches config.py on every committed instance "
+                      f"and every fixture (oracle {ORACLE_TAG})")
             return 1 if bad else 0
         if args.split:
             verify_oracle(args.oracle)
