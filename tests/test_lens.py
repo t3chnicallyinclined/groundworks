@@ -208,6 +208,33 @@ class ViewTests(ServerCase):
         self.assertEqual((out["drift"], out["count"]), (0, 2))
         self.assertNotIn("unit:log_003", {r["unit"] for r in out["rows"]})
 
+    def test_run_is_exposed_so_a_lens_can_scope_to_a_labelling_run(self):
+        """A second, machine labeller writes under its own run token. Unless the view carries `run`,
+        no lens filter can hold an un-adjudicated run out and every machine label joins every lens."""
+        self.assertIn("run", lens.VIEW_FIELDS)
+        self.db.sql("CREATE label:machine SET unit=unit:log_003, tier=2, dir='neutral', "
+                    "issues=['config'], targets=[], chunk='c', run='clef_unadjudicated'")
+        rows = self.db.sql("SELECT unit, run FROM lens_service_owner ORDER BY unit", expect=1)[0]
+        self.assertIn("run", rows[0], "the view must carry the run token")
+        self.assertIn("clef_unadjudicated", {r["run"] for r in rows},
+                      "an unscoped lens admits the machine run")
+
+        scoped = copy.deepcopy(self.inst.lens("service_owner"))
+        scoped["filter"] = "tier >= 2 AND run != 'clef_unadjudicated'"
+        self.assertIsNone(config.check_lens_filter(scoped["filter"]))
+        self.db.script(lens.view_surql(self.inst, scoped))
+        kept = {r["run"] for r in lens.lens_view(self.db, self.inst, "service_owner")["rows"]}
+        self.assertNotIn("clef_unadjudicated", kept, "the scoped lens must exclude the machine run")
+        self.assertTrue(kept, "scoping must not empty the lens")
+
+        # prove the check can fail: a field that is not a label field is still refused
+        bad = copy.deepcopy(self.inst.lens("service_owner"))
+        bad["filter"] = "tier >= 2 AND nosuchfield = 'x'"
+        with self.assertRaises(lens.LensError):
+            lens.view_surql(self.inst, bad)
+        self.db.sql("DELETE label:machine")
+        lens.apply(self.db, self.inst)
+
     def test_unknown_lens_and_bad_filter_are_loud(self):
         with self.assertRaises(lens.LensError):
             lens.lens_view(self.db, self.inst, "nobody")

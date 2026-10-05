@@ -38,7 +38,7 @@ from groundworks.pipeline.loader import q, rid  # noqa: E402
 SCOPE = "lens"          # seed of every falls_under edge this module writes
 BATCH = 50
 NO_DIRECTION = "none"   # bucket for a filed label with dir = NONE
-VIEW_FIELDS = "id AS label, unit, unit.status AS status, unit.grade AS grade, tier, dir, issues, targets, role, chunk"
+VIEW_FIELDS = "id AS label, unit, unit.status AS status, unit.grade AS grade, tier, dir, issues, targets, role, chunk, run"
 
 
 class LensError(Exception):
@@ -286,13 +286,14 @@ def lens_view(db, inst, name, limit=50):
     total = db.sql("SELECT count() AS n FROM %s WHERE true GROUP ALL" % view, expect=1)[0]
     drift = db.sql("SELECT count() AS n FROM %s WHERE NOT (%s) GROUP ALL" % (view, standard_where(inst, lens)), expect=1)[0]
     rows = db.sql("SELECT label, unit, unit.text AS words, unit.locator AS locator, unit.status AS status, "
-                  "unit.grade AS grade, tier, dir, issues, targets, role FROM %s ORDER BY tier DESC LIMIT %d"
+                  "unit.grade AS grade, tier, dir, issues, targets, role, run FROM %s ORDER BY tier DESC LIMIT %d"
                   % (view, limit), expect=1)[0]
     head.update({"filter": lens.get("filter"), "count": total[0]["n"] if total else 0, "limit": limit,
                  "drift": drift[0]["n"] if drift else 0,
                  "rows": [{"unit": str(r["unit"]), "label": str(r["label"]), "tier": r.get("tier"), "dir": r.get("dir"),
                            "issues": r.get("issues"), "targets": r.get("targets"), "role": r.get("role"),
                            "locator": r.get("locator"), "status": r.get("status"), "grade": r.get("grade"),
+                           "run": r.get("run"),
                            UNTRUSTED_TEXT_KEY: r.get("words")} for r in rows]})
     if head["drift"]:
         head["warning"] = ("%d row(s) no longer pass this lens's standard (a unit changed after the view was built): "
