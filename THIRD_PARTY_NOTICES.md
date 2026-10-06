@@ -37,12 +37,6 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | PyTorch, import `torch` | BSD-3-Clause | Embedding runtime (separate environment) |
 | sentence-transformers, import `sentence_transformers`; transformers, import `transformers` | Apache-2.0 | Embedding runtime |
 | NumPy, import `numpy` | BSD-3-Clause | Embedding runtime |
-| Cloudflare/clef-flash (9B decision model, post-trained from Qwen/Qwen3.5-9B) | Apache-2.0, following the base model | `groundworks/decide` runtime; weights pulled to the local Hugging Face cache, never redistributed |
-| **clef-flash's own head implementation, import `joint_schema_model`** -- shipped *inside* the model repository, not published to any package index | Apache-2.0 (same repository LICENSE) | `groundworks/decide/clef.py` adds the snapshot directory to `sys.path` and imports it, because the typed-decision head has no implementation outside that file. **This is third-party code executed from a model download, not a package from an index**: it is pinned by the snapshot revision, and any revision change should be read before it is used |
-| huggingface_hub, import `huggingface_hub` | Apache-2.0 | Model download for `groundworks/decide` and `groundworks/embed` |
-| accelerate, import `accelerate`; safetensors, import `safetensors` | Apache-2.0 | `decide` runtime |
-| torchvision, import `torchvision` | BSD-3-Clause | Required by the clef-flash processor (undocumented upstream); `decide` runtime |
-| Pillow, import `PIL` | MIT-CMU | Image inputs to `decide`; optional |
 
 ## Ideas only (nothing copied)
 

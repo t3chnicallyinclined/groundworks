@@ -15,7 +15,6 @@ dependencies = []
 [project.optional-dependencies]
 mcp = ["mcp>=1.26"]
 embed = ["torch", "sentence-transformers>=3", "numpy"]
-decide = ["torch", "transformers>=5", "accelerate", "safetensors", "pillow", "huggingface_hub"]
 
 [project.scripts]
 groundworks = "groundworks.cli:main"
