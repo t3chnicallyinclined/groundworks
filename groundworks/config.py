@@ -212,7 +212,7 @@ LENS_KINDS = ("perspective", "discipline", "framework")
 LENS_BACKINGS = ("prompt", "source", "graph", "calibrated")   # weakest first
 LENS_KEYS = {"name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk", "signed", "order"}
 LENS_STANDARD_KEYS = ("status", "grade")
-LENS_FILTER_FIELDS = ("tier", "dir", "issues", "targets", "role", "chunk", "run")   # label fields only
+LENS_FILTER_FIELDS = ("tier", "dir", "issues", "targets", "role", "chunk")   # label fields only
 LENS_FILTER_WORDS = ("AND", "OR", "NOT", "IN", "CONTAINS", "CONTAINSANY", "CONTAINSALL", "CONTAINSNOT",
                      "NONE", "true", "false")
 LENS_FILTER_TOKEN = re.compile(r"""\s*(?:('(?:[^'\\]|\\.)*')|("(?:[^"\\]|\\.)*")|(-?\d+(?:\.\d+)?)
