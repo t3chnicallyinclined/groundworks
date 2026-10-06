@@ -15,3 +15,7 @@ regex = "1"
 # (db.py's own default, and every caller in this repo); TLS is not a decision this crate needs to make.
 ureq = { version = "2", default-features = false }
 thiserror = "1"
+# decide::QuestionSchema::digest identifies the exact question set a score travelled with;
+# scores taken under different schemas are not comparable, so the id must be stable and
+# collision-resistant. RustCrypto, no unsafe, no transitive surprises.
+sha2 = "0.10"

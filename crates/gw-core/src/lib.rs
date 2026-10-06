@@ -21,6 +21,10 @@ pub const ORACLE_TAG: &str = "v0.2.0";
 /// The oracle commit `v0.2.0` points at (`_tickets` Log 2026-09-19 17:44).
 pub const ORACLE_COMMIT: &str = "94ad5dca0882121c71245dd644fe533743788655";
 
+/// decide: typed decisions over units. NOT a port -- it has no counterpart in the oracle,
+/// so its own tests are its gate. See the module header.
+pub mod decide;
+
 pub mod db;
 pub use db::{Db, DbError};
 
