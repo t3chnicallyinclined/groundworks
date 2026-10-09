@@ -89,8 +89,8 @@ import subprocess
 import sys
 import tempfile
 
-HERE = pathlib.Path(__file__).resolve().parent          # groundworks-rs/groundworks/harness
-GW = HERE.parent                                        # groundworks-rs/groundworks
+HERE = pathlib.Path(__file__).resolve().parent          # touchstone/groundworks/harness
+GW = HERE.parent                                        # touchstone/groundworks
 GOLDENS = GW / "goldens"
 ORACLE_DIR = pathlib.Path(os.environ.get("GROUNDWORKS_ORACLE_DIR", "C:/Users/trist/projects/groundworks-oracle"))
 ORACLE_URL = "https://github.com/t3chnicallyinclined/groundworks"
