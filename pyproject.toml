@@ -8,9 +8,14 @@ version = "0.2.0"
 description = "Evidence-gated knowledge graph built by exhaustive, verified agent reading, viewed through expert lenses."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {file = "LICENSE"}
+license = {text = "MIT"}
 authors = [{name = "t3chnicallyinclined"}]
 dependencies = []
+
+classifiers = ["License :: OSI Approved :: MIT License", "Programming Language :: Python :: 3"]
+
+[project.urls]
+Homepage = "https://github.com/t3chnicallyinclined/groundworks"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.26"]
@@ -20,7 +25,7 @@ embed = ["torch", "sentence-transformers>=3", "numpy"]
 groundworks = "groundworks.cli:main"
 
 [tool.setuptools]
-packages = ["groundworks", "groundworks.pipeline", "groundworks.present", "groundworks.panel", "groundworks.mcp", "groundworks.embed", "groundworks.patterns", "groundworks.hooks"]
+packages = ["groundworks", "groundworks.pipeline", "groundworks.ask", "groundworks.present", "groundworks.panel", "groundworks.mcp", "groundworks.embed", "groundworks.patterns", "groundworks.hooks"]
 
 [tool.setuptools.package-data]
 "groundworks.patterns" = ["*.surql"]

@@ -2,7 +2,7 @@
 
 **Working name:** Groundworks (naming deferred; see DECISIONS.md).
 **Status:** written 2026-09-15.
-**Contents:** a general, case-free description of the method. The first instance, a New York appeal, is documented separately in `09_appeal/kb/ARCHITECTURE_APPEALS_FIRM.md` and is the source of every measured number below.
+**Contents:** a general, case-free description of the method. The first instance, an appeal, is documented in its own private repository and is the source of every measured number below.
 **Rule for this file:** no client data. Examples from the first instance are described generically.
 
 ---

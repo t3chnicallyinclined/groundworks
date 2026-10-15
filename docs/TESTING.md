@@ -522,7 +522,7 @@ evals/gate.py             python -m evals.gate --metric reviewer.status_upgrade.
 
 Recommendation for the owner to decide:
 - **CC BY 4.0 and ODC-By 1.0:** treat as the permissive class, with attribution in `THIRD_PARTY_NOTICES.md`.
-- **CC BY-SA:** treat as copyleft data. Usable as an **external, downloaded, uncommitted** evaluation fixture; never committed into this proprietary repo and never shipped. Its share-alike term could reach anything distributed as an adaptation.
+- **CC BY-SA:** treat as copyleft data. Usable as an **external, downloaded, uncommitted** evaluation fixture; never committed into this repo and never shipped. Its share-alike term could reach anything distributed as an adaptation.
 
 Until the owner decides, every dataset below is **"usable pending owner decision"** at best, and nothing is committed; an adapter downloads into a gitignored cache. INFERRED reading of CC terms; LAWYER if a dataset is ever shipped.
 

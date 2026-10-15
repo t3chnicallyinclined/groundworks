@@ -94,7 +94,7 @@ Design consequence: authority verification runs automatically only against court
 | # | Action | Owner | When |
 |---|---|---|---|
 | 1 | Turn off "help improve Claude" on any consumer plan that has touched client material; move automated runs to an API key | Owner | Now |
-| 2 | Add a proprietary LICENSE and copyright headers to this repository | Needs owner's legal name or entity | Now |
+| 2 | ~~Add a proprietary LICENSE~~ Done differently 2026-10-15: the owner released the engine under MIT | Done | Done |
 | 3 | Fix the four role-skill NOTICE and LICENSE files as in section 2 | Claude, with owner name | Now |
 | 4 | Keep `THIRD_PARTY_NOTICES.md` current; add a build check that fails on a non-commercial model or unlisted dependency | Claude | Before any customer |
 | 5 | Default product keeps tenant schema control and raw queries out; price SurrealDB's commercial license, and buy it before any feature that gives customers schema control or database access | Owner | Before that feature ships |
