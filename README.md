@@ -186,7 +186,7 @@ To get there faster, copy [`instances/demo-incident/`](instances/demo-incident/)
 
 ## Status: v0.2.0, plus `ask`
 
-- **Tests:** `groundworks test` runs every suite, the license check, the config/skills drift check, the mutation lint and the privacy scan, and prints each by name, so a check that did NOT run is visible rather than green. Without a deny list the privacy scan reports `NOT EXECUTED`, which is not a failure.
+- **Tests:** 763, 0 skipped. `groundworks test` (about 25 minutes; many suites start their own short-lived SurrealDB) runs every suite, the license check, the config/skills drift check, the mutation lint and the privacy scan, and prints each by name, so a check that did NOT run is visible rather than green. Without a deny list the privacy scan reports `NOT EXECUTED`, which is not a failure.
 - **Gates are probed in both directions and pinned to a committed baseline**, so a rule that is quietly loosened fails the run instead of reporting `0 misbehaved`.
 - **The graph's shape belongs to the instance:** declare node tables and edge types in `instance.yaml` and they get schema, gate traversals, probes, cleanup, per-role permissions and a write path with no engine change.
 - **Used for real, privately:** the first instance is an appellate case record, 9,101 units read by 77 agents, 77 of 77 chunks passing the verbatim validator. Its code and data are not here and never will be.
