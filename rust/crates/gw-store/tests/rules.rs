@@ -61,17 +61,17 @@ fn migrations_apply_once_and_a_failed_file_rolls_back() {
         migrate(&root, Scope::Project, SCHEMA, true).unwrap().is_empty(),
         "second run is a no-op"
     );
-    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 5);
+    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 6);
 
     let mut broken: Vec<(&str, &str)> = SCHEMA.to_vec();
     broken.push((
-        "0006_broken.surql",
+        "0007_broken.surql",
         "-- scope: project\nDEFINE TABLE ok_table SCHEMAFULL;\nTHROW 'a broken migration';",
     ));
     assert!(migrate(&root, Scope::Project, &broken, true).is_err());
     assert_eq!(
         current_version(&root).unwrap().unwrap()["applied"],
-        5,
+        6,
         "version did not move"
     );
     let tables = value(&root, "INFO FOR DB;");
@@ -236,4 +236,62 @@ fn a_project_credential_cannot_reach_another_project() {
     // proj_a's credential does not exist in proj_b at all: its sign-in there fails.
     let wrong = connect_member(&estate.server.url(), "proj_b", "agent1", "not-the-password").unwrap();
     assert!(wrong.sql("SELECT * FROM fact;", None).is_err());
+}
+
+fn vars(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
+    pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
+}
+
+#[test]
+fn bound_variables_are_data_never_statements() {
+    let estate = Estate::new();
+    let agent = estate.agent("proj_a");
+    let hostile = "x'; DELETE fact; --";
+    agent
+        .query(
+            "CREATE fact:v SET text = $text, grade = 'INFERRED';",
+            &vars(&[("text", hostile.into())]),
+            Some(1),
+        )
+        .unwrap();
+    let stored = estate
+        .root("proj_a")
+        .sql("SELECT VALUE text FROM ONLY fact:v;", Some(1))
+        .unwrap();
+    assert_eq!(stored[0], hostile, "the value was stored as text, not run");
+    // Over JSON-RPC, 3.1.6 turned this into the record `gate:cd` and dropped the rest (2026-10-25).
+    for looks_like_a_record in ["gate: cd rust && cargo test", "person:tobie", "receipt:abc"] {
+        let back = agent
+            .query(
+                "RETURN [$v, type::is_string($v)];",
+                &vars(&[("v", looks_like_a_record.into())]),
+                Some(1),
+            )
+            .unwrap();
+        assert_eq!(
+            back[0],
+            serde_json::json!([looks_like_a_record, true]),
+            "{looks_like_a_record}"
+        );
+    }
+    // A write PERMISSIONS refuse through query() is still an error, never an empty OK.
+    let refused = agent.query("DELETE fact:v;", &serde_json::Map::new(), Some(1));
+    assert!(matches!(refused, Err(DbError::PermissionDenied { .. })), "{refused:?}");
+}
+
+#[test]
+fn the_store_records_who_wrote_a_fact_and_nobody_can_say_otherwise() {
+    let estate = Estate::new();
+    let (root, agent) = (estate.root("proj_a"), estate.agent("proj_a"));
+    ok(&agent, "CREATE fact:mine SET text = 't', grade = 'INFERRED';");
+    assert_eq!(
+        root.sql("SELECT VALUE <string> written_by FROM ONLY fact:mine;", Some(1))
+            .unwrap()[0],
+        "member:agent1"
+    );
+    refused(
+        &agent,
+        "CREATE fact:forged SET text = 't', grade = 'INFERRED', written_by = member:owner1;",
+    );
+    refused(&agent, "UPDATE fact:mine SET written_by = member:owner1;");
 }

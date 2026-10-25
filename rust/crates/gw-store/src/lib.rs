@@ -48,6 +48,10 @@ pub const SCHEMA: &[(&str, &str)] = &[
         "0005_project_journal.surql",
         include_str!("../schema/0005_project_journal.surql"),
     ),
+    (
+        "0006_project_provenance.surql",
+        include_str!("../schema/0006_project_provenance.surql"),
+    ),
 ];
 
 /// Created by the migration engine itself, before the first file, so the version can be read on any database.
@@ -272,14 +276,18 @@ pub fn migrate(root: &Db, scope: Scope, files: &[(&str, &str)], check_server_ver
             continue;
         }
         applied_files.push(name.clone());
-        let list = applied_files.iter().map(|f| lit(f)).collect::<Vec<_>>().join(", ");
-        let bump = format!(
-            "UPSERT schema_version:current CONTENT {{product: {}, scope: {}, major: {SCHEMA_MAJOR}, applied: {number}, files: [{list}], updated_at: time::now()}};",
-            lit(PRODUCT),
-            lit(scope.as_str())
-        );
-        root.sql(
+        let vars = serde_json::Map::from_iter([
+            ("product".to_owned(), Value::from(PRODUCT)),
+            ("scope".to_owned(), Value::from(scope.as_str())),
+            ("major".to_owned(), Value::from(SCHEMA_MAJOR)),
+            ("applied".to_owned(), Value::from(number)),
+            ("files".to_owned(), Value::from(applied_files.clone())),
+        ]);
+        let bump = "UPSERT schema_version:current CONTENT {product: $product, scope: $scope, major: $major, \
+                    applied: $applied, files: $files, updated_at: time::now()};";
+        root.query(
             &format!("BEGIN TRANSACTION;\n{text}\n;{bump}\nCOMMIT TRANSACTION;"),
+            &vars,
             None,
         )
         .map_err(|e| {
@@ -315,13 +323,14 @@ pub fn provision(root: &Db, member: &str, role: &str, password: &str) -> Result<
     if !ROLES.contains(&role) {
         return Err(StoreError::Model(format!("role {role:?} is not one of {ROLES:?}")));
     }
-    root.sql(
-        &format!(
-            "UPSERT type::record('member', {}) SET role = {}, pass = crypto::argon2::generate({}), enabled = true;",
-            lit(member),
-            lit(role),
-            lit(password)
-        ),
+    let vars = serde_json::Map::from_iter([
+        ("member".to_owned(), Value::from(member)),
+        ("role".to_owned(), Value::from(role)),
+        ("pass".to_owned(), Value::from(password)),
+    ]);
+    root.query(
+        "UPSERT type::record('member', $member) SET role = $role, pass = crypto::argon2::generate($pass), enabled = true;",
+        &vars,
         Some(1),
     )?;
     Ok(())
@@ -360,11 +369,6 @@ pub fn healthy(url: &str) -> bool {
         .timeout(Duration::from_millis(800))
         .call()
         .is_ok()
-}
-
-/// A SurrealQL string literal.
-pub fn lit(value: &str) -> String {
-    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 #[cfg(test)]
@@ -409,11 +413,5 @@ mod tests {
         assert!(check_server("3.3.4").is_ok());
         assert!(check_server("surrealdb-2.3.0").is_err());
         assert!(check_server("").is_err());
-    }
-
-    #[test]
-    fn literals_escape_quotes() {
-        assert_eq!(lit("it's"), r"'it\'s'");
-        assert_eq!(lit(r"a\b"), r"'a\\b'");
     }
 }

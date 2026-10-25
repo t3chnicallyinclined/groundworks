@@ -12,6 +12,7 @@
 //! * gw holds NO ticket, claim or lane code: that is `ops-core`, reached through `gw-board-store`.
 
 /// port-01 (this ticket): the instance config loader, ported from `groundworks/config.py`.
+pub mod cbor;
 pub mod config;
 
 /// The oracle this crate is ported from. The harness refuses to compare against anything else

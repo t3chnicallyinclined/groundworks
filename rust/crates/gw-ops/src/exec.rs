@@ -25,7 +25,13 @@ pub struct Outcome {
     pub elapsed: Duration,
     pub stdout: String,
     pub stderr: String,
+    /// SHA-256 of the FULL redacted stdout, a zero byte, and the full redacted stderr, taken before
+    /// the display tail is cut: a receipt proves the whole output, not only what was shown.
+    pub output_hash: String,
 }
+
+/// What a run receipt's `output_hash` covers.
+pub const RUN_HASH_OF: &str = "sha256 of the full redacted stdout, a zero byte, then the full redacted stderr";
 
 impl Outcome {
     pub fn ok(&self) -> bool {
@@ -81,7 +87,18 @@ pub async fn run(home: &Home, project: &Project, env: &Env, command: &str, timeo
         }
         Err(_) => (None, true, Vec::new(), Vec::new()),
     };
-    let clean = |bytes: Vec<u8>| tail(redactor.redact(&String::from_utf8_lossy(&bytes)));
+    let (stdout, stderr) = (
+        redactor.redact(&String::from_utf8_lossy(&stdout)),
+        redactor.redact(&String::from_utf8_lossy(&stderr)),
+    );
+    let output_hash = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(stdout.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(stderr.as_bytes());
+        crate::store::hex(&hasher.finalize())
+    };
     Ok(Outcome {
         machine: machine(),
         location,
@@ -89,8 +106,9 @@ pub async fn run(home: &Home, project: &Project, env: &Env, command: &str, timeo
         code,
         timed_out,
         elapsed: start.elapsed(),
-        stdout: clean(stdout),
-        stderr: clean(stderr),
+        stdout: tail(stdout),
+        stderr: tail(stderr),
+        output_hash,
     })
 }
 

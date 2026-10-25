@@ -65,6 +65,7 @@ fn a_receipt_confirms_a_fact_and_nothing_else_does() {
                 exit_code: Some(0),
                 ok: true,
                 output_hash: "abc".into(),
+                hash_of: "test",
                 commit: Some("deadbeef".into()),
             },
         )
@@ -164,18 +165,59 @@ fn scope_levels_and_walls_need_the_owner_password() {
 fn an_import_keeps_its_original_time_and_still_obeys_the_evidence_rule() {
     let f = Fixture::new("import");
     f.store
-        .import_fact(&f.dir, "demo", &fact(Confidence::Inferred), "2026-10-24T05:47:08Z")
+        .import_fact(
+            &f.dir,
+            "demo",
+            &fact(Confidence::Inferred),
+            "2026-10-24T05:47:08Z",
+            "OLDBOX",
+        )
         .unwrap();
     let facts = f.store.facts("demo", None, 10).unwrap();
     assert!(facts[0].at.starts_with("2026-10-24T05:47:08"), "{}", facts[0].at);
+    assert_eq!(
+        facts[0].machine.as_deref(),
+        Some("OLDBOX"),
+        "an import keeps its machine"
+    );
+    assert_eq!(
+        facts[0].written_by.as_deref(),
+        Some("NONE"),
+        "the loader, not a member, wrote it"
+    );
     assert!(
         f.store
-            .import_fact(&f.dir, "demo", &fact(Confidence::Confirmed), "2026-10-24T05:47:08Z")
+            .import_fact(
+                &f.dir,
+                "demo",
+                &fact(Confidence::Confirmed),
+                "2026-10-24T05:47:08Z",
+                "OLDBOX"
+            )
             .is_err()
     );
     assert!(
         f.store
-            .import_fact(&f.dir, "demo", &fact(Confidence::Inferred), "yesterday; DELETE fact")
+            .import_fact(
+                &f.dir,
+                "demo",
+                &fact(Confidence::Inferred),
+                "yesterday; DELETE fact",
+                "OLDBOX"
+            )
             .is_err()
+    );
+}
+
+#[test]
+fn an_owner_statement_typed_by_an_agent_says_so() {
+    let f = Fixture::new("reported");
+    let mut said = fact(Confidence::Confirmed);
+    said.owner_statement = Some("owner, 2026-10-25: ship it".into());
+    f.store.add_fact(&f.dir, "demo", &said).unwrap();
+    let line = f.store.facts("demo", None, 1).unwrap()[0].render();
+    assert!(
+        line.contains("as reported by gw-engineer, not signed by the owner"),
+        "{line}"
     );
 }

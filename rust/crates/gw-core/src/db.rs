@@ -406,32 +406,45 @@ impl Db {
     }
 
     fn post(&self, body: &str, retry: bool) -> Result<Value, DbError> {
+        self.post_to(&self.url, "text/plain", body, retry)
+    }
+
+    fn post_to(&self, url: &str, content_type: &str, body: &str, retry: bool) -> Result<Value, DbError> {
+        let bytes = self.send(url, content_type, "application/json", body.as_bytes(), retry)?;
+        let raw = String::from_utf8(bytes)
+            .map_err(|e| DbError::db(format!("response from {} was not valid UTF-8: {}", url, e)))?;
+        serde_json::from_str::<Value>(&raw)
+            .map_err(|_| DbError::db(format!("server did not return JSON: {}", truncate(&raw, 300))))
+    }
+
+    /// POST `body` and return the response bytes. Shared by the `/sql` (JSON) and `/rpc` (CBOR)
+    /// paths so token refresh and the one reconnect behave the same on both.
+    fn send(&self, url: &str, content_type: &str, accept: &str, body: &[u8], retry: bool) -> Result<Vec<u8>, DbError> {
         let auth = self.auth_header()?;
         let result = self
             .agent
-            .post(&self.url)
-            .set("Accept", "application/json")
-            .set("Content-Type", "text/plain")
+            .post(url)
+            .set("Accept", accept)
+            .set("Content-Type", content_type)
             .set("Authorization", &auth)
             .set("surreal-ns", &self.ns)
             .set("surreal-db", &self.db)
-            .send_string(body);
+            .send_bytes(body);
         match result {
             Ok(response) => {
-                let raw = response
-                    .into_string()
-                    .map_err(|e| DbError::db(format!("response from {} was not valid UTF-8: {}", self.url, e)))?;
-                serde_json::from_str::<Value>(&raw)
-                    .map_err(|_| DbError::db(format!("server did not return JSON: {}", truncate(&raw, 300))))
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)
+                    .map_err(|e| DbError::db(format!("could not read the response from {}: {}", url, e)))?;
+                Ok(bytes)
             }
             Err(ureq::Error::Status(401, _response)) if self.access.is_some() && retry => {
                 // token expired: sign in once more (db.py:106-108)
                 *self.token.lock().unwrap() = None;
-                self.post(body, false)
+                self.send(url, content_type, accept, body, false)
             }
             Err(ureq::Error::Status(code, response)) => {
                 let detail = truncate(&response.into_string().unwrap_or_default(), 500);
-                Err(DbError::db(format!("HTTP {} from {}: {}", code, self.url, detail)))
+                Err(DbError::db(format!("HTTP {} from {}: {}", code, url, detail)))
             }
             Err(ureq::Error::Transport(t)) if retry => {
                 // ONE connection per `Db`, no pool -- but `ureq`'s agent keeps an idle keep-alive
@@ -441,11 +454,11 @@ impl Db {
                 // `urllib` opens a fresh connection every call. One retry on a fresh connection
                 // restores that behaviour without adding a pool of our own.
                 let _ = t;
-                self.post(body, false)
+                self.send(url, content_type, accept, body, false)
             }
             Err(ureq::Error::Transport(t)) => Err(DbError::db(format!(
                 "cannot reach {} ({}); the database may be stopped",
-                self.url, t
+                url, t
             ))),
         }
     }
@@ -516,6 +529,72 @@ impl Db {
     /// Run one or more statements. Raise on the first failure, naming it.
     pub fn sql(&self, statement: &str, expect: Option<usize>) -> Result<Vec<Value>, DbError> {
         let blocks = self.run(statement, expect)?;
+        for (index, block) in blocks.iter().enumerate() {
+            if block.get("status").and_then(Value::as_str) != Some("OK") {
+                return Err(DbError::db(format!(
+                    "statement {} failed: {}\n  statement: {}",
+                    index + 1,
+                    python_str_value(&block.get("result").cloned().unwrap_or(Value::Null)),
+                    truncate(statement, 300)
+                )));
+            }
+        }
+        if let Some(denied) = self.denied(statement, &blocks) {
+            return Err(DbError::PermissionDenied {
+                message: denied,
+                missing: vec!["a launch credential whose role may perform this write".to_string()],
+            });
+        }
+        Ok(blocks.into_iter().map(|b| b.get("result").cloned().unwrap_or(Value::Null)).collect())
+    }
+
+    /// Run statements with BOUND variables (`$name` in the text, values in `vars`), through the
+    /// RPC endpoint in SurrealDB's typed CBOR encoding (see `cbor.rs` for why not JSON). Values are
+    /// never spliced into the text, so a value can never change what a statement does, and a string
+    /// always arrives as that string. Same failure rules as [`Db::sql`]: any failed block is an error
+    /// naming it, and a refused write under record auth is `PermissionDenied`.
+    ///
+    /// Not in the Python oracle (which has no parameterised path); its own tests are its gate.
+    pub fn query(
+        &self,
+        statement: &str,
+        vars: &serde_json::Map<String, Value>,
+        expect: Option<usize>,
+    ) -> Result<Vec<Value>, DbError> {
+        let request = json!({
+            "id": 1,
+            "method": "query",
+            "params": [format!("USE NS {} DB {}; {}", self.ns, self.db, statement), vars],
+        });
+        let body = crate::cbor::encode(&request).map_err(DbError::db)?;
+        let url = format!("{}/rpc", self.base_url());
+        let bytes = self.send(&url, "application/cbor", "application/cbor", &body, true)?;
+        let value = crate::cbor::decode(&bytes).map_err(DbError::db)?;
+        if let Some(error) = value.get("error") {
+            return Err(DbError::db(format!(
+                "query failed: {}\n  statement: {}",
+                error.get("message").and_then(Value::as_str).map_or_else(|| error.to_string(), str::to_string),
+                truncate(statement, 300)
+            )));
+        }
+        let mut blocks = value
+            .get("result")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| DbError::db(format!("unexpected RPC response: {}", truncate(&value.to_string(), 300))))?;
+        if blocks.first().and_then(|b| b.get("status")).and_then(Value::as_str) == Some("OK") && blocks.len() > 1 {
+            blocks.remove(0); // the USE statement
+        }
+        if let Some(expect) = expect {
+            if blocks.len() != expect {
+                return Err(DbError::db(format!(
+                    "expected {} result block(s), got {}, for: {}",
+                    expect,
+                    blocks.len(),
+                    truncate(statement, 200)
+                )));
+            }
+        }
         for (index, block) in blocks.iter().enumerate() {
             if block.get("status").and_then(Value::as_str) != Some("OK") {
                 return Err(DbError::db(format!(

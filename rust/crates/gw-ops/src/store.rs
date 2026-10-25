@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use gw_core::db::Db;
-use gw_store::{GLOBAL_NS, connect_member, connect_root, lit, open_namespace, project_ns, provision};
+use gw_store::{GLOBAL_NS, connect_member, connect_root, open_namespace, project_ns, provision};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -124,20 +124,28 @@ impl Store {
     /// Record proof that a command ran. Returns the receipt id (`receipt:...`).
     pub fn record_receipt(&self, project: &str, receipt: &ReceiptIn) -> Result<String> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
-        let exit = receipt.exit_code.map_or_else(|| "NONE".to_owned(), |c| c.to_string());
-        let commit = receipt.commit.as_deref().map_or_else(|| "NONE".to_owned(), lit);
-        let rows = db.sql(
-            &format!(
-                "CREATE receipt SET command = {}, machine = {}, location = {}, exit_code = {exit}, ok = {}, output_hash = {}, commit = {commit} RETURN VALUE id;",
-                lit(&receipt.command),
-                lit(&receipt.machine),
-                lit(&receipt.location),
-                receipt.ok,
-                lit(&receipt.output_hash),
-            ),
-            Some(1),
-        )?;
-        record_id(&rows[0][0]).context("CREATE receipt returned no id")
+        let mut sql = String::from(
+            "CREATE receipt SET command = $command, machine = $machine, location = $location, ok = $ok, \
+             output_hash = $output_hash, hash_of = $hash_of",
+        );
+        let mut vars = Vars::default()
+            .set("command", receipt.command.as_str())
+            .set("machine", receipt.machine.as_str())
+            .set("location", receipt.location.as_str())
+            .set("ok", receipt.ok)
+            .set("output_hash", receipt.output_hash.as_str())
+            .set("hash_of", receipt.hash_of);
+        if let Some(code) = receipt.exit_code {
+            sql.push_str(", exit_code = $exit_code");
+            vars = vars.set("exit_code", code);
+        }
+        if let Some(commit) = &receipt.commit {
+            sql.push_str(", commit = $commit");
+            vars = vars.set("commit", commit.as_str());
+        }
+        sql.push_str(" RETURN VALUE id;");
+        let rows = db.query(&sql, &vars.0, Some(1))?;
+        record_id(&rows[0]).context("CREATE receipt returned no id")
     }
 
     /// Record a fact. The store decides whether it may be CONFIRMED: it needs a receipt, an
@@ -148,23 +156,28 @@ impl Store {
         self.write_fact(&db, project_dir, fact, None)
     }
 
-    /// Import a historical fact with its original timestamp. Runs as the loader (root): an agent
-    /// can never backdate a fact. The evidence rules apply to root exactly as to an agent.
-    pub fn import_fact(&self, project_dir: &Path, project: &str, fact: &FactIn, at: &str) -> Result<String> {
+    /// Import a historical fact with the time and machine it was first recorded on. Runs as the
+    /// loader (root): an agent can never backdate a fact or name another machine. The evidence
+    /// rules apply to root exactly as to an agent.
+    pub fn import_fact(
+        &self,
+        project_dir: &Path,
+        project: &str,
+        fact: &FactIn,
+        at: &str,
+        machine: &str,
+    ) -> Result<String> {
         let ns = project_ns(&slug(project)?)?;
         self.agent(&ns)?; // creates and migrates the namespace if needed
-        let at = chrono_like(at)?;
-        self.write_fact(&self.root(&ns)?, project_dir, fact, Some(&at))
+        let origin = Origin {
+            at: rfc3339(at)?,
+            machine: machine.to_owned(),
+        };
+        self.write_fact(&self.root(&ns)?, project_dir, fact, Some(&origin))
     }
 
-    fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, at: Option<&str>) -> Result<String> {
+    fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, origin: Option<&Origin>) -> Result<String> {
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
-        let at = at.map_or_else(String::new, |at| format!(", at = d{}", lit(at)));
-        let receipt = match &fact.receipt {
-            Some(id) => parse_receipt(id)?,
-            None => "NONE".to_owned(),
-        };
-        let owner_statement = fact.owner_statement.as_deref().map_or_else(|| "NONE".to_owned(), lit);
         let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
         if fact.confidence == Confidence::Confirmed
             && fact.receipt.is_none()
@@ -177,33 +190,47 @@ impl Store {
             );
         }
         let grade = grade(fact.confidence);
-        let first_grade = if quote.is_some() { "INFERRED" } else { grade };
-        let mut sql = format!(
-            "BEGIN TRANSACTION;\nLET $f = (CREATE fact SET text = {}, kind = {}, grade = {}, source = {}, by = {}, machine = {}, receipt = {receipt}, owner_statement = {owner_statement}{at} RETURN VALUE id)[0];\n",
-            lit(fact.text.trim()),
-            lit(kind(fact.kind)),
-            lit(first_grade),
-            lit(fact.source.trim()),
-            lit(fact.by.trim()),
-            lit(&machine()),
+        let machine_name = origin.map_or_else(machine, |o| o.machine.clone());
+        let mut vars = Vars::default()
+            .set("text", fact.text.trim())
+            .set("kind", kind(fact.kind))
+            .set("first_grade", if quote.is_some() { "INFERRED" } else { grade })
+            .set("grade", grade)
+            .set("source", fact.source.trim())
+            .set("by", fact.by.trim())
+            .set("machine", machine_name);
+        let mut create = String::from(
+            "CREATE fact SET text = $text, kind = $kind, grade = $first_grade, source = $source, by = $by, machine = $machine",
         );
+        if let Some(id) = &fact.receipt {
+            create.push_str(", receipt = type::record('receipt', $receipt_key)");
+            vars = vars.set("receipt_key", receipt_key(id)?);
+        }
+        if let Some(said) = &fact.owner_statement {
+            create.push_str(", owner_statement = $owner_statement");
+            vars = vars.set("owner_statement", said.as_str());
+        }
+        if let Some(origin) = origin {
+            create.push_str(", at = <datetime>$at");
+            vars = vars.set("at", origin.at.as_str());
+        }
+        let mut sql = format!("BEGIN TRANSACTION;\nLET $f = ({create} RETURN VALUE id)[0];\n");
         if let Some(q) = &quote {
             // RELATE takes a variable or a literal record, not a function call.
-            writeln!(
-                sql,
-                "LET $u = type::record('unit', {});\n\
-                 UPSERT $u SET locator = {}, hash = {}, text = {}, kind = 'quote', read_at = time::now();\n\
-                 RELATE $f->evidence->$u SET hash_at_cite = {};\nUPDATE $f SET grade = {}, verified_at = time::now();",
-                lit(&q.unit_key),
-                lit(&q.locator),
-                lit(&q.hash),
-                lit(&q.text),
-                lit(&q.hash),
-                lit(grade),
-            )?;
+            sql.push_str(
+                "LET $u = type::record('unit', $unit_key);\n\
+                 UPSERT $u SET locator = $locator, hash = $hash, text = $quote_text, kind = 'quote', read_at = time::now();\n\
+                 RELATE $f->evidence->$u SET hash_at_cite = $hash;\n\
+                 UPDATE $f SET grade = $grade, verified_at = time::now();\n",
+            );
+            vars = vars
+                .set("unit_key", q.unit_key.as_str())
+                .set("locator", q.locator.as_str())
+                .set("hash", q.hash.as_str())
+                .set("quote_text", q.text.as_str());
         }
         sql.push_str("RETURN $f;\nCOMMIT TRANSACTION;");
-        let rows = db.sql(&sql, None)?;
+        let rows = db.query(&sql, &vars.0, None)?;
         rows.iter()
             .rev()
             .find_map(record_id)
@@ -213,12 +240,21 @@ impl Store {
     /// The newest `limit` facts, oldest first, optionally of one kind.
     pub fn facts(&self, project: &str, kind_filter: Option<Kind>, limit: usize) -> Result<Vec<FactRow>> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
-        let filter = kind_filter.map_or_else(String::new, |k| format!("WHERE kind = {} ", lit(kind(k))));
-        let rows = db.sql(
+        let mut vars = Vars::default().set("limit", limit);
+        let filter = match kind_filter {
+            Some(k) => {
+                vars = vars.set("kind", kind(k));
+                "WHERE kind = $kind "
+            }
+            None => "",
+        };
+        let rows = db.query(
             &format!(
                 "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
-                 <string> receipt AS receipt, ->evidence->unit.locator AS quotes FROM fact {filter}ORDER BY at DESC LIMIT {limit};"
+                 owner_statement, <string> written_by AS written_by, <string> receipt AS receipt, \
+                 ->evidence->unit.locator AS quotes FROM fact {filter}ORDER BY at DESC LIMIT $limit;"
             ),
+            &vars.0,
             Some(1),
         )?;
         let mut facts: Vec<FactRow> = serde_json::from_value(rows[0].clone()).context("reading facts")?;
@@ -246,16 +282,18 @@ impl Store {
     pub fn set_level(&self, owner_pass: &str, scope: &str, level: &str, workspace: Option<&str>) -> Result<()> {
         let kind = gw_store::scope_of(scope)?.as_str();
         let owner = self.owner(GLOBAL_NS, owner_pass)?;
-        let ws = workspace.map_or_else(|| "NONE".to_owned(), lit);
-        owner.sql(
-            &format!(
-                "UPSERT type::record('scope_policy', {s}) SET name = {s}, kind = {}, level = {}, workspace = {ws};",
-                lit(kind),
-                lit(level),
-                s = lit(scope)
-            ),
-            Some(1),
-        )?;
+        let mut sql =
+            String::from("UPSERT type::record('scope_policy', $scope) SET name = $scope, kind = $kind, level = $level");
+        let mut vars = Vars::default()
+            .set("scope", scope)
+            .set("kind", kind)
+            .set("level", level);
+        if let Some(ws) = workspace {
+            sql.push_str(", workspace = $workspace");
+            vars = vars.set("workspace", ws);
+        }
+        sql.push(';');
+        owner.query(&sql, &vars.0, Some(1))?;
         Ok(())
     }
 
@@ -265,12 +303,28 @@ impl Store {
         gw_store::scope_of(b)?;
         ensure!(a != b, "a wall needs two different scopes");
         let (a, b) = if a < b { (a, b) } else { (b, a) };
-        self.owner(GLOBAL_NS, owner_pass)?.sql(
-            &format!("CREATE wall SET a = {}, b = {}, why = {};", lit(a), lit(b), lit(why)),
-            Some(1),
-        )?;
+        let vars = Vars::default().set("a", a).set("b", b).set("why", why);
+        self.owner(GLOBAL_NS, owner_pass)?
+            .query("CREATE wall SET a = $a, b = $b, why = $why;", &vars.0, Some(1))?;
         Ok(())
     }
+}
+
+/// Bound variables for [`Db::query`]: values travel as JSON, never inside the statement text.
+#[derive(Default)]
+struct Vars(serde_json::Map<String, Value>);
+
+impl Vars {
+    fn set(mut self, name: &str, value: impl Into<Value>) -> Self {
+        self.0.insert(name.to_owned(), value.into());
+        self
+    }
+}
+
+/// When and where a historical fact was first recorded (imports only).
+struct Origin {
+    at: String,
+    machine: String,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +335,8 @@ pub struct ReceiptIn {
     pub exit_code: Option<i32>,
     pub ok: bool,
     pub output_hash: String,
+    /// What `output_hash` covers, in words, so a reader knows what the receipt proves.
+    pub hash_of: &'static str,
     pub commit: Option<String>,
 }
 
@@ -365,6 +421,9 @@ pub struct FactRow {
     pub by: Option<String>,
     pub machine: Option<String>,
     pub receipt: Option<String>,
+    pub owner_statement: Option<String>,
+    /// The login that wrote it (`member:owner`, `member:agent`), or NONE for the loader.
+    pub written_by: Option<String>,
     #[serde(default)]
     pub quotes: Vec<String>,
 }
@@ -390,6 +449,17 @@ impl FactRow {
             self.by.as_deref().unwrap_or("?"),
             self.machine.as_deref().unwrap_or("?")
         );
+        if let Some(said) = &self.owner_statement {
+            if self.written_by.as_deref() == Some("member:owner") {
+                let _ = write!(line, " [owner statement, signed by the owner: {said}]");
+            } else {
+                let _ = write!(
+                    line,
+                    " [owner statement as reported by {}, not signed by the owner: {said}]",
+                    self.by.as_deref().unwrap_or("?")
+                );
+            }
+        }
         for q in &self.quotes {
             let _ = write!(line, " [quote {q}]");
         }
@@ -409,8 +479,8 @@ fn seconds(at: &str) -> String {
     }
 }
 
-/// An RFC 3339 timestamp (`2026-10-24T05:47:08Z`), checked by shape so it can be a literal.
-fn chrono_like(at: &str) -> Result<String> {
+/// An RFC 3339 timestamp (`2026-10-24T05:47:08Z`); the store casts it with `<datetime>`.
+fn rfc3339(at: &str) -> Result<String> {
     let ok = at.len() >= 20
         && at
             .bytes()
@@ -439,14 +509,14 @@ fn kind(k: Kind) -> &'static str {
     }
 }
 
-/// `receipt:<id>` with an id of letters and digits only, emitted as a record literal.
-fn parse_receipt(id: &str) -> Result<String> {
+/// The key of `receipt:<key>`: letters and digits only (a clear error beats a silent miss).
+fn receipt_key(id: &str) -> Result<String> {
     let key = id.strip_prefix("receipt:").unwrap_or(id);
     ensure!(
         !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric()),
         "{id:?} is not a receipt id (receipt:<letters and digits>)"
     );
-    Ok(format!("receipt:{key}"))
+    Ok(key.to_owned())
 }
 
 fn record_id(v: &Value) -> Option<String> {
@@ -606,9 +676,9 @@ mod tests {
 
     #[test]
     fn receipt_ids_cannot_inject() {
-        assert_eq!(parse_receipt("receipt:abc123").unwrap(), "receipt:abc123");
-        assert!(parse_receipt("receipt:a; DELETE fact").is_err());
-        assert!(parse_receipt("").is_err());
+        assert_eq!(receipt_key("receipt:abc123").unwrap(), "abc123");
+        assert!(receipt_key("receipt:a; DELETE fact").is_err());
+        assert!(receipt_key("").is_err());
     }
 
     #[test]

@@ -445,3 +445,18 @@ original timestamps (an agent can never backdate a fact). Every store call is bl
 `cargo mcp-test` covers it against throwaway servers from the `gw-store` `testkit` feature: a receipt
 confirms, nothing else does; a quote confirms only word for word; changing the quoted file and quoting it
 again marks the old fact stale; scope levels and walls need the owner password; imports keep their time.
+
+## Bound variables over CBOR (2026-10-25)
+
+`gw-core::db::Db::query` runs statements with bound variables through `/rpc` in SurrealDB's CBOR
+encoding (`src/cbor.rs`). Nothing in `gw-ops` or `gw-store` builds SQL from values any more; the
+escaping helper was deleted. Why CBOR and not JSON: measured on 3.1.6, the JSON form of `/rpc`
+re-reads string variables that look like a record id, at any depth (wrapping in an object or array does
+not help), and keeps only the record part: `"gate: cd rust && cargo test"` arrived as the record
+`gate:cd`. `/sql` query-string variables stay strings but every value is a string and URLs are
+length-limited. The `/sql` path the Python oracle matches is unchanged (`cargo gw-test` 113 + 3 CBOR tests).
+
+Also in this pass: facts record the login that wrote them (`written_by`, set by the store), so an owner
+statement typed by an agent is shown as reported, not signed; receipts hash the full redacted output
+before the display tail is cut and say what the hash covers (`hash_of`); imports keep their original
+machine; the parsed registry is cached until a registry file's modification time or size changes.

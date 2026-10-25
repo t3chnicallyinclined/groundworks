@@ -192,7 +192,13 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
                 owner_statement: owner.then(|| entry.source.clone()),
                 quote: None,
             };
-            store.import_fact(&project.path(&home.workspace), &project.name, &fact, &entry.ts)?;
+            store.import_fact(
+                &project.path(&home.workspace),
+                &project.name,
+                &fact,
+                &entry.ts,
+                &entry.machine,
+            )?;
         }
         let done = path.with_extension("jsonl.imported");
         std::fs::rename(&path, &done)?;
@@ -292,7 +298,8 @@ pub async fn run(
         location: outcome.location.clone(),
         exit_code: outcome.code,
         ok: outcome.ok(),
-        output_hash: output_hash(&outcome.stdout, &outcome.stderr),
+        output_hash: outcome.output_hash.clone(),
+        hash_of: exec::RUN_HASH_OF,
         commit: None,
     };
     let line = record_receipt(
@@ -303,15 +310,6 @@ pub async fn run(
     )
     .await;
     Ok((format!("{}\n{line}", outcome.render()), outcome.ok()))
-}
-
-fn output_hash(stdout: &str, stderr: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(stdout.as_bytes());
-    hasher.update([0u8]);
-    hasher.update(stderr.as_bytes());
-    store::hex(&hasher.finalize())
 }
 
 /// Record a receipt and say so in one line, or say plainly that it was not recorded.
@@ -385,8 +383,10 @@ pub async fn gate(
     let mut out = format!("gate from {source}\n");
     let mut green = true;
     let mut last: Option<exec::Outcome> = None;
+    let mut step_hashes = Vec::with_capacity(total);
     for (i, step) in steps.iter().enumerate() {
         let outcome = exec::run(home, project, &env, step, Duration::from_secs(timeout_secs)).await?;
+        step_hashes.push(outcome.output_hash.clone());
         let state = if outcome.ok() { "pass" } else { "FAIL" };
         writeln!(
             out,
@@ -416,7 +416,18 @@ pub async fn gate(
         location: last.location.clone(),
         exit_code: last.code,
         ok: green,
-        output_hash: output_hash(&out, ""),
+        output_hash: {
+            use sha2::{Digest, Sha256};
+            store::hex(&Sha256::digest(
+                step_hashes
+                    .join(
+                        "
+",
+                    )
+                    .as_bytes(),
+            ))
+        },
+        hash_of: "sha256 of each step's output hash (see run), one per line, in step order",
         commit: None,
     };
     let line = record_receipt(

@@ -19,3 +19,6 @@ thiserror = "1"
 # scores taken under different schemas are not comparable, so the id must be stable and
 # collision-resistant. RustCrypto, no unsafe, no transitive surprises.
 sha2 = "0.10"
+# Db::query speaks SurrealDB's typed CBOR RPC: over JSON-RPC, 3.1.6 rewrites strings that look like
+# record ids (measured 2026-10-25), so bound variables would not stay data.
+ciborium = "0.2"
