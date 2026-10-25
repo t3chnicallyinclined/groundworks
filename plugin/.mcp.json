@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "groundworks": {
+      "command": "groundworks",
+      "args": ["serve"],
+      "env": {
+        "GROUNDWORKS_START": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

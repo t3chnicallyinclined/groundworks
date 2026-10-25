@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/gw-core",
     "crates/gw",
+    "crates/gw-ops",
+    "crates/gw-mcp",
 ]
 
 [workspace.package]

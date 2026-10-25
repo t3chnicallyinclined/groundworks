@@ -1,0 +1,11 @@
+{
+  "name": "groundworks",
+  "owner": { "name": "t3chnicallyinclined" },
+  "plugins": [
+    {
+      "name": "groundworks",
+      "source": "./plugin",
+      "description": "Make agents experts on your projects: registry, journal, secret references, gates, scaffolding."
+    }
+  ]
+}

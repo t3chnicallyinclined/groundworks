@@ -1,0 +1,8 @@
+{
+  "name": "groundworks",
+  "displayName": "Groundworks",
+  "version": "0.1.0",
+  "description": "Make agents experts on your projects: a registry, a journal of what was learned, secret references, gates that can fail, and project scaffolding, through one MCP server.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,16 @@
+[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+{{dependencies}}
+
+[dev-dependencies]
+{{dev_dependencies}}
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

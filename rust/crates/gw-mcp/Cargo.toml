@@ -1,0 +1,26 @@
+[package]
+name = "gw-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license.workspace = true
+publish.workspace = true
+description = "The groundworks binary: the Groundworks MCP server (stdio) and the same operations as a CLI"
+
+[[bin]]
+name = "groundworks"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+gw-ops = { path = "../gw-ops" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rmcp = { version = "3.7", features = ["server", "transport-io"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
