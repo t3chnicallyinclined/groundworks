@@ -158,6 +158,33 @@ pub struct SearchArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct AskArgs {
+    /// The question, in plain words.
+    pub question: String,
+    /// One project; without it, every shared project.
+    pub project: Option<String>,
+    /// Only units in this expert's area.
+    pub expert: Option<String>,
+    /// Only these kinds: context, doc, code, config, commit, quote.
+    pub kinds: Option<Vec<String>>,
+    /// How many candidates to retrieve and read (default 20, at most 200).
+    pub k: Option<usize>,
+    /// Who is asking (e.g. gw-architect, or the main session).
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct AnswerArgs {
+    /// The packet id `ask` returned (ask_packet:...).
+    pub packet: String,
+    /// The candidate numbers you read in full: all of them.
+    pub read: Vec<usize>,
+    /// The answer, its quotes, gaps, and whether the candidates could answer it at all.
+    #[serde(flatten)]
+    pub answer: gw_ops::ask::AnswerIn,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct TopicArg {
     pub topic: String,
 }
@@ -378,18 +405,58 @@ impl Groundworks {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
         store::blocking(move || {
+            let kinds = a.kinds.unwrap_or_default();
             ops::search(
                 &home,
                 &store,
-                &a.query,
-                a.project.as_deref(),
-                a.expert.as_deref(),
-                &a.kinds.unwrap_or_default(),
-                a.limit.unwrap_or(10),
+                gw_ops::ask::Query {
+                    text: &a.query,
+                    project: a.project.as_deref(),
+                    expert: a.expert.as_deref(),
+                    kinds: &kinds,
+                    limit: a.limit.unwrap_or(10),
+                },
             )
         })
         .await
         .map_err(fail)
+    }
+
+    #[tool(
+        description = "Ask a question of the ingested projects. Retrieves the best candidates (full text, numbered) into an ask packet. Read every candidate in full, then call answer. Searched and skipped projects are named."
+    )]
+    async fn ask(&self, args: Parameters<AskArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            let kinds = a.kinds.unwrap_or_default();
+            gw_ops::ask::open(
+                &home,
+                &store,
+                gw_ops::ask::Query {
+                    text: &a.question,
+                    project: a.project.as_deref(),
+                    expert: a.expert.as_deref(),
+                    kinds: &kinds,
+                    limit: a.k.unwrap_or(gw_ops::ask::DEFAULT_K),
+                },
+                a.by.as_deref().unwrap_or("agent"),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Answer an ask packet. The check refuses: a candidate not read, a quote not found word for word (at least 3 words), a quote from a candidate not read or outside the packet, support from a unit that changed or left since retrieval. Reports corpus, retrieved, read and not read. FAIL is returned as an error."
+    )]
+    async fn answer(&self, args: Parameters<AnswerArgs>) -> Result<String, String> {
+        let a = args.0;
+        let store = self.store().await?;
+        store::blocking(move || gw_ops::ask::answer(&store, &a.packet, &a.read, &a.answer))
+            .await
+            .map_err(fail)
+            .and_then(passed)
     }
 
     #[tool(description = "The expert directory: every expert agent with a summary of what it is expert in.")]

@@ -526,7 +526,9 @@ impl Store {
 
     /// Full-text search of one project's units that are still present, best first. `expert` keeps
     /// only units in that expert's area; `kinds` keeps only those kinds.
-    pub fn search(
+    /// The ranked read every reader shares (`search` excerpts it, `ask` reads it in full): units still
+    /// present that match `query` in full text, best first, each with its full text and hash.
+    pub fn retrieve(
         &self,
         project: &str,
         query: &str,
@@ -534,13 +536,35 @@ impl Store {
         kinds: &[String],
         limit: usize,
     ) -> Result<Vec<Hit>> {
-        ensure!(!query.trim().is_empty(), "search for something");
+        let words = query_words(query);
+        ensure!(!words.is_empty(), "search for something");
         let db = self.agent(&project_ns(&slug(project)?)?)?;
-        let mut sql = String::from(
-            "SELECT locator, kind, commit, experts, search::score(1) AS score, \
-             search::highlight('\u{ab}', '\u{bb}', 1) AS text FROM unit WHERE text @1@ $q AND present = true",
+        // Any word matches (Python's BM25 ranks every unit sharing a token); scores add up, so a unit
+        // matching more, rarer words ranks higher. SurrealDB's `@@` with several words would require all.
+        let refs: Vec<usize> = (1..=words.len()).collect();
+        let score = refs
+            .iter()
+            .map(|n| format!("search::score({n})"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let marks = refs
+            .iter()
+            .map(|n| format!("search::highlight('\u{ab}', '\u{bb}', {n})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let matches = refs
+            .iter()
+            .map(|n| format!("text @{n}@ $w{n}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let mut sql = format!(
+            "SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, ({score}) AS score, \
+             [{marks}] AS marks FROM unit WHERE ({matches}) AND present = true"
         );
-        let mut vars = Vars::default().set("q", query.trim()).set("limit", limit);
+        let mut vars = Vars::default().set("limit", limit);
+        for (n, word) in refs.iter().zip(&words) {
+            vars = vars.set(&format!("w{n}"), word.as_str());
+        }
         if let Some(expert) = expert {
             sql.push_str(" AND $expert IN experts");
             vars = vars.set("expert", expert);
@@ -554,9 +578,103 @@ impl Store {
         let mut hits: Vec<Hit> = serde_json::from_value(rows[0].clone()).context("reading search hits")?;
         for hit in &mut hits {
             hit.project = project.to_owned();
-            hit.text = excerpt(&hit.text);
+            hit.marked = hit
+                .marks
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|m| m.contains('\u{ab}'))
+                .map(str::to_owned);
         }
         Ok(hits)
+    }
+
+    /// How many units of the project are present: the corpus an answer is measured against.
+    pub fn corpus_size(&self, project: &str) -> Result<usize> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "RETURN count(SELECT VALUE id FROM unit WHERE present = true);",
+                &serde_json::Map::new(),
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_u64().unwrap_or(0) as usize)
+    }
+
+    /// The current hash, text and presence of units by key: what a check compares a packet against.
+    pub fn units_now(&self, project: &str, keys: &[String]) -> Result<HashMap<String, (String, String, bool)>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default().set("keys", keys.to_vec());
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "SELECT record::id(id) AS key, hash, text, present FROM $keys.map(|$k| type::record('unit', $k));",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                Some((
+                    r["key"].as_str()?.to_owned(),
+                    (
+                        r["hash"].as_str()?.to_owned(),
+                        r["text"].as_str().unwrap_or_default().to_owned(),
+                        r["present"].as_bool().unwrap_or(true),
+                    ),
+                ))
+            })
+            .collect())
+    }
+
+    /// Open an ask packet in `global`; returns its id.
+    pub fn create_packet(&self, packet: &Value) -> Result<String> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("p", packet.clone());
+        let rows =
+            self.retrying(|| Ok(global.query("CREATE ask_packet CONTENT $p RETURN VALUE id;", &vars.0, Some(1))?))?;
+        record_id(&rows[0]).context("CREATE ask_packet returned no id")
+    }
+
+    /// One packet by id (`ask_packet:...`).
+    pub fn packet(&self, id: &str) -> Result<Value> {
+        let key = id.strip_prefix("ask_packet:").unwrap_or(id);
+        ensure!(
+            !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric()),
+            "{id:?} is not an ask packet id"
+        );
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("key", key);
+        let rows = self.retrying(|| {
+            Ok(global.query("SELECT * FROM ONLY type::record('ask_packet', $key);", &vars.0, Some(1))?)
+        })?;
+        ensure!(!rows[0].is_null(), "no ask packet {id}");
+        Ok(rows[0].clone())
+    }
+
+    /// Record a packet's verdict, answer and report. A packet is checked once; later checks are refused.
+    pub fn finish_packet(&self, id: &str, status: &str, answer: &Value, report: &Value) -> Result<()> {
+        let key = id.strip_prefix("ask_packet:").unwrap_or(id);
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default()
+            .set("key", key)
+            .set("status", status)
+            .set("answer", answer.clone())
+            .set("report", report.clone());
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "UPDATE type::record('ask_packet', $key) SET status = $status, answer = $answer, report = $report \
+                 WHERE status IN ['OPEN', 'NOT_EXECUTED'] RETURN VALUE id;",
+                &vars.0,
+                Some(1),
+            ))
+        })?;
+        match rows {
+            Ok(r) if r[0].as_array().is_some_and(|a| !a.is_empty()) => Ok(()),
+            _ => bail!("{id} was already checked; open a new ask to answer again"),
+        }
     }
 
     /// Record the expert directory in `global`: each expert's name, summary and definition file.
@@ -622,6 +740,10 @@ pub struct IntakeReport {
 pub struct Hit {
     #[serde(default)]
     pub project: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub hash: String,
     pub locator: String,
     pub kind: Option<String>,
     pub commit: Option<String>,
@@ -629,6 +751,12 @@ pub struct Hit {
     pub experts: Vec<String>,
     pub score: Option<f64>,
     pub text: String,
+    /// The text with matched words between « » (the first highlight that matched).
+    #[serde(default, skip_serializing)]
+    pub marked: Option<String>,
+    /// One highlight per query word, as the store returns them.
+    #[serde(default, skip_serializing)]
+    pub marks: Vec<Value>,
 }
 
 /// The hash a quote's span (`path#Lstart-end`) has on disk now, or None if the file or lines are gone.
@@ -644,8 +772,24 @@ fn current_span_hash(project_dir: &Path, locator: &str) -> Option<String> {
     Some(sha256_hex(&[all[start - 1..end].join("\n").as_bytes()]))
 }
 
+/// The distinct words of a query, lowercased, the way Python's `retrieve.tokenize` splits (`\w+`), at
+/// most 16 so one query stays one statement.
+pub fn query_words(query: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    for w in query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+    {
+        if !words.contains(&w) && words.len() < 16 {
+            words.push(w);
+        }
+    }
+    words
+}
+
 /// About 300 characters around the first highlighted match (the whole text if there is none).
-fn excerpt(text: &str) -> String {
+pub fn excerpt(text: &str) -> String {
     let at = text.find('\u{ab}').unwrap_or(0);
     let start = text[..at].char_indices().rev().nth(120).map_or(0, |(i, _)| i);
     let end = text[at..].char_indices().nth(240).map_or(text.len(), |(i, _)| at + i);

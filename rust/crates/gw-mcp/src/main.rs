@@ -143,6 +143,18 @@ enum Command {
     },
     /// The expert directory.
     Experts,
+    /// Open an ask packet: the best candidates for a question, in full, numbered.
+    Ask {
+        question: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        expert: Option<String>,
+        #[arg(long = "kind")]
+        kinds: Vec<String>,
+        #[arg(long, default_value_t = gw_ops::ask::DEFAULT_K)]
+        k: usize,
+    },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
@@ -424,17 +436,45 @@ async fn dispatch(command: Command) -> Result<bool> {
                 ops::search(
                     &home,
                     &store,
-                    &query,
-                    project.as_deref(),
-                    expert.as_deref(),
-                    &kinds,
-                    limit,
+                    gw_ops::ask::Query {
+                        text: &query,
+                        project: project.as_deref(),
+                        expert: expert.as_deref(),
+                        kinds: &kinds,
+                        limit,
+                    },
                 )
             })
             .await?;
             (text, true)
         }
         Command::Experts => (ops::experts()?, true),
+        Command::Ask {
+            question,
+            project,
+            expert,
+            kinds,
+            k,
+        } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let text = store::blocking(move || {
+                gw_ops::ask::open(
+                    &home,
+                    &store,
+                    gw_ops::ask::Query {
+                        text: &question,
+                        project: project.as_deref(),
+                        expert: expert.as_deref(),
+                        kinds: &kinds,
+                        limit: k,
+                    },
+                    "owner",
+                )
+            })
+            .await?;
+            (text, true)
+        }
     };
     println!("{}", text.trim_end());
     Ok(ok)

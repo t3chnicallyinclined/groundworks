@@ -36,6 +36,7 @@ In any Claude Code session opened under a Groundworks home, the agent has the to
 | Ingest a project (files, commits, by kind and expert area) | `groundworks intake <project>` or `--all`; or ask the agent |
 | Ask across everything that is shared, with citations | `groundworks search "..." [--project p] [--expert e] [--kind commit]`; or ask the agent |
 | See the experts | `groundworks experts` |
+| Ask a question and get a checked answer | ask the agent (it uses `ask`, reads every candidate, then `answer`); or `groundworks ask "..."` to see the candidates |
 | Bring a project in | `/groundworks:init` in the project's folder |
 | Start a new project | `/groundworks:bootstrap` |
 | See a project and what was learned | ask the agent, or `groundworks show <project>` |

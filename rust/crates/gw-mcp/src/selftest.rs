@@ -14,7 +14,9 @@ use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 use serde_json::{Value, json};
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 20] = [
+pub const TOOLS: [&str; 22] = [
+    "answer",
+    "ask",
     "bootstrap",
     "doctor",
     "env_show",
@@ -270,7 +272,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     )?;
     let tools = s.tools()?;
     c.check(
-        "the tool list is exactly the 20 tools",
+        "the tool list is exactly the 22 tools",
         tools == TOOLS,
         &format!("{tools:?}"),
     );
@@ -394,6 +396,66 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     c.check(
         "a secret file's contents are never ingested",
         !err && text.contains("no units match"),
+        &text,
+    );
+
+    // ask, then answer: a true quote from a read candidate passes; a made-up one, or a skipped read, fails.
+    let (err, text) = s.call(
+        "ask",
+        json!({"question": "what does rollback resimulate", "project": "demo"}),
+    )?;
+    let packet = text.split(' ').next().unwrap_or_default().to_owned();
+    let n = text.matches("\n[").count();
+    c.check(
+        "ask retrieves numbered candidates in full into a packet",
+        !err && packet.starts_with("ask_packet:") && n >= 1 && text.contains("Rollback netcode resimulates"),
+        &text,
+    );
+    let all: Vec<usize> = (1..=n).collect();
+    let (err, text) = s.call(
+        "answer",
+        json!({"packet": packet, "read": all, "answer": "Confirmed frames.",
+               "quotes": [{"n": 1, "quote": "Rollback netcode resimulates confirmed frames.", "use": "support"}]}),
+    )?;
+    c.check(
+        "answer passes with a true quote from a read candidate, and says what was not read",
+        !err && text.contains("check PASS") && text.contains("not read"),
+        &text,
+    );
+    let (err, text) = s.call("answer", json!({"packet": packet, "read": all, "answer": "again"}))?;
+    c.check(
+        "a packet is checked once",
+        err && text.contains("already checked"),
+        &text,
+    );
+    let (_, text) = s.call(
+        "ask",
+        json!({"question": "what does rollback resimulate", "project": "demo"}),
+    )?;
+    let packet = text.split(' ').next().unwrap_or_default().to_owned();
+    let (err, text) = s.call(
+        "answer",
+        json!({"packet": packet, "read": [], "answer": "made up",
+               "quotes": [{"n": 1, "quote": "rollback predicts the future perfectly", "use": "support"}]}),
+    )?;
+    c.check(
+        "an answer from nothing read is NOT_EXECUTED, never a pass",
+        err && text.contains("NOT_EXECUTED"),
+        &text,
+    );
+    let (_, text) = s.call(
+        "ask",
+        json!({"question": "what does rollback resimulate", "project": "demo"}),
+    )?;
+    let packet = text.split(' ').next().unwrap_or_default().to_owned();
+    let (err, text) = s.call(
+        "answer",
+        json!({"packet": packet, "read": all, "answer": "made up",
+               "quotes": [{"n": 1, "quote": "rollback predicts the future perfectly", "use": "support"}]}),
+    )?;
+    c.check(
+        "a made-up quote fails the check",
+        err && text.contains("not found word for word"),
         &text,
     );
 

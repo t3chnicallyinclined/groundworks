@@ -2,6 +2,7 @@
 //! commands and gates, and scaffolding. Shared by the MCP server and the CLI (`gw-mcp`).
 //! Absorbed from an earlier standalone prototype, 2026-10-24.
 
+pub mod ask;
 pub mod exec;
 pub mod home;
 pub mod intake;

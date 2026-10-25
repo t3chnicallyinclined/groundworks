@@ -496,3 +496,16 @@ changed file marks the facts citing it stale. `search` is full text (BM25, stemm
 filters, across shared projects, naming what it skipped. Measured on the live store: an index built over
 existing rows on rocksdb cannot see an analyzer defined in the same transaction, so the index is its own
 migration (0008); the testkit now runs rocksdb, like the real store.
+
+## ask (2026-10-25): step 1 of porting the engine
+
+`crates/gw-ops/src/ask.rs` ports the Python engine's `ask` (packet.py, check.py; v0.2.0). The check is ported
+rule for rule (coverage of every candidate; quotes only from read candidates in the packet; at least 3 words;
+word for word after whitespace normalisation; `support` or `note`) and is one pure function with a unit test per
+rule. Stated deviations: a packet is a store record holding locators and hashes, not a folder; ranking is the
+store's BM25 over ingested units with any-word matching and summed scores (as Python ranks every unit sharing a
+token), stemmed, with kind and expert filters; k defaults to 20 (Python 200) because a Claude session reads every
+candidate in full; `support` must come from a unit still present and unchanged since retrieval; a packet is checked
+once. `search` and `ask` share one query type and one cross-project read (`fan_out`), and `search` is an excerpting
+view of `retrieve`, so there is one ranked read. Measured: SurrealDB's `@@` with several words requires all of
+them, so a plain-language question found nothing until retrieval matched any word.

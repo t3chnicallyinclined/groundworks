@@ -767,50 +767,19 @@ pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> 
     Ok(out)
 }
 
-/// Search units. With `project`, that project only (private ones too, never an isolated one).
-/// Without it, every registered project whose level is shared, saying which were skipped and why.
-pub fn search(
-    home: &Home,
-    store: &Store,
-    query: &str,
-    project: Option<&str>,
-    expert: Option<&str>,
-    kinds: &[String],
-    limit: usize,
-) -> Result<String> {
-    let registry = Registry::load(home)?;
-    let limit = limit.clamp(1, 50);
-    let mut hits = Vec::new();
-    let mut searched = Vec::new();
-    let mut skipped = Vec::new();
-    let names: Vec<String> = match project {
-        Some(p) => vec![registry.project(p)?.name.clone()],
-        None => registry.projects.keys().cloned().collect(),
+/// Search units: excerpts of the best hits, with where each is, and what the search could reach.
+pub fn search(home: &Home, store: &Store, q: crate::ask::Query<'_>) -> Result<String> {
+    let q = crate::ask::Query {
+        limit: q.limit.clamp(1, 50),
+        ..q
     };
-    for name in &names {
-        let ns = gw_store::project_ns(&store::slug(name)?)?;
-        if project.is_none() {
-            let level = store.level(&ns)?;
-            if level != "shared" {
-                skipped.push(format!("{name} ({level})"));
-                continue;
-            }
-        }
-        match store.search(name, query, expert, kinds, limit) {
-            Ok(found) => {
-                searched.push(name.clone());
-                hits.extend(found);
-            }
-            Err(e) => skipped.push(format!("{name} ({e:#})")),
-        }
-    }
-    hits.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-    hits.truncate(limit);
+    let mut found = crate::ask::fan_out(home, store, q)?;
     let mut out = String::new();
-    if hits.is_empty() {
-        writeln!(out, "no units match {query:?}")?;
+    if found.hits.is_empty() {
+        writeln!(out, "no units match {:?}", q.text)?;
     }
-    for h in &hits {
+    for h in &mut found.hits {
+        h.text = store::excerpt(h.marked.as_deref().unwrap_or(&h.text));
         let experts = if h.experts.is_empty() {
             String::new()
         } else {
@@ -829,20 +798,7 @@ pub fn search(
             h.text
         )?;
     }
-    writeln!(
-        out,
-        "\nsearched: {}{}",
-        if searched.is_empty() {
-            "nothing".to_owned()
-        } else {
-            searched.join(", ")
-        },
-        if skipped.is_empty() {
-            String::new()
-        } else {
-            format!("; skipped: {}", skipped.join(", "))
-        }
-    )?;
+    writeln!(out, "\n{}", crate::ask::reach(&found))?;
     Ok(out)
 }
 
