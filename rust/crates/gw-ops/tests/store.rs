@@ -400,3 +400,16 @@ fn a_store_that_stops_is_started_again_on_the_next_call() {
     );
     Launched::kill(second);
 }
+
+#[test]
+fn an_owner_login_with_no_password_works_and_a_short_one_too() {
+    let f = Fixture::new("nopass");
+    f.store.provision_owner("").unwrap();
+    f.store.set_level("", "proj_a", "private", None).unwrap();
+    assert!(
+        f.store.set_level("guess", "proj_a", "shared", None).is_err(),
+        "a wrong password still fails"
+    );
+    f.store.provision_owner("abc").unwrap();
+    f.store.set_level("abc", "proj_a", "shared", None).unwrap();
+}

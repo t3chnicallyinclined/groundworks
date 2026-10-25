@@ -104,7 +104,8 @@ enum Command {
         #[command(subcommand)]
         action: StoreAction,
     },
-    /// Owner-only changes. The owner password comes from GROUNDWORKS_OWNER_PASS and is never stored.
+    /// Owner-only changes. The owner password comes from GROUNDWORKS_OWNER_PASS (any length; empty works with a
+    /// warning) and is never stored.
     Owner {
         #[command(subcommand)]
         action: OwnerAction,
@@ -176,11 +177,18 @@ impl Level {
     }
 }
 
-fn owner_pass() -> Result<String> {
-    let pass = std::env::var("GROUNDWORKS_OWNER_PASS")
-        .map_err(|_| anyhow::anyhow!("set GROUNDWORKS_OWNER_PASS (the owner password; it is never stored)"))?;
-    anyhow::ensure!(pass.len() >= 12, "the owner password must be at least 12 characters");
-    Ok(pass)
+/// The owner password from `GROUNDWORKS_OWNER_PASS`, typed by the owner for this one command.
+/// Any length is accepted. With none set the owner login has an empty password, which works but
+/// means any agent can act as the owner, so it says so on stderr every time.
+fn owner_pass() -> String {
+    let pass = std::env::var("GROUNDWORKS_OWNER_PASS").unwrap_or_default();
+    if pass.is_empty() {
+        eprintln!(
+            "warning: no owner password (GROUNDWORKS_OWNER_PASS is empty or not set). The owner login has an \
+             empty password, so any agent on this machine can change scope levels and walls or sign as the owner."
+        );
+    }
+    pass
 }
 
 #[tokio::main]
@@ -296,7 +304,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                 (Some(file), Some(line), Some(text)) => Some(Quote { file, line, text }),
                 _ => None,
             };
-            let owner = if as_owner { Some(owner_pass()?) } else { None };
+            let owner = if as_owner { Some(owner_pass()) } else { None };
             let store = open_store(&home).await?;
             let home = Arc::clone(&home);
             let text = store::blocking(move || {
@@ -322,7 +330,7 @@ async fn dispatch(command: Command) -> Result<bool> {
         }
         Command::Store { action } => (store_action(&home, action).await?, true),
         Command::Owner { action } => {
-            let pass = owner_pass()?;
+            let pass = owner_pass();
             let store = open_store(&home).await?;
             let text = store::blocking(move || match action {
                 OwnerAction::Level {
@@ -359,7 +367,7 @@ async fn dispatch(command: Command) -> Result<bool> {
 async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
     match action {
         StoreAction::Init { no_owner } => {
-            let owner = if no_owner { None } else { Some(owner_pass()?) };
+            let owner = if no_owner { None } else { Some(owner_pass()) };
             let created = store::create_secrets(home)?;
             let store = open_store(home).await?;
             let home = Arc::clone(home);
