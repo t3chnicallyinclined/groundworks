@@ -91,14 +91,7 @@ pub async fn run(home: &Home, project: &Project, env: &Env, command: &str, timeo
         redactor.redact(&String::from_utf8_lossy(&stdout)),
         redactor.redact(&String::from_utf8_lossy(&stderr)),
     );
-    let output_hash = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(stdout.as_bytes());
-        hasher.update([0u8]);
-        hasher.update(stderr.as_bytes());
-        crate::store::hex(&hasher.finalize())
-    };
+    let output_hash = crate::store::sha256_hex(&[stdout.as_bytes(), &[0u8], stderr.as_bytes()]);
     Ok(Outcome {
         machine: machine(),
         location,

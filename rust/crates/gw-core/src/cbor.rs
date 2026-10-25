@@ -22,6 +22,7 @@ const TAG_DECIMAL_TEXT: u64 = 10;
 const TAG_DATETIME_COMPACT: u64 = 12;
 const TAG_DURATION_TEXT: u64 = 13;
 const TAG_DURATION_COMPACT: u64 = 14;
+const TAG_UUID_BINARY: u64 = 37;
 
 /// Encode a JSON value as CBOR: text stays text, numbers stay numbers.
 pub fn encode(value: &Value) -> Result<Vec<u8>, String> {
@@ -92,6 +93,10 @@ fn tagged(tag: u64, inner: Cbor) -> Value {
             let secs = parts.next().and_then(|v| v.as_i64()).unwrap_or(0);
             let nanos = parts.next().and_then(|v| v.as_u64()).unwrap_or(0);
             Value::String(rfc3339(secs, nanos))
+        }
+        (TAG_UUID_BINARY, Cbor::Bytes(b)) if b.len() == 16 => {
+            let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            Value::String(format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]))
         }
         (TAG_DURATION_COMPACT, Cbor::Array(parts)) => {
             let mut parts = parts.into_iter().map(to_json);
@@ -169,6 +174,15 @@ mod tests {
             json!("2025-10-24T05:47:08.5Z")
         );
         assert_eq!(round_trip_tag(TAG_DATETIME_TEXT, Cbor::Text("2026-10-24T05:47:08Z".into())), json!("2026-10-24T05:47:08Z"));
+    }
+
+    #[test]
+    fn a_binary_uuid_becomes_its_text_form() {
+        let bytes: Vec<u8> = (0u8..16).collect();
+        assert_eq!(
+            round_trip_tag(TAG_UUID_BINARY, Cbor::Bytes(bytes)),
+            json!("00010203-0405-0607-0809-0a0b0c0d0e0f")
+        );
     }
 
     #[test]

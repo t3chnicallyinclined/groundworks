@@ -1,11 +1,10 @@
 //! The registry is the single source of truth for projects, their environments
-//! and the stacks they are built on. It is plain TOML under `registry/`, read
-//! fresh on every call so a hand edit is visible at once.
+//! and the stacks they are built on. It is plain TOML under `registry/`, parsed
+//! once and reused until a file's contents change, so a hand edit is visible on the next call.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
@@ -88,6 +87,7 @@ struct Shared {
     secrets: BTreeMap<String, String>,
 }
 
+#[derive(Debug)]
 pub struct Registry {
     pub projects: BTreeMap<String, Project>,
     pub stacks: BTreeMap<String, Stack>,
@@ -114,8 +114,9 @@ fn load_dir<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(String, T)>> {
 }
 
 impl Registry {
-    /// The registry, parsed once and reused until a registry file is added, removed or changed
-    /// (by modification time or size). Hand edits are picked up on the next call.
+    /// The registry, parsed once and reused until a registry file is added, removed or its
+    /// contents change (compared by hash, so a same-size edit or a restored old timestamp is still
+    /// seen). Hand edits are picked up on the next call.
     pub fn load(home: &Home) -> Result<Arc<Self>> {
         let stamps = stamps(home)?;
         let key = home.root.clone();
@@ -144,6 +145,7 @@ impl Registry {
             stacks.insert(stack.name.clone(), stack);
         }
         let mut projects = BTreeMap::new();
+        let mut slugs: HashMap<String, String> = HashMap::new();
         for (stem, project) in load_dir::<Project>(&home.path("registry/projects"))? {
             if stem != project.name {
                 bail!(
@@ -155,6 +157,13 @@ impl Registry {
                 && !stacks.contains_key(stack)
             {
                 bail!("project {} names unknown stack {stack:?}", project.name);
+            }
+            let slug = crate::store::slug(&project.name)?;
+            if let Some(other) = slugs.insert(slug.clone(), project.name.clone()) {
+                bail!(
+                    "projects {other:?} and {:?} would share the store namespace proj_{slug}; rename one",
+                    project.name
+                );
             }
             projects.insert(project.name.clone(), project);
         }
@@ -219,8 +228,9 @@ fn join_keys<V>(map: &BTreeMap<String, V>) -> String {
     map.keys().map(String::as_str).collect::<Vec<_>>().join(", ")
 }
 
-/// (path, modified, size) of every registry file, sorted: the cache key's freshness check.
-type Stamps = Vec<(PathBuf, Option<SystemTime>, u64)>;
+/// (path, SHA-256 of its contents) of every registry file, sorted: the cache's freshness check.
+/// The files are a few hundred bytes each; hashing them is far cheaper than parsing them.
+type Stamps = Vec<(PathBuf, String)>;
 
 /// Parsed registries by home root, each with the stamps it was parsed from.
 type Cache = HashMap<PathBuf, (Stamps, Arc<Registry>)>;
@@ -243,8 +253,9 @@ fn stamps(home: &Home) -> Result<Stamps> {
     let mut stamps: Stamps = files
         .into_iter()
         .filter_map(|path| {
-            let meta = std::fs::metadata(&path).ok()?;
-            Some((path, meta.modified().ok(), meta.len()))
+            let bytes = std::fs::read(&path).ok()?;
+            let hash = crate::store::sha256_hex(&[&bytes]);
+            Some((path, hash))
         })
         .collect();
     stamps.sort();
@@ -274,6 +285,31 @@ summary = \"first\"
     }
 
     #[test]
+    fn two_names_with_one_namespace_are_refused() {
+        let root = std::env::temp_dir().join(format!("gw-registry-slug-{}", std::process::id()));
+        let home = home_at(&root);
+        // Names that differ in more than case (Windows file names ignore case), one slug: a_b.
+        for name in ["a-b", "a_b"] {
+            std::fs::write(
+                root.join(format!("registry/projects/{name}.toml")),
+                format!(
+                    "name = \"{name}\"
+dir = \"x\"
+summary = \"clash\"
+"
+                ),
+            )
+            .unwrap();
+        }
+        let err = Registry::load(&home).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("would share the store namespace proj_a_b"),
+            "{err:#}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn the_registry_is_reused_until_a_file_changes() {
         let root = std::env::temp_dir().join(format!("gw-registry-cache-{}", std::process::id()));
         let home = home_at(&root);
@@ -292,6 +328,19 @@ summary = \"second, longer\"
         .unwrap();
         let edited = Registry::load(&home).unwrap();
         assert_eq!(edited.project("a").unwrap().summary, "second, longer");
+        // Same size, different contents: still seen.
+        std::fs::write(
+            root.join("registry/projects/a.toml"),
+            "name = \"a\"
+dir = \"a\"
+summary = \"second, LONGER\"
+",
+        )
+        .unwrap();
+        assert_eq!(
+            Registry::load(&home).unwrap().project("a").unwrap().summary,
+            "second, LONGER"
+        );
         std::fs::write(
             root.join("registry/projects/b.toml"),
             "name = \"b\"

@@ -8,6 +8,11 @@ Two checks over the repository:
      `notes`) names nothing importable and allows nothing.
   2. no code or config file (.py .yaml .yml .json .toml .txt .surql .cfg .ini) names a banned item
      (non-commercial models and similar; list below, sourced from docs/LICENSING.md)
+  3. every registry dependency in any Cargo.toml (dependencies, dev-, build-, target-specific and
+     workspace dependencies) must appear in THIRD_PARTY_NOTICES.md as a backticked name written right
+     after the word crate (for example "Rust crate `tokio`"). A path dependency is local. A Cargo.toml
+     holding `{{` is a project template, not a manifest, and is skipped. Added 2026-10-25: until then
+     no Rust dependency was checked, and none was listed.
 Markdown is exempt from check 2 so policy documents can name what is banned.
 
 What counts as local (check 1). Python resolves `import name` from the importing file's own directory
@@ -27,6 +32,7 @@ import ast
 import pathlib
 import re
 import sys
+import tomllib
 
 BANNED = {
     "jina-embeddings-v3": "CC-BY-NC-4.0, non-commercial (docs/LICENSING.md s.4)",
@@ -44,6 +50,30 @@ def files(root, exts):
 
 
 IMPORT_NAME = re.compile(r"\bimport\s+`([A-Za-z_][A-Za-z0-9_]*)`")
+
+
+def listed_crates(text):
+    """The crate names THIRD_PARTY_NOTICES.md allows: a backticked name written right after `crate`."""
+    return set(re.findall(r"\bcrate `([^`]+)`", text))
+
+
+def cargo_dependencies(manifest):
+    """[(section, name)] of every registry (non-path) dependency a Cargo.toml declares."""
+    data = tomllib.loads(manifest)
+    tables = []
+    for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+        tables.append((key, data.get(key, {})))
+    tables.append(("workspace.dependencies", data.get("workspace", {}).get("dependencies", {})))
+    for target, spec in data.get("target", {}).items():
+        for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+            tables.append(("target.%s.%s" % (target, key), spec.get(key, {})))
+    found = []
+    for section, table in tables:
+        for name, spec in table.items():
+            if isinstance(spec, dict) and "path" in spec:
+                continue
+            found.append((section, spec.get("package", name) if isinstance(spec, dict) else name))
+    return found
 
 
 def listed_imports(text):
@@ -106,10 +136,13 @@ def scan(root):
     notices_path = root / "THIRD_PARTY_NOTICES.md"
     if not notices_path.exists():
         return None, ["THIRD_PARTY_NOTICES.md missing at %s" % root]
-    listed = listed_imports(notices_path.read_text(encoding="utf-8"))
+    notices = notices_path.read_text(encoding="utf-8")
+    listed = listed_imports(notices)
+    crates = listed_crates(notices)
     stdlib = set(sys.stdlib_module_names)
     problems = []
-    counts = {"python_files": 0, "imports": 0, "third_party": 0, "config_files": 0, "listed": len(listed)}
+    counts = {"python_files": 0, "imports": 0, "third_party": 0, "config_files": 0, "listed": len(listed),
+              "manifests": 0, "crates": 0}
     for path in files(root, {".py"}):
         counts["python_files"] += 1
         try:
@@ -127,6 +160,23 @@ def scan(root):
                 continue
             problems.append("%s:%d: import '%s' is not listed in THIRD_PARTY_NOTICES.md"
                             % (path.relative_to(root), line, name))
+    for path in files(root, {".toml"}):
+        if path.name != "Cargo.toml" or "target" in path.relative_to(root).parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "{{" in text:
+            continue
+        counts["manifests"] += 1
+        try:
+            deps = cargo_dependencies(text)
+        except tomllib.TOMLDecodeError as exc:
+            problems.append("%s: cannot parse (%s)" % (path.relative_to(root), exc))
+            continue
+        for section, name in deps:
+            counts["crates"] += 1
+            if name not in crates:
+                problems.append("%s: [%s] crate '%s' is not listed in THIRD_PARTY_NOTICES.md"
+                                % (path.relative_to(root), section, name))
     for path in files(root, CONFIG_EXT):
         if path.name in SELF:
             continue
@@ -152,9 +202,10 @@ def main(argv=None):
     for line in problems:
         print("LICENSE " + line)
     print("license check %s: %d python file(s), %d import(s), %d third-party checked against %d listed name(s), "
-          "%d config file(s), %d problem(s)"
+          "%d Cargo manifest(s) with %d crate dependency(ies), %d config file(s), %d problem(s)"
           % ("clean" if not problems else "FAILED", counts["python_files"], counts["imports"],
-             counts["third_party"], counts["listed"], counts["config_files"], len(problems)))
+             counts["third_party"], counts["listed"], counts["manifests"], counts["crates"],
+             counts["config_files"], len(problems)))
     return 1 if problems else 0
 
 

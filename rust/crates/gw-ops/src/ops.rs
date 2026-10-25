@@ -17,6 +17,9 @@ use crate::{exec, knowledge, scaffold};
 
 pub const MAX_TIMEOUT_SECS: u64 = 3600;
 
+/// What a gate receipt's `output_hash` covers.
+pub const GATE_HASH_OF: &str = "sha256 of each step's output hash (see run), one per line, in step order";
+
 pub fn projects(home: &Home) -> Result<String> {
     let registry = Registry::load(home)?;
     if registry.projects.is_empty() {
@@ -126,6 +129,8 @@ pub struct Note<'a> {
     pub receipt: Option<&'a str>,
     pub owner_statement: Option<&'a str>,
     pub quote: Option<Quote>,
+    /// Write as the owner, signed by the owner's login (CLI only; never from the MCP server).
+    pub owner_pass: Option<&'a str>,
 }
 
 /// Record a fact in the project's store. The store refuses CONFIRMED without evidence.
@@ -142,7 +147,11 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
         owner_statement: note.owner_statement.map(str::to_owned),
         quote: note.quote,
     };
-    let id = store.add_fact(&project.path(&home.workspace), &project.name, &fact)?;
+    let dir = project.path(&home.workspace);
+    let id = match note.owner_pass {
+        Some(pass) => store.add_fact_as_owner(&dir, &project.name, &fact, pass)?,
+        None => store.add_fact(&dir, &project.name, &fact)?,
+    };
     let recorded = store
         .facts(&project.name, None, 1)?
         .pop()
@@ -170,6 +179,7 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
         if entries.is_empty() {
             continue;
         }
+        let (mut imported, mut skipped) = (0usize, 0usize);
         for entry in &entries {
             let (kind, mut text) = entry.kind_and_text();
             let owner = entry.source.trim_start().to_lowercase().starts_with("owner");
@@ -192,21 +202,23 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
                 owner_statement: owner.then(|| entry.source.clone()),
                 quote: None,
             };
-            store.import_fact(
+            match store.import_fact(
                 &project.path(&home.workspace),
                 &project.name,
                 &fact,
                 &entry.ts,
-                &entry.machine,
-            )?;
+                Some(entry.machine.as_str()),
+            )? {
+                Some(_) => imported += 1,
+                None => skipped += 1,
+            }
         }
         let done = path.with_extension("jsonl.imported");
         std::fs::rename(&path, &done)?;
         writeln!(
             out,
-            "{}: {} entries imported; {} renamed",
+            "{}: {imported} imported, {skipped} already there (an import can be re-run safely); {} renamed",
             project.name,
-            entries.len(),
             done.display()
         )?;
     }
@@ -416,18 +428,8 @@ pub async fn gate(
         location: last.location.clone(),
         exit_code: last.code,
         ok: green,
-        output_hash: {
-            use sha2::{Digest, Sha256};
-            store::hex(&Sha256::digest(
-                step_hashes
-                    .join(
-                        "
-",
-                    )
-                    .as_bytes(),
-            ))
-        },
-        hash_of: "sha256 of each step's output hash (see run), one per line, in step order",
+        output_hash: store::sha256_hex(&[step_hashes.join("\n").as_bytes()]),
+        hash_of: GATE_HASH_OF,
         commit: None,
     };
     let line = record_receipt(

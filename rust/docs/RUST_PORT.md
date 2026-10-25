@@ -460,3 +460,26 @@ Also in this pass: facts record the login that wrote them (`written_by`, set by 
 statement typed by an agent is shown as reported, not signed; receipts hash the full redacted output
 before the display tail is cut and say what the hash covers (`hash_of`); imports keep their original
 machine; the parsed registry is cached until a registry file's modification time or size changes.
+
+## Code review fixes and the selftest (2026-10-25)
+
+A review (an independent read of the latest commit, plus a pass over the rest for races and workflow) led
+to these, each with a test that failed first or was probed live:
+- Concurrent first opens of a namespace: three of four failed with write conflicts; `open_namespace` now
+  retries a conflict with randomised back-off (the migration is safe to repeat).
+- The plugin's server exited when no home was above the opened folder; it now serves one `status` tool.
+- One agent password opened every namespace; each namespace now has its own, derived from the master
+  secret, and an isolated project is refused by the shared store.
+- A store that stopped was never started again; calls that cannot reach it now restart it once, and the
+  server is launched outside the session's job object where Windows allows, so closing a window does not
+  stop it. Two sessions starting it at once both get it.
+- Imports are idempotent (deterministic ids) and validated before the duplicate check; an empty machine is
+  not recorded as a machine.
+- The owner can sign a fact (`note --as-owner`), after the password is checked against the owner login.
+- Two project names that share one namespace are refused; the registry cache compares file contents.
+- `Db::sql` and `Db::query` share one failure rule; one hashing helper; binary UUIDs decode.
+- Refuted by test and kept as a regression test: 0006's `written_by` rule does not block updates to older facts.
+
+`groundworks selftest` (and `cargo e2e-test`) builds a throwaway home and store, starts this binary as the MCP
+server, and checks 15 behaviours end to end. `crates/gw-store/tests/mutations.rs` loosens each of 10 rules and
+checks its protection really disappears. `scripts/license_check.py` now also checks every Cargo dependency.

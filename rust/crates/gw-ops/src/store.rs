@@ -61,63 +61,137 @@ pub fn slug(name: &str) -> Result<String> {
 pub struct Store {
     url: String,
     root_pass: String,
-    agent_pass: String,
+    /// The secret every namespace's own agent password is derived from (see [`Store::agent_pass`]).
+    agent_master: String,
     /// One signed-in agent client per namespace; its token is reused across calls.
     agents: Mutex<HashMap<String, Arc<Db>>>,
+    /// How to start the server again if it stops answering. None for [`Store::connect`].
+    launcher: Option<Launcher>,
 }
 
 impl Store {
-    /// A store whose server is already running and whose passwords are known.
-    pub fn connect(url: &str, root_pass: &str, agent_pass: &str) -> Self {
+    /// A store whose server is already running and whose passwords are known (never restarted).
+    pub fn connect(url: &str, root_pass: &str, agent_master: &str) -> Self {
         Self {
             url: url.to_owned(),
             root_pass: root_pass.to_owned(),
-            agent_pass: agent_pass.to_owned(),
+            agent_master: agent_master.to_owned(),
             agents: Mutex::new(HashMap::new()),
+            launcher: None,
         }
     }
 
-    /// The home's store: passwords from `<home>/secrets/`, server started if it is not answering.
+    /// The home's store: passwords from `<home>/secrets/`, server started if it is not answering,
+    /// and started again later if it stops.
     pub fn open(home: &Home) -> Result<Self> {
-        let url = store_url(home);
-        let root_pass = read_secret(home, "root")?;
-        let agent_pass = read_secret(home, "agent")?;
-        ensure_running(home, &url, &root_pass)?;
-        Ok(Self::connect(&url, &root_pass, &agent_pass))
+        Self::with_launcher(Launcher::for_home(home)?, &read_secret(home, "agent")?)
+    }
+
+    /// A store that starts its server through `launcher` now if needed, and again if it stops.
+    pub fn with_launcher(launcher: Launcher, agent_master: &str) -> Result<Self> {
+        launcher.ensure()?;
+        let mut store = Self::connect(&launcher.url, &launcher.root_pass, agent_master);
+        store.launcher = Some(launcher);
+        Ok(store)
+    }
+
+    /// The launcher this store restarts its server with, if any.
+    pub fn launcher(&self) -> Option<&Launcher> {
+        self.launcher.as_ref()
     }
 
     pub fn url(&self) -> &str {
         &self.url
     }
 
+    /// Run `f`; if the server could not be reached, start it again and run `f` once more.
+    fn retrying<T>(&self, f: impl Fn() -> Result<T>) -> Result<T> {
+        match f() {
+            Err(e) if unreachable(&e) => match &self.launcher {
+                Some(launcher) => {
+                    launcher
+                        .ensure()
+                        .with_context(|| format!("restarting the store after: {e:#}"))?;
+                    f()
+                }
+                None => Err(e),
+            },
+            other => other,
+        }
+    }
+
     fn root(&self, ns: &str) -> Result<Db> {
         Ok(connect_root(&self.url, ns, "root", &self.root_pass)?)
     }
 
-    /// The agent client for `ns`, creating and migrating the namespace the first time.
-    pub fn agent(&self, ns: &str) -> Result<Arc<Db>> {
-        let mut agents = self.agents.lock().expect("agent cache poisoned");
-        if let Some(db) = agents.get(ns) {
-            return Ok(Arc::clone(db));
-        }
-        let root = self.root(ns)?;
-        open_namespace(&root, ns).with_context(|| format!("migrating {ns}"))?;
-        provision(&root, AGENT, "agent", &self.agent_pass)?;
-        let db = Arc::new(connect_member(&self.url, ns, AGENT, &self.agent_pass)?);
-        agents.insert(ns.to_owned(), Arc::clone(&db));
-        Ok(db)
+    /// Each namespace has its own agent password, derived from the master secret, so a token or
+    /// password used in one project's namespace opens no other.
+    pub fn agent_pass(&self, ns: &str) -> String {
+        sha256_hex(&[self.agent_master.as_bytes(), b"\n", ns.as_bytes()])[..40].to_owned()
     }
 
-    /// The owner client for `ns`, signed in with the password the owner gives now.
+    /// The agent client for `ns`, creating and migrating the namespace the first time. An isolated
+    /// project is refused: it has a store of its own, and nothing here may read or write it.
+    pub fn agent(&self, ns: &str) -> Result<Arc<Db>> {
+        if let Some(db) = self.agents.lock().expect("agent cache poisoned").get(ns) {
+            return Ok(Arc::clone(db));
+        }
+        if ns != GLOBAL_NS {
+            let level = self.level(ns)?;
+            ensure!(
+                level != "isolated",
+                "{ns} is isolated: it has a store of its own, and this store will not open it"
+            );
+        }
+        let db = self.retrying(|| {
+            let root = self.root(ns)?;
+            open_namespace(&root, ns).with_context(|| format!("migrating {ns}"))?;
+            let pass = self.agent_pass(ns);
+            provision(&root, AGENT, "agent", &pass)?;
+            Ok(Arc::new(connect_member(&self.url, ns, AGENT, &pass)?))
+        })?;
+        Ok(Arc::clone(
+            self.agents
+                .lock()
+                .expect("agent cache poisoned")
+                .entry(ns.to_owned())
+                .or_insert(db),
+        ))
+    }
+
+    /// The scope's isolation level from the owner's policy (`shared` when none is set).
+    fn level(&self, ns: &str) -> Result<String> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("scope", ns);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE level FROM ONLY type::record('scope_policy', $scope);",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_str().unwrap_or("shared").to_owned())
+    }
+
+    /// The owner client for `ns`. The password is first checked against the owner login in
+    /// `global`; only then is the owner login (re)created in `ns` with it.
     pub fn owner(&self, ns: &str, owner_pass: &str) -> Result<Db> {
-        self.agent(ns)?; // makes sure the namespace exists and is migrated
+        let global = connect_member(&self.url, GLOBAL_NS, OWNER, owner_pass)?;
+        global
+            .sql("SELECT * FROM ONLY $auth;", Some(1))
+            .context("the owner password was refused by the owner login in global")?;
+        if ns == GLOBAL_NS {
+            return Ok(global);
+        }
+        self.agent(ns)?; // creates and migrates the namespace, and refuses an isolated one
+        provision(&self.root(ns)?, OWNER, "owner", owner_pass)?;
         Ok(connect_member(&self.url, ns, OWNER, owner_pass)?)
     }
 
-    /// Create or reset the owner credential in `ns` (root; run by the owner at init).
-    pub fn provision_owner(&self, ns: &str, owner_pass: &str) -> Result<()> {
-        self.agent(ns)?;
-        provision(&self.root(ns)?, OWNER, "owner", owner_pass)?;
+    /// Create or reset the owner credential in `global` (root; run by the owner at init).
+    pub fn provision_owner(&self, owner_pass: &str) -> Result<()> {
+        self.agent(GLOBAL_NS)?;
+        provision(&self.root(GLOBAL_NS)?, OWNER, "owner", owner_pass)?;
         Ok(())
     }
 
@@ -144,64 +218,93 @@ impl Store {
             vars = vars.set("commit", commit.as_str());
         }
         sql.push_str(" RETURN VALUE id;");
-        let rows = db.query(&sql, &vars.0, Some(1))?;
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
         record_id(&rows[0]).context("CREATE receipt returned no id")
     }
 
-    /// Record a fact. The store decides whether it may be CONFIRMED: it needs a receipt, an
-    /// owner statement, or a quote that was found word for word (checked here first, so the
-    /// refusal can say what the file really contains).
+    /// Record a fact as the agent. The store decides whether it may be CONFIRMED: it needs a
+    /// receipt, an owner statement, or a quote that was found word for word (checked here first, so
+    /// the refusal can say what the file really contains).
     pub fn add_fact(&self, project_dir: &Path, project: &str, fact: &FactIn) -> Result<String> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
-        self.write_fact(&db, project_dir, fact, None)
+        self.retrying(|| self.write_fact(&db, project_dir, fact, None))
     }
 
-    /// Import a historical fact with the time and machine it was first recorded on. Runs as the
-    /// loader (root): an agent can never backdate a fact or name another machine. The evidence
-    /// rules apply to root exactly as to an agent.
+    /// Record a fact as the owner, signed by the owner's own login.
+    pub fn add_fact_as_owner(
+        &self,
+        project_dir: &Path,
+        project: &str,
+        fact: &FactIn,
+        owner_pass: &str,
+    ) -> Result<String> {
+        let db = self.owner(&project_ns(&slug(project)?)?, owner_pass)?;
+        self.retrying(|| self.write_fact(&db, project_dir, fact, None))
+    }
+
+    /// Import a historical fact with the time and machine it was first recorded on, as the
+    /// loader (root; an agent cannot set either). Idempotent: the fact's id comes from the project,
+    /// time and text, so importing the same entry twice writes it once. Returns None when it was
+    /// already there. The evidence rules apply to root exactly as to an agent.
     pub fn import_fact(
         &self,
         project_dir: &Path,
         project: &str,
         fact: &FactIn,
         at: &str,
-        machine: &str,
-    ) -> Result<String> {
+        machine: Option<&str>,
+    ) -> Result<Option<String>> {
+        // Refuse bad input before the duplicate check, so a bad entry is never silently "already there".
+        ensure!(!fact.text.trim().is_empty(), "a fact needs text");
+        needs_evidence(fact)?;
         let ns = project_ns(&slug(project)?)?;
-        self.agent(&ns)?; // creates and migrates the namespace if needed
+        self.agent(&ns)?;
         let origin = Origin {
             at: rfc3339(at)?,
-            machine: machine.to_owned(),
+            machine: machine.map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned),
+            key: sha256_hex(&[project.as_bytes(), b"\n", at.as_bytes(), b"\n", fact.text.as_bytes()])[..32].to_owned(),
         };
-        self.write_fact(&self.root(&ns)?, project_dir, fact, Some(&origin))
+        self.retrying(|| {
+            let root = self.root(&ns)?;
+            let vars = Vars::default().set("key", origin.key.as_str());
+            let existing = root.query(
+                "SELECT VALUE id FROM ONLY type::record('fact', $key);",
+                &vars.0,
+                Some(1),
+            )?;
+            if !existing[0].is_null() {
+                return Ok(None);
+            }
+            self.write_fact(&root, project_dir, fact, Some(&origin)).map(Some)
+        })
     }
 
     fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, origin: Option<&Origin>) -> Result<String> {
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
         let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
-        if fact.confidence == Confidence::Confirmed
-            && fact.receipt.is_none()
-            && fact.owner_statement.is_none()
-            && quote.is_none()
-        {
-            bail!(
-                "CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word in a file, or an \
-                 owner statement. Record it as INFERRED otherwise."
-            );
-        }
+        needs_evidence(fact)?;
         let grade = grade(fact.confidence);
-        let machine_name = origin.map_or_else(machine, |o| o.machine.clone());
+        // The machine is what the writer reports; the store cannot verify a machine name.
+        let machine_name = match origin {
+            Some(o) => o.machine.clone(),
+            None => Some(machine()),
+        };
         let mut vars = Vars::default()
             .set("text", fact.text.trim())
             .set("kind", kind(fact.kind))
             .set("first_grade", if quote.is_some() { "INFERRED" } else { grade })
             .set("grade", grade)
             .set("source", fact.source.trim())
-            .set("by", fact.by.trim())
-            .set("machine", machine_name);
-        let mut create = String::from(
-            "CREATE fact SET text = $text, kind = $kind, grade = $first_grade, source = $source, by = $by, machine = $machine",
-        );
+            .set("by", fact.by.trim());
+        let mut create = match origin {
+            Some(_) => String::from("CREATE type::record('fact', $fact_key) SET "),
+            None => String::from("CREATE fact SET "),
+        };
+        create.push_str("text = $text, kind = $kind, grade = $first_grade, source = $source, by = $by");
+        if let Some(name) = machine_name {
+            create.push_str(", machine = $machine");
+            vars = vars.set("machine", name);
+        }
         if let Some(id) = &fact.receipt {
             create.push_str(", receipt = type::record('receipt', $receipt_key)");
             vars = vars.set("receipt_key", receipt_key(id)?);
@@ -212,7 +315,7 @@ impl Store {
         }
         if let Some(origin) = origin {
             create.push_str(", at = <datetime>$at");
-            vars = vars.set("at", origin.at.as_str());
+            vars = vars.set("at", origin.at.as_str()).set("fact_key", origin.key.as_str());
         }
         let mut sql = format!("BEGIN TRANSACTION;\nLET $f = ({create} RETURN VALUE id)[0];\n");
         if let Some(q) = &quote {
@@ -248,15 +351,17 @@ impl Store {
             }
             None => "",
         };
-        let rows = db.query(
-            &format!(
-                "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                &format!(
+                    "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
                  owner_statement, <string> written_by AS written_by, <string> receipt AS receipt, \
                  ->evidence->unit.locator AS quotes FROM fact {filter}ORDER BY at DESC LIMIT $limit;"
-            ),
-            &vars.0,
-            Some(1),
-        )?;
+                ),
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
         let mut facts: Vec<FactRow> = serde_json::from_value(rows[0].clone()).context("reading facts")?;
         facts.reverse();
         Ok(facts)
@@ -321,10 +426,11 @@ impl Vars {
     }
 }
 
-/// When and where a historical fact was first recorded (imports only).
+/// When and where a historical fact was first recorded, and its deterministic key (imports only).
 struct Origin {
     at: String,
-    machine: String,
+    machine: Option<String>,
+    key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -401,8 +507,8 @@ impl Quote {
             self.line + count - 1
         );
         Ok(VerifiedQuote {
-            hash: hex(&Sha256::digest(wanted.as_bytes())),
-            unit_key: hex(&Sha256::digest(locator.as_bytes()))[..32].to_owned(),
+            hash: sha256_hex(&[wanted.as_bytes()]),
+            unit_key: sha256_hex(&[locator.as_bytes()])[..32].to_owned(),
             locator,
             text: wanted.to_owned(),
         })
@@ -528,6 +634,35 @@ fn record_id(v: &Value) -> Option<String> {
     }
 }
 
+/// CONFIRMED needs a receipt, an owner statement or a quote. The store enforces this too; checking
+/// first gives a plain answer instead of a schema error. A quote is verified separately.
+fn needs_evidence(fact: &FactIn) -> Result<()> {
+    if fact.confidence == Confidence::Confirmed
+        && fact.receipt.is_none()
+        && fact.owner_statement.is_none()
+        && fact.quote.is_none()
+    {
+        bail!(
+            "CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word in a file, or an              owner statement. Record it as INFERRED otherwise."
+        );
+    }
+    Ok(())
+}
+
+/// SHA-256 over `parts` in order, as lowercase hex.
+pub fn sha256_hex(parts: &[&[u8]]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hex(&hasher.finalize())
+}
+
+/// A store call that failed because the server was not there.
+fn unreachable(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("cannot reach")
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
         let _ = write!(s, "{b:02x}");
@@ -582,62 +717,126 @@ fn random_password() -> Result<String> {
         .collect())
 }
 
-/// Start the home's SurrealDB if nothing answers at `url`: loopback only, rocksdb under the home,
-/// no console window, root login from the environment (never the command line).
-pub fn ensure_running(home: &Home, url: &str, root_pass: &str) -> Result<()> {
-    if gw_store::healthy(url) {
-        return Ok(());
+/// How to start the home's SurrealDB: loopback only, rocksdb under the home, no console window,
+/// root login through the environment (never the command line).
+pub struct Launcher {
+    pub url: String,
+    root_pass: String,
+    binary: Option<PathBuf>,
+    data: PathBuf,
+    /// The process this launcher started last, if any (diagnostics and tests).
+    pub last_started: Mutex<Option<u32>>,
+}
+
+impl Launcher {
+    pub fn new(url: &str, root_pass: &str, binary: Option<PathBuf>, data: PathBuf) -> Self {
+        Self {
+            url: url.to_owned(),
+            root_pass: root_pass.to_owned(),
+            binary,
+            data,
+            last_started: Mutex::new(None),
+        }
     }
-    let bind = loopback_bind(url)?;
-    let binary = home
-        .config
-        .store
-        .surreal
-        .clone()
-        .or_else(gw_store::find_surreal)
-        .context("SurrealDB not found (set [store] surreal in groundworks.toml or GROUNDWORKS_SURREAL)")?;
-    let data = home
-        .root
-        .join(home.config.store.data.as_deref().unwrap_or(Path::new("db")));
-    std::fs::create_dir_all(&data)?;
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(data.join("surreal.log"))?;
-    let mut cmd = Command::new(&binary);
-    cmd.args(["start", "--bind", &bind, "--log", "warn"])
-        .arg(format!("rocksdb:{}", data.join("store").display()))
-        .env("SURREAL_USER", "root")
-        .env("SURREAL_PASS", root_pass)
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+
+    pub fn for_home(home: &Home) -> Result<Self> {
+        Ok(Self::new(
+            &store_url(home),
+            &read_secret(home, "root")?,
+            home.config.store.surreal.clone(),
+            home.root
+                .join(home.config.store.data.as_deref().unwrap_or(Path::new("db"))),
+        ))
     }
-    let mut child = cmd.spawn().with_context(|| format!("starting {}", binary.display()))?;
-    let deadline = Instant::now() + START_TIMEOUT;
-    while Instant::now() < deadline {
-        if gw_store::healthy(url) {
+
+    /// Make sure a server answers at `url`, starting one if none does. Several sessions may race
+    /// to start it: a process that loses (its data directory is locked) exits, and this keeps
+    /// waiting for the winner until the deadline instead of failing.
+    pub fn ensure(&self) -> Result<()> {
+        if gw_store::healthy(&self.url) {
             return Ok(());
         }
-        if let Some(status) = child.try_wait()? {
-            // Another session may have won the race to start it.
-            if gw_store::healthy(url) {
+        let bind = loopback_bind(&self.url)?;
+        let binary = self
+            .binary
+            .clone()
+            .or_else(gw_store::find_surreal)
+            .context("SurrealDB not found (set [store] surreal in groundworks.toml or GROUNDWORKS_SURREAL)")?;
+        std::fs::create_dir_all(&self.data)?;
+        let log_path = self.data.join("surreal.log");
+        let mut child = spawn_detached(&binary, &bind, &self.data.join("store"), &self.root_pass, &log_path)
+            .with_context(|| format!("starting {}", binary.display()))?;
+        *self.last_started.lock().expect("launcher poisoned") = Some(child.id());
+        let deadline = Instant::now() + START_TIMEOUT;
+        let mut exited = None;
+        while Instant::now() < deadline {
+            if gw_store::healthy(&self.url) {
                 return Ok(());
             }
-            bail!(
-                "SurrealDB exited ({status}) before answering; see {}",
-                data.join("surreal.log").display()
-            );
+            if exited.is_none() {
+                exited = child.try_wait()?;
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
-        std::thread::sleep(Duration::from_millis(200));
+        match exited {
+            Some(status) => bail!(
+                "SurrealDB exited ({status}) and nothing answered at {} within {}s; see {}",
+                self.url,
+                START_TIMEOUT.as_secs(),
+                log_path.display()
+            ),
+            None => bail!(
+                "SurrealDB did not answer at {} within {}s",
+                self.url,
+                START_TIMEOUT.as_secs()
+            ),
+        }
     }
-    bail!("SurrealDB did not answer at {url} within {}s", START_TIMEOUT.as_secs())
+}
+
+/// Start `surreal` so it outlives the session that started it: no console window, its own process
+/// group, and (where the session's job object allows it) outside that job, so closing a Claude Code
+/// window does not take the shared store down with it.
+fn spawn_detached(
+    binary: &Path,
+    bind: &str,
+    data: &Path,
+    root_pass: &str,
+    log_path: &Path,
+) -> Result<std::process::Child> {
+    let command = |breakaway: bool| -> Result<Command> {
+        let log = std::fs::OpenOptions::new().create(true).append(true).open(log_path)?;
+        let mut cmd = Command::new(binary);
+        cmd.args(["start", "--bind", bind, "--log", "warn"])
+            .arg(format!("rocksdb:{}", data.display()))
+            .env("SURREAL_USER", "root")
+            .env("SURREAL_PASS", root_pass)
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+            let flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+            cmd.creation_flags(if breakaway {
+                flags | CREATE_BREAKAWAY_FROM_JOB
+            } else {
+                flags
+            });
+        }
+        #[cfg(not(windows))]
+        let _ = breakaway;
+        Ok(cmd)
+    };
+    match command(true)?.spawn() {
+        Ok(child) => Ok(child),
+        // A job object that forbids breakaway refuses the flag; start inside the job instead.
+        Err(_) if cfg!(windows) => Ok(command(false)?.spawn()?),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// `host:port` from the store URL, refusing anything that is not loopback.

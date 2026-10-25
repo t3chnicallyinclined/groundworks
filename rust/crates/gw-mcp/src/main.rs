@@ -1,3 +1,5 @@
+mod homeless;
+mod selftest;
 mod server;
 
 use std::path::PathBuf;
@@ -82,6 +84,9 @@ enum Command {
         /// A receipt id from run or gate.
         #[arg(long)]
         receipt: Option<String>,
+        /// Write it as the owner, signed by the owner login (needs GROUNDWORKS_OWNER_PASS).
+        #[arg(long)]
+        as_owner: bool,
         /// What the owner said, with the date.
         #[arg(long)]
         owner_statement: Option<String>,
@@ -114,6 +119,9 @@ enum Command {
     Doctor,
     /// Install team/gw-*.md into ~/.claude/agents.
     InstallTeam,
+    /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
+    /// every rule an agent relies on. Never touches the real home or store.
+    Selftest,
 }
 
 #[derive(Subcommand)]
@@ -200,15 +208,36 @@ async fn open_store(home: &Arc<Home>) -> Result<Arc<Store>> {
 }
 
 async fn dispatch(command: Command) -> Result<bool> {
+    if matches!(command, Command::Selftest) {
+        let (report, failed) = store::blocking(|| selftest::run(&std::env::current_exe()?)).await?;
+        println!("{report}");
+        return Ok(failed == 0);
+    }
+    if matches!(command, Command::Serve) {
+        // The plugin starts this in every session; outside any home it must still start.
+        match Home::discover() {
+            Ok(home) => {
+                tracing::info!(home = %home.root.display(), "serving MCP over stdio");
+                server::Groundworks::new(home)
+                    .serve(rmcp::transport::stdio())
+                    .await?
+                    .waiting()
+                    .await?;
+            }
+            Err(e) => {
+                tracing::info!(reason = %format!("{e:#}"), "no home here; serving the status tool only");
+                homeless::Homeless::new(format!("{e:#}"))
+                    .serve(rmcp::transport::stdio())
+                    .await?
+                    .waiting()
+                    .await?;
+            }
+        }
+        return Ok(true);
+    }
     let home = Arc::new(Home::discover()?);
     let (text, ok) = match command {
-        Command::Serve => {
-            tracing::info!(home = %home.root.display(), "serving MCP over stdio");
-            let home = Arc::try_unwrap(home).map_err(|_| anyhow::anyhow!("home is shared"))?;
-            let service = server::Groundworks::new(home).serve(rmcp::transport::stdio()).await?;
-            service.waiting().await?;
-            return Ok(true);
-        }
+        Command::Serve | Command::Selftest => unreachable!("handled above"),
         Command::Projects => (ops::projects(&home)?, true),
         Command::Show { project, limit } => {
             let store = open_store(&home).await.ok();
@@ -257,6 +286,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             confidence,
             by,
             receipt,
+            as_owner,
             owner_statement,
             quote_file,
             quote_line,
@@ -266,6 +296,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                 (Some(file), Some(line), Some(text)) => Some(Quote { file, line, text }),
                 _ => None,
             };
+            let owner = if as_owner { Some(owner_pass()?) } else { None };
             let store = open_store(&home).await?;
             let home = Arc::clone(&home);
             let text = store::blocking(move || {
@@ -282,6 +313,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                         receipt: receipt.as_deref(),
                         owner_statement: owner_statement.as_deref(),
                         quote,
+                        owner_pass: owner.as_deref(),
                     },
                 )
             })
@@ -338,7 +370,7 @@ async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
                 }
                 store.agent(gw_store::GLOBAL_NS)?;
                 if let Some(pass) = &owner {
-                    store.provision_owner(gw_store::GLOBAL_NS, pass)?;
+                    store.provision_owner(pass)?;
                     out.push_str("owner login created in global\n");
                 }
                 out.push_str(&store.status()?);

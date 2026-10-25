@@ -529,6 +529,13 @@ impl Db {
     /// Run one or more statements. Raise on the first failure, naming it.
     pub fn sql(&self, statement: &str, expect: Option<usize>) -> Result<Vec<Value>, DbError> {
         let blocks = self.run(statement, expect)?;
+        self.finish(statement, blocks)
+    }
+
+    /// The one rule for when a batch failed, shared by [`Db::sql`] and [`Db::query`]: any block
+    /// that is not OK is an error naming it, and under record auth an empty write is
+    /// `PermissionDenied`, never an empty success (rule 5).
+    fn finish(&self, statement: &str, blocks: Vec<Value>) -> Result<Vec<Value>, DbError> {
         for (index, block) in blocks.iter().enumerate() {
             if block.get("status").and_then(Value::as_str) != Some("OK") {
                 return Err(DbError::db(format!(
@@ -595,23 +602,7 @@ impl Db {
                 )));
             }
         }
-        for (index, block) in blocks.iter().enumerate() {
-            if block.get("status").and_then(Value::as_str) != Some("OK") {
-                return Err(DbError::db(format!(
-                    "statement {} failed: {}\n  statement: {}",
-                    index + 1,
-                    python_str_value(&block.get("result").cloned().unwrap_or(Value::Null)),
-                    truncate(statement, 300)
-                )));
-            }
-        }
-        if let Some(denied) = self.denied(statement, &blocks) {
-            return Err(DbError::PermissionDenied {
-                message: denied,
-                missing: vec!["a launch credential whose role may perform this write".to_string()],
-            });
-        }
-        Ok(blocks.into_iter().map(|b| b.get("result").cloned().unwrap_or(Value::Null)).collect())
+        self.finish(statement, blocks)
     }
 
     /// Run a statement that a GATE is allowed to refuse. Returns `(ok, message)`. A PERMISSIONS

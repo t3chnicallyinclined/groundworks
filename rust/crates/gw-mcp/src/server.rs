@@ -219,6 +219,7 @@ impl Groundworks {
                     receipt: a.receipt.as_deref(),
                     owner_statement: a.owner_statement.as_deref(),
                     quote: a.quote,
+                    owner_pass: None,
                 },
             )
         })

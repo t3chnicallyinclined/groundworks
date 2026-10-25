@@ -295,3 +295,17 @@ fn the_store_records_who_wrote_a_fact_and_nobody_can_say_otherwise() {
     );
     refused(&agent, "UPDATE fact:mine SET written_by = member:owner1;");
 }
+
+/// Regression (code review 2026-10-25, refuted claim): 0006's `written_by` rule must not block
+/// updates to facts the loader wrote (written_by NONE), including the stale event's.
+#[test]
+fn loader_facts_still_go_stale_and_can_be_updated() {
+    let estate = Estate::new();
+    let (root, agent) = (estate.root("proj_a"), estate.agent("proj_a"));
+    ok(&root, "CREATE unit:u1 SET locator = 'a#L1', hash = 'h1';");
+    ok(&root, "CREATE fact:old SET text = 't', grade = 'INFERRED';");
+    ok(&root, "RELATE fact:old->evidence->unit:u1;");
+    ok(&agent, "UPDATE unit:u1 SET hash = 'h2';");
+    assert_eq!(value(&root, "SELECT VALUE status FROM ONLY fact:old;"), "stale");
+    ok(&agent, "UPDATE fact:old SET status = 'gone';");
+}

@@ -16,12 +16,13 @@ workspace = true
 
 [dependencies]
 gw-ops = { path = "../gw-ops" }
-gw-store = { path = "../gw-store" }
+gw-store = { path = "../gw-store", features = ["testkit"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rmcp = { version = "3.7", features = ["server", "transport-io"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

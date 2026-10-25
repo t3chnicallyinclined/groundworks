@@ -302,9 +302,39 @@ pub fn migrate(root: &Db, scope: Scope, files: &[(&str, &str)], check_server_ver
 }
 
 /// Create the namespace and database if needed and migrate it to the compiled-in schema (root only).
+///
+/// Several sessions may open the same new namespace at once. SurrealDB then refuses all but one
+/// with a write conflict (measured 2026-10-25: three of four concurrent opens failed). Each attempt is
+/// safe to repeat, because `migrate` re-reads the recorded version, so a conflict is retried with a
+/// short randomised back-off; any other failure is returned at once.
 pub fn open_namespace(root: &Db, ns: &str) -> Result<Vec<i64>> {
-    ensure(root, ns)?;
-    migrate(root, scope_of(ns)?, SCHEMA, true)
+    const ATTEMPTS: u32 = 8;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let result = ensure(root, ns).and_then(|()| migrate(root, scope_of(ns)?, SCHEMA, true));
+        match result {
+            Err(e) if attempt < ATTEMPTS && is_conflict(&e) => {
+                std::thread::sleep(Duration::from_millis(u64::from(attempt) * 40 + jitter_ms()));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// A transaction that lost a race and may simply be run again.
+fn is_conflict(e: &StoreError) -> bool {
+    let text = e.to_string();
+    ["conflict", "failed transaction", "retry the transaction"]
+        .iter()
+        .any(|needle| text.contains(needle))
+}
+
+/// 0-31 ms from the clock's low bits: enough to break lockstep between processes.
+fn jitter_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::from(d.subsec_nanos() % 32))
 }
 
 /// Create or reset one member credential in root's namespace (root only).

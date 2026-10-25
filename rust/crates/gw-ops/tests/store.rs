@@ -2,9 +2,10 @@
 //! marking, and owner-only policy. Fails as NOT EXECUTED without a SurrealDB binary.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gw_ops::journal::{Confidence, Kind};
-use gw_ops::store::{FactIn, Quote, ReceiptIn, Store};
+use gw_ops::store::{FactIn, Launcher, Quote, ReceiptIn, Store};
 use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 
 struct Fixture {
@@ -142,7 +143,7 @@ fn an_owner_statement_confirms_and_kinds_filter() {
 #[test]
 fn scope_levels_and_walls_need_the_owner_password() {
     let f = Fixture::new("policy");
-    f.store.provision_owner(gw_store::GLOBAL_NS, OWNER_PASS).unwrap();
+    f.store.provision_owner(OWNER_PASS).unwrap();
     assert!(
         f.store
             .set_level("not-the-owner", "proj_rega", "isolated", None)
@@ -170,7 +171,7 @@ fn an_import_keeps_its_original_time_and_still_obeys_the_evidence_rule() {
             "demo",
             &fact(Confidence::Inferred),
             "2026-10-24T05:47:08Z",
-            "OLDBOX",
+            Some("OLDBOX"),
         )
         .unwrap();
     let facts = f.store.facts("demo", None, 10).unwrap();
@@ -192,7 +193,7 @@ fn an_import_keeps_its_original_time_and_still_obeys_the_evidence_rule() {
                 "demo",
                 &fact(Confidence::Confirmed),
                 "2026-10-24T05:47:08Z",
-                "OLDBOX"
+                Some("OLDBOX")
             )
             .is_err()
     );
@@ -203,7 +204,7 @@ fn an_import_keeps_its_original_time_and_still_obeys_the_evidence_rule() {
                 "demo",
                 &fact(Confidence::Inferred),
                 "yesterday; DELETE fact",
-                "OLDBOX"
+                Some("OLDBOX")
             )
             .is_err()
     );
@@ -220,4 +221,182 @@ fn an_owner_statement_typed_by_an_agent_says_so() {
         line.contains("as reported by gw-engineer, not signed by the owner"),
         "{line}"
     );
+}
+
+#[test]
+fn four_sessions_can_open_one_new_namespace_at_once() {
+    let server = Throwaway::start();
+    let url = server.url();
+    let results: Vec<_> = (0..4)
+        .map(|_| {
+            let url = url.clone();
+            std::thread::spawn(move || {
+                Store::connect(&url, ROOT_PASS, AGENT_PASS)
+                    .agent("proj_race")
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:#}"))
+            })
+        })
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(results.iter().all(Result::is_ok), "{results:?}");
+}
+
+#[test]
+fn each_namespace_has_its_own_agent_password() {
+    let f = Fixture::new("passwords");
+    f.store.agent("proj_a").unwrap();
+    f.store.agent("proj_b").unwrap();
+    let (a, b) = (f.store.agent_pass("proj_a"), f.store.agent_pass("proj_b"));
+    assert_ne!(a, b);
+    let crossed = gw_store::connect_member(f.store.url(), "proj_b", "agent", &a).unwrap();
+    assert!(
+        crossed.sql("SELECT * FROM fact;", None).is_err(),
+        "proj_a's password must not open proj_b"
+    );
+}
+
+#[test]
+fn an_isolated_project_is_refused_by_the_shared_store() {
+    let f = Fixture::new("isolated");
+    f.store.provision_owner(OWNER_PASS).unwrap();
+    f.store.set_level(OWNER_PASS, "proj_secret", "isolated", None).unwrap();
+    let err = f
+        .store
+        .add_fact(&f.dir, "secret", &fact(Confidence::Inferred))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("isolated"), "{err:#}");
+    f.store.add_fact(&f.dir, "open", &fact(Confidence::Inferred)).unwrap();
+}
+
+#[test]
+fn the_owner_signs_with_its_own_login_and_a_wrong_password_signs_nothing() {
+    let f = Fixture::new("signed");
+    f.store.provision_owner(OWNER_PASS).unwrap();
+    let mut said = fact(Confidence::Confirmed);
+    said.by = "owner".into();
+    said.owner_statement = Some("owner, 2026-10-25: ship it".into());
+    assert!(
+        f.store
+            .add_fact_as_owner(&f.dir, "demo", &said, "not-the-owner-password")
+            .is_err()
+    );
+    f.store.add_fact_as_owner(&f.dir, "demo", &said, OWNER_PASS).unwrap();
+    let line = f.store.facts("demo", None, 1).unwrap()[0].render();
+    assert!(line.contains("signed by the owner"), "{line}");
+}
+
+#[test]
+fn an_import_written_twice_lands_once_and_a_missing_machine_stays_missing() {
+    let f = Fixture::new("idempotent");
+    let entry = fact(Confidence::Inferred);
+    let first = f
+        .store
+        .import_fact(&f.dir, "demo", &entry, "2026-10-24T05:47:08Z", Some(""))
+        .unwrap();
+    let again = f
+        .store
+        .import_fact(&f.dir, "demo", &entry, "2026-10-24T05:47:08Z", Some(""))
+        .unwrap();
+    assert!(first.is_some() && again.is_none(), "{first:?} then {again:?}");
+    let facts = f.store.facts("demo", None, 10).unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].machine, None, "an empty machine is not recorded as a machine");
+}
+
+/// A real server started the way sessions start it, on a free port with its own data directory.
+struct Launched {
+    launcher: Arc<Launcher>,
+    dir: PathBuf,
+}
+
+impl Launched {
+    fn new(tag: &str) -> Self {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let dir = std::env::temp_dir().join(format!("gw-launch-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let launcher = Launcher::new(&format!("http://127.0.0.1:{port}/sql"), ROOT_PASS, None, dir.clone());
+        Launched {
+            launcher: Arc::new(launcher),
+            dir,
+        }
+    }
+
+    fn kill(pid: u32) {
+        let _ = if cfg!(windows) {
+            std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output()
+        } else {
+            std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .output()
+        };
+    }
+
+    fn kill_started(launcher: &Launcher) {
+        if let Some(pid) = *launcher.last_started.lock().unwrap() {
+            Self::kill(pid);
+        }
+    }
+}
+
+impl Drop for Launched {
+    fn drop(&mut self) {
+        Self::kill_started(&self.launcher);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn two_sessions_starting_the_store_at_once_both_get_it() {
+    let launched = Launched::new("race");
+    let url = launched.launcher.url.clone();
+    let dir = launched.dir.clone();
+    // A second launcher for the same store, as a second session would have.
+    let other = Arc::new(Launcher::new(&url, ROOT_PASS, None, dir));
+    let (a, b) = (Arc::clone(&launched.launcher), Arc::clone(&other));
+    let ta = std::thread::spawn(move || a.ensure().map_err(|e| format!("{e:#}")));
+    let tb = std::thread::spawn(move || b.ensure().map_err(|e| format!("{e:#}")));
+    let (ra, rb) = (ta.join().unwrap(), tb.join().unwrap());
+    Launched::kill_started(&other);
+    assert!(ra.is_ok() && rb.is_ok(), "{ra:?} / {rb:?}");
+}
+
+#[test]
+fn a_store_that_stops_is_started_again_on_the_next_call() {
+    let launched = Launched::new("restart");
+    let launcher = Launcher::new(&launched.launcher.url, ROOT_PASS, None, launched.dir.clone());
+    let store = Store::with_launcher(launcher, AGENT_PASS).unwrap();
+    let dir = std::env::temp_dir();
+    store.add_fact(&dir, "demo", &fact(Confidence::Inferred)).unwrap();
+    let first = store
+        .launcher()
+        .unwrap()
+        .last_started
+        .lock()
+        .unwrap()
+        .expect("started one");
+    Launched::kill(first);
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    store.add_fact(&dir, "demo", &fact(Confidence::Inferred)).unwrap();
+    let second = store
+        .launcher()
+        .unwrap()
+        .last_started
+        .lock()
+        .unwrap()
+        .expect("started again");
+    assert_ne!(first, second, "a new server was started");
+    assert_eq!(
+        store.facts("demo", None, 10).unwrap().len(),
+        2,
+        "data survived the restart (rocksdb)"
+    );
+    Launched::kill(second);
 }

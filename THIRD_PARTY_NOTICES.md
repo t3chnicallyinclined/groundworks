@@ -15,6 +15,23 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | SurrealDB server | Business Source License 1.1 (Change Date 2030-01-01, Apache-2.0). Not to be offered as a "Database Service" letting third parties create, manage or control schemas or tables | System of record, separate process over HTTP | Not today. If shipped self-hosted, include its LICENSE conspicuously |
 | Python and standard library | PSF License | All scripts | No |
 | git | GPL-2.0 | Development tooling (privacy scan, pre-commit hook) | No |
+| Rust crate `anyhow` | MIT OR Apache-2.0 | Errors in gw-ops and gw-mcp | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `ciborium` | Apache-2.0 | CBOR encoding for bound query variables (gw-core) | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `clap` | MIT OR Apache-2.0 | The groundworks command line | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `getrandom` | MIT OR Apache-2.0 | Store credentials from OS randomness | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `regex` | MIT OR Apache-2.0 | Config parsing (gw-core), estate scan globs (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `rmcp` | Apache-2.0 | The Rust MCP SDK: the groundworks MCP server | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `schemars` | MIT | JSON schemas for MCP tool arguments | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `serde` | MIT OR Apache-2.0 | Serialization | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `serde_json` | MIT OR Apache-2.0 | JSON | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `sha2` | MIT OR Apache-2.0 | Hashes: question schemas, quotes, receipts, registry cache | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `thiserror` | MIT OR Apache-2.0 | Library error types | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `tokio` | MIT | Async runtime for the MCP server and commands | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `toml` | MIT OR Apache-2.0 | The registry and groundworks.toml | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `tracing` | MIT | Logging to stderr | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `tracing-subscriber` | MIT | Logging to stderr | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `ureq` | MIT OR Apache-2.0 | HTTP client for SurrealDB | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `wait-timeout` | MIT OR Apache-2.0 | Timeouts on read-only git queries in the estate scan | Compiled into binaries built from `rust/`; no binary is distributed |
 
 ## Planned (license checked, not yet used)
 

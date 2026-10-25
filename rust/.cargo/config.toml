@@ -6,3 +6,5 @@ gw-test = "test -p gw-core -p gw"
 mcp-test = "test -p gw-ops -p gw-mcp"
 # The SurrealDB data model and its rules (each test starts its own throwaway server).
 store-test = "test -p gw-store"
+# End to end: the real binary as an MCP server against a throwaway store.
+e2e-test = "test -p gw-mcp --test e2e"

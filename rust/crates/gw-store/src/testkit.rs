@@ -10,9 +10,9 @@ use gw_core::db::Db;
 
 use crate::{GLOBAL_NS, connect_member, connect_root, open_namespace, provision};
 
-pub const ROOT_PASS: &str = "root";
-pub const AGENT_PASS: &str = "agent-pass";
-pub const OWNER_PASS: &str = "owner-pass";
+pub const ROOT_PASS: &str = "testkit-root-password-0123456789";
+pub const AGENT_PASS: &str = "testkit-agent-password-0123456789";
+pub const OWNER_PASS: &str = "testkit-owner-password-0123456789";
 
 pub struct Throwaway {
     child: Child,

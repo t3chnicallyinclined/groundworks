@@ -43,6 +43,20 @@ class LicenseCheckTests(unittest.TestCase):
             "| MCP SDK, import `mcp` | MIT |\n| Requests, import `requests` | Apache-2.0 |\n", encoding="utf-8")
         self.assertEqual(run(self.root), 0)
 
+    def test_an_unlisted_crate_fails_then_listing_it_passes_and_path_crates_are_local(self):
+        self.write("rust/crates/a/Cargo.toml",
+                   '[package]\nname = "a"\n[dependencies]\nlocal = { path = "../b" }\ntokio = "1"\n'
+                   '[dev-dependencies]\nureq = { version = "2" }\n')
+        self.write("rust/templates/t/Cargo.toml", '[dependencies]\n{{dependencies}}\n')
+        self.assertEqual(run(self.root), 1)
+        (self.root / "THIRD_PARTY_NOTICES.md").write_text(
+            "| MCP SDK, import `mcp` | MIT |\n| Rust crate `tokio` | MIT |\n", encoding="utf-8")
+        self.assertEqual(run(self.root), 1, "ureq is still unlisted")
+        (self.root / "THIRD_PARTY_NOTICES.md").write_text(
+            "| MCP SDK, import `mcp` | MIT |\n| Rust crate `tokio` | MIT |\n| Rust crate `ureq` | MIT |\n",
+            encoding="utf-8")
+        self.assertEqual(run(self.root), 0)
+
     def test_banned_model_in_config_fails_but_markdown_may_name_it(self):
         self.write("docs/policy.md", "Never use jina-embeddings-v3.\n")
         self.assertEqual(run(self.root), 0)
