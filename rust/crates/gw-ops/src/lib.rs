@@ -4,6 +4,7 @@
 
 pub mod ask;
 pub mod eval;
+pub mod eval_run;
 pub mod exec;
 pub mod home;
 pub mod intake;

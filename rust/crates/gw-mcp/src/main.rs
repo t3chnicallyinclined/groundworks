@@ -158,6 +158,27 @@ enum Command {
     /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
     /// file of its project, every trap's premise absent.
     EvalCheck { file: std::path::PathBuf },
+    /// Run an eval set: each question with and without Groundworks in fresh headless sessions, each
+    /// answer graded blind. Resumes an interrupted run given the same --out.
+    EvalRun {
+        set: std::path::PathBuf,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Only these question ids (comma separated).
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
+        #[arg(long, value_delimiter = ',', default_value = "plain,groundworks")]
+        arms: Vec<String>,
+        #[arg(long, default_value = "opus")]
+        model: String,
+        #[arg(long, default_value = "opus")]
+        grader_model: String,
+        /// Dollar cap per answering session.
+        #[arg(long, default_value_t = 5.0)]
+        budget_usd: f64,
+    },
+    /// Summarise an eval run folder: rates with 95% intervals per arm, and the paired comparison.
+    EvalReport { dir: std::path::PathBuf },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
@@ -456,6 +477,41 @@ async fn dispatch(command: Command) -> Result<bool> {
         }
         Command::Experts => (ops::experts()?, true),
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
+        Command::EvalRun {
+            set,
+            out,
+            only,
+            arms,
+            model,
+            grader_model,
+            budget_usd,
+        } => {
+            let out = out.unwrap_or_else(|| gw_ops::eval_run::default_out(&set));
+            // The sessions run in a folder inside the run folder, so every path they get is absolute.
+            std::fs::create_dir_all(&out)?;
+            let out = std::path::absolute(&out)?;
+            let log = gw_ops::eval_run::run(
+                &home,
+                &gw_ops::eval_run::Plan {
+                    set: &set,
+                    out: &out,
+                    only: &only,
+                    arms: &arms,
+                    model: &model,
+                    grader_model: &grader_model,
+                    budget_usd,
+                },
+            )?;
+            (
+                format!(
+                    "{log}\nrun folder: {}\n{}",
+                    out.display(),
+                    gw_ops::eval_run::report(&out)?
+                ),
+                true,
+            )
+        }
+        Command::EvalReport { dir } => (gw_ops::eval_run::report(&dir)?, true),
         Command::Ask {
             question,
             project,
