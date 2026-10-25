@@ -64,7 +64,7 @@ fn tracked(dir: &Path) -> Result<Vec<String>> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
-        .args(["ls-files", "-z"])
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
         .output()?;
     anyhow::ensure!(out.status.success(), "git ls-files failed in {}", dir.display());
     Ok(String::from_utf8_lossy(&out.stdout)
