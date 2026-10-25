@@ -785,11 +785,27 @@ pub fn search(home: &Home, store: &Store, q: crate::ask::Query<'_>) -> Result<St
     };
     let mut found = crate::ask::fan_out(home, store, q)?;
     let mut out = String::new();
-    if found.hits.is_empty() {
+    if found.hits.is_empty() && found.facts.is_empty() {
         writeln!(out, "no units match {:?}", q.text)?;
     }
+    for h in &found.facts {
+        writeln!(
+            out,
+            "- RECORDED FACT ({}): {}\n    evidence {}:{}",
+            h.fact_grade.as_deref().unwrap_or("?"),
+            h.fact.as_deref().unwrap_or_default(),
+            h.project,
+            h.locator
+        )?;
+    }
     for h in &mut found.hits {
-        h.text = store::excerpt(h.marked.as_deref().unwrap_or(&h.text));
+        let marked = h.marked.clone().unwrap_or_else(|| h.text.clone());
+        // The file line of the first match, so the hit can be cited as path:line as it stands.
+        if let (Some(start), Some(at)) = (store::first_line(&h.locator), marked.find('\u{ab}')) {
+            let line = start + marked[..at].matches('\n').count();
+            h.locator.push_str(&format!(" (match at line {line})"));
+        }
+        h.text = store::excerpt(&marked);
         let experts = if h.experts.is_empty() {
             String::new()
         } else {

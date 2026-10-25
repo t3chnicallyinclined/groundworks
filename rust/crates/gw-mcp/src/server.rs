@@ -502,8 +502,8 @@ impl Groundworks {
     )]
     async fn answer(&self, args: Parameters<AnswerArgs>) -> Result<String, String> {
         let a = args.0;
-        let store = self.store().await?;
-        store::blocking(move || gw_ops::ask::answer(&store, &a.packet, &a.read, &a.answer))
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || gw_ops::ask::answer(&home, &store, &a.packet, &a.read, &a.answer))
             .await
             .map_err(fail)
             .and_then(passed)

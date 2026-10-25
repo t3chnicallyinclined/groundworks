@@ -438,12 +438,23 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     let all: Vec<usize> = (1..=n).collect();
     let (err, text) = s.call(
         "answer",
-        json!({"packet": packet, "read": all, "answer": "Confirmed frames.",
-               "quotes": [{"n": 1, "quote": "Rollback netcode resimulates confirmed frames.", "use": "support"}]}),
+        json!({"packet": packet, "read": all, "answer": "Rollback resimulates confirmed frames only.", "record": true,
+               "quotes": [{"n": 1, "quote": "3| Rollback netcode resimulates confirmed frames.", "use": "support"}]}),
     )?;
     c.check(
-        "answer passes with a true quote from a read candidate, and says what was not read",
-        !err && text.contains("check PASS") && text.contains("not read"),
+        "answer passes with a quote copied with its line number, says what was not read, and records the fact",
+        !err && text.contains("check PASS")
+            && text.contains("not read")
+            && text.contains("CONFIRMED by docs/GUIDE.md#L3-3"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "ask",
+        json!({"question": "what does rollback resimulate", "project": "demo"}),
+    )?;
+    c.check(
+        "the next ask puts the recorded fact first, above the files",
+        !err && text.contains("[1] RECORDED FACT (CONFIRMED): Rollback resimulates confirmed frames only."),
         &text,
     );
     let (err, text) = s.call("answer", json!({"packet": packet, "read": all, "answer": "again"}))?;

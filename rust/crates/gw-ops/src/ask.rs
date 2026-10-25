@@ -9,13 +9,15 @@
 //! 3. The status axis becomes: a `support` quote must come from a unit still present and unchanged since
 //!    it was retrieved, so an answer never rests on text that moved after it was read.
 //!
-//! An answer never becomes a fact by itself: recording one is `journal_add` with a quote, through the
-//! store's evidence rule.
+//! Recorded facts come first: a live fact whose text matches the question puts its evidence unit at the
+//! top of the packet, with the fact above it. Candidates are shown with their file line numbers; a quote
+//! copied with those numbers still matches. An answer becomes a fact only when asked (`record`), and then
+//! through the store's evidence rule: its first support quote is re-checked against the file.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -28,6 +30,8 @@ pub const DEFAULT_K: usize = 20;
 pub const MAX_K: usize = 200;
 /// Python's `labels.quote_min_words` default.
 pub const QUOTE_MIN_WORDS: usize = 3;
+/// At most this many recorded facts go above the files in a packet.
+pub const FACTS_K: usize = 5;
 
 /// One retrieved unit as the packet records it: no text, only where it is and what it said (hash).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +67,16 @@ pub struct AnswerIn {
     pub gaps: Vec<String>,
     #[serde(default)]
     pub not_answerable: bool,
+    /// When the check passes, keep the answer as a fact, its first support quote as the evidence.
+    #[serde(default)]
+    pub record: bool,
+}
+
+/// A quote as a reader copies it from a numbered candidate: line numbers (`120| `) are not the text.
+fn strip_numbers(quote: &str) -> String {
+    static NUM: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(^|\s)\d{1,7}\| ").expect("valid"));
+    NUM.replace_all(quote, " ").into_owned()
 }
 
 /// What a unit is now, by key: (hash, text, present).
@@ -154,7 +168,7 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
         if !times_read.contains_key(&q.n) {
             errors.push(format!("quote {k} cites candidate {}, which was not read", q.n));
         }
-        let text = normalize(&q.quote);
+        let text = normalize(&strip_numbers(&q.quote));
         if text.split(' ').filter(|w| !w.is_empty()).count() < QUOTE_MIN_WORDS {
             errors.push(format!("quote {k} has fewer than {QUOTE_MIN_WORDS} words"));
             continue;
@@ -205,6 +219,8 @@ pub struct Query<'a> {
 
 /// What a query found across the projects it was allowed to read.
 pub struct Found {
+    /// Recorded facts' evidence units, best first; they go above the hits.
+    pub facts: Vec<Hit>,
     pub hits: Vec<Hit>,
     pub searched: Vec<String>,
     /// Projects not searched, each with why (its level, or the error).
@@ -221,6 +237,7 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
         None => registry.projects.keys().cloned().collect(),
     };
     let mut found = Found {
+        facts: Vec::new(),
         hits: Vec::new(),
         searched: Vec::new(),
         skipped: Vec::new(),
@@ -239,6 +256,7 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
                 found.corpus_total += store.corpus_size(name)?;
                 found.searched.push(name.clone());
                 found.hits.extend(hits);
+                found.facts.extend(store.retrieve_facts(name, q.text, FACTS_K)?);
             }
             Err(e) => found.skipped.push(format!("{name} ({e:#})")),
         }
@@ -247,6 +265,16 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
         .hits
         .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
     found.hits.truncate(q.limit);
+    found
+        .facts
+        .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    let mut seen = std::collections::BTreeSet::new();
+    found.facts.retain(|h| seen.insert((h.project.clone(), h.key.clone())));
+    found.facts.truncate(FACTS_K);
+    // A fact's evidence is shown once, as the fact; the same unit is not repeated among the hits.
+    found
+        .hits
+        .retain(|h| !seen.contains(&(h.project.clone(), h.key.clone())));
     Ok(found)
 }
 
@@ -278,8 +306,8 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
         ..q
     };
     let found = fan_out(home, store, q)?;
-    let candidates: Vec<Candidate> = found
-        .hits
+    let shown: Vec<&Hit> = found.facts.iter().chain(&found.hits).take(q.limit).collect();
+    let candidates: Vec<Candidate> = shown
         .iter()
         .enumerate()
         .map(|(i, h)| Candidate {
@@ -316,7 +344,19 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
         "Read EVERY candidate below in full, then call `answer` with this packet id, the numbers you read, \
          your answer, and quotes copied word for word (at least 3 words each) from the candidates you read.\n",
     );
-    for (c, h) in candidates.iter().zip(&found.hits) {
+    for (c, h) in candidates.iter().zip(&shown) {
+        if let Some(fact) = &h.fact {
+            writeln!(
+                out,
+                "\n[{}] RECORDED FACT ({}): {fact}\n    its evidence, {}:{}\n{}",
+                c.n,
+                h.fact_grade.as_deref().unwrap_or("?"),
+                c.project,
+                c.locator,
+                store::numbered(&h.text, &h.locator)
+            )?;
+            continue;
+        }
         let experts = if h.experts.is_empty() {
             String::new()
         } else {
@@ -333,14 +373,20 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
             c.project,
             c.locator,
             c.kind.as_deref().unwrap_or("?"),
-            h.text
+            store::numbered(&h.text, &h.locator)
         )?;
     }
     Ok(out)
 }
 
 /// Check an answer against its packet and record the verdict. Returns (text, passed).
-pub fn answer(store: &Store, packet_id: &str, read: &[usize], answer: &AnswerIn) -> Result<(String, bool)> {
+pub fn answer(
+    home: &Home,
+    store: &Store,
+    packet_id: &str,
+    read: &[usize],
+    answer: &AnswerIn,
+) -> Result<(String, bool)> {
     let packet = store.packet(packet_id)?;
     let candidates: Vec<Candidate> = serde_json::from_value(packet["candidates"].clone())?;
     let corpus_total = packet["corpus_total"].as_u64().unwrap_or(0) as usize;
@@ -365,13 +411,94 @@ pub fn answer(store: &Store, packet_id: &str, read: &[usize], answer: &AnswerIn)
         writeln!(out, "  - {e}")?;
     }
     let passed = report.verdict == "PASS";
-    if passed {
+    if passed && answer.record && std::env::var_os("GROUNDWORKS_NO_RECORD").is_some() {
+        out.push_str("not recorded: recording is off in this session (GROUNDWORKS_NO_RECORD).\n");
+    } else if passed && answer.record {
+        match record(home, store, packet_id, &packet, &candidates, &now, answer) {
+            Ok(line) => writeln!(out, "{line}")?,
+            Err(e) => writeln!(out, "not recorded: {e:#}")?,
+        }
+    } else if passed {
         out.push_str(
-            "Every quote was found word for word in a candidate that was read. To keep any of it as a fact, record \
-             it with journal_add and a quote of the file (file, line, text): the store checks it again there.\n",
+            "Every quote was found word for word in a candidate that was read. To keep the answer as a checked \
+             fact for the next session, answer again with record: true.\n",
         );
     }
     Ok((out, passed))
+}
+
+/// Keep a passed answer as a fact: its first support quote, widened to the whole lines it sits on, is the
+/// evidence, and the store checks it against the file again (so a file that moved since retrieval refuses).
+fn record(
+    home: &Home,
+    store: &Store,
+    packet_id: &str,
+    packet: &Value,
+    candidates: &[Candidate],
+    now: &Now,
+    answer: &AnswerIn,
+) -> Result<String> {
+    let q = answer
+        .quotes
+        .iter()
+        .find(|q| q.use_.as_deref().unwrap_or("support") == "support")
+        .context("no support quote to keep it by")?;
+    let c = candidates
+        .iter()
+        .find(|c| c.n == q.n)
+        .context("the quote's candidate")?;
+    let (path, _) = c
+        .locator
+        .rsplit_once("#L")
+        .context("the evidence is not a file span (a commit cannot be quoted as a file)")?;
+    let start = store::first_line(&c.locator).context("the evidence has no line numbers")?;
+    let (_, text, _) = now.get(&c.key).context("the evidence unit is gone")?;
+    let lines: Vec<&str> = text.lines().collect();
+    let want = normalize(&strip_numbers(&q.quote));
+    // The smallest run of whole lines that holds the quote.
+    let mut best: Option<(usize, usize)> = None;
+    for i in 0..lines.len() {
+        for j in i..lines.len() {
+            if best.is_some_and(|(a, b)| j - i >= b - a) {
+                break;
+            }
+            if normalize(&lines[i..=j].join(" ")).contains(&want) {
+                best = Some((i, j));
+                break;
+            }
+        }
+    }
+    let (i, j) = best.context("the quote is not inside whole lines of its candidate")?;
+    let project = Registry::load(home)?.project(&c.project)?.clone();
+    let mut fact_text: String = answer.answer.trim().chars().take(1500).collect();
+    if fact_text.is_empty() {
+        fact_text = q.quote.clone();
+    }
+    let fact = store::FactIn {
+        kind: crate::journal::Kind::Fact,
+        text: fact_text,
+        confidence: crate::journal::Confidence::Confirmed,
+        source: format!("{packet_id}: {}", packet["question"].as_str().unwrap_or_default()),
+        by: packet["by"].as_str().unwrap_or("ask").to_owned(),
+        receipt: None,
+        owner_statement: None,
+        quote: Some(store::Quote {
+            file: path.to_owned(),
+            line: start + i,
+            text: lines[i..=j].join("\n"),
+        }),
+        lens: None,
+        attacks: None,
+        stance: None,
+    };
+    let id = store.add_fact(&project.path(&home.workspace), &project.name, &fact)?;
+    Ok(format!(
+        "recorded {id} in {}: CONFIRMED by {}#L{}-{}",
+        project.name,
+        path,
+        start + i,
+        start + j
+    ))
 }
 
 #[cfg(test)]
@@ -417,7 +544,32 @@ mod tests {
                 .collect(),
             gaps: vec![],
             not_answerable: false,
+            record: false,
         }
+    }
+
+    #[test]
+    fn a_quote_copied_with_its_line_numbers_still_matches() {
+        let c = [cand(1, "a")];
+        let numbered = store::numbered("The parser   rejects empty\ninput early.", "f.md#L41-42");
+        assert_eq!(numbered, "41| The parser   rejects empty\n42| input early.");
+        let r = check(
+            &c,
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "41| parser rejects empty 42| input", "support")]),
+        );
+        assert_eq!(r.verdict, "PASS", "{:?}", r.errors);
+        // A number inside the text is text: "rejects 3| empty" is not in the unit.
+        let r = check(
+            &c,
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "parser rejects 3|empty input", "support")]),
+        );
+        assert_eq!(r.verdict, "FAIL");
     }
 
     #[test]

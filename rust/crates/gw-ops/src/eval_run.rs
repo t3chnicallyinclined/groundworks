@@ -7,6 +7,11 @@
 //! - `plain`: Read, Grep, Glob, read-only git, over the projects folder.
 //! - `groundworks`: the same, plus the Groundworks MCP server's read tools (ask, answer, search, lens,
 //!   journal, knowledge) and its output style as the appended system prompt.
+//! - `agent`: the same tools, with the plugin's `groundworks` agent as the session's main agent
+//!   (`--agent`), so its rules are the system prompt rather than an addition to it.
+//!
+//! The server runs with recording off (`GROUNDWORKS_NO_RECORD`), so no answer can leave a fact that a
+//! later question of the same run would find.
 //!
 //! The prompt is the same in both. A third session, with no tools, grades each answer against the gold
 //! answer without knowing which arm wrote it. Every row records tokens, cost, turns and time as Claude
@@ -28,7 +33,8 @@ use crate::eval::{Question, load};
 use crate::home::Home;
 use crate::store::sha256_hex;
 
-pub const ARMS: [&str; 2] = ["plain", "groundworks"];
+pub const ARMS: [&str; 3] = ["plain", "groundworks", "agent"];
+const AGENT: &str = include_str!("../../../../plugin/agents/groundworks.md");
 const STYLE: &str = include_str!("../../../../plugin/output-styles/groundworks.md");
 const BASE_TOOLS: &str = "Read,Grep,Glob,Bash,ToolSearch";
 const GIT_READS: [&str; 5] = [
@@ -114,10 +120,14 @@ fn prompt(q: &Question, projects: &Path) -> String {
 }
 
 fn style_body() -> &'static str {
-    STYLE
-        .strip_prefix("---")
+    body(STYLE)
+}
+
+/// A markdown file's text after its frontmatter.
+fn body(text: &'static str) -> &'static str {
+    text.strip_prefix("---")
         .and_then(|r| r.split_once("\n---"))
-        .map_or(STYLE, |(_, body)| body.trim_start())
+        .map_or(text, |(_, body)| body.trim_start())
 }
 
 /// One headless session; returns Claude Code's JSON result.
@@ -257,12 +267,21 @@ fn answer_args(arm: &str, q: &Question, plan: &Plan<'_>, projects: &Path, run: &
             args.push("--mcp-config".into());
             args.push(r#"{"mcpServers":{}}"#.into());
         }
-        "groundworks" => {
+        "groundworks" | "agent" => {
             let config = run.join("mcp-groundworks.json");
             args.push("--mcp-config".into());
             args.push(config.display().to_string());
-            args.push("--append-system-prompt".into());
-            args.push(style_body().to_owned());
+            if arm == "groundworks" {
+                args.push("--append-system-prompt".into());
+                args.push(style_body().to_owned());
+            } else {
+                args.push("--agents".into());
+                args.push(
+                    json!({"groundworks": {"description": "The Groundworks agent", "prompt": body(AGENT)}}).to_string(),
+                );
+                args.push("--agent".into());
+                args.push("groundworks".into());
+            }
             allowed.extend(GW_READS.iter().map(|t| format!("mcp__groundworks__{t}")));
         }
         other => bail!("unknown arm {other:?}; arms are {}", ARMS.join(", ")),
@@ -380,7 +399,7 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
     std::fs::write(
         plan.out.join("mcp-groundworks.json"),
         serde_json::to_string_pretty(&json!({"mcpServers": {"groundworks": {
-            "command": "groundworks", "args": ["serve"], "env": {"GROUNDWORKS_HOME": home_path}}}}))?,
+            "command": "groundworks", "args": ["serve"], "env": {"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_RECORD": "1"}}}}))?,
     )?;
     let set_sha = sha256_hex(&[std::fs::read(plan.set)?.as_slice()]);
     let meta = plan.out.join("run.json");
@@ -611,8 +630,11 @@ pub fn report(out: &Path) -> Result<String> {
             }
         )?;
     }
-    if let (Some(a), Some(b)) = (by_arm.get("plain"), by_arm.get("groundworks")) {
-        let pa: BTreeMap<&str, &Row> = a.iter().map(|r| (r.id.as_str(), *r)).collect();
+    let Some(a) = by_arm.get("plain") else {
+        return Ok(s);
+    };
+    let pa: BTreeMap<&str, &Row> = a.iter().map(|r| (r.id.as_str(), *r)).collect();
+    for (arm, b) in by_arm.iter().filter(|(arm, _)| **arm != "plain") {
         let (mut better, mut worse, mut same, mut fewer_tokens, mut pairs) = (0, 0, 0, 0, 0);
         let score = |r: &Row| match r.verdict.as_str() {
             "correct" => 3,
@@ -633,8 +655,8 @@ pub fn report(out: &Path) -> Result<String> {
         }
         writeln!(
             s,
-            "## paired, by question ({pairs} pairs)\n- groundworks better {better}, worse {worse}, same {same}\n\
-             - groundworks used fewer tokens on {fewer_tokens} of {pairs}"
+            "## {arm} against plain, by question ({pairs} pairs)\n- {arm} better {better}, worse {worse}, same {same}\n\
+             - {arm} used fewer tokens on {fewer_tokens} of {pairs}\n"
         )?;
     }
     Ok(s)
@@ -678,7 +700,12 @@ mod tests {
     }
 
     #[test]
-    fn the_style_body_drops_its_frontmatter() {
+    fn the_style_and_the_agent_say_the_same_thing() {
         assert!(style_body().starts_with("You are the Groundworks agent"));
+        assert_eq!(
+            style_body(),
+            body(AGENT),
+            "plugin/output-styles and plugin/agents must carry one text"
+        );
     }
 }

@@ -558,35 +558,18 @@ impl Store {
         kinds: &[String],
         limit: usize,
     ) -> Result<Vec<Hit>> {
-        let words = query_words(query);
-        ensure!(!words.is_empty(), "search for something");
         let db = self.agent(&project_ns(&slug(project)?)?)?;
-        // Any word matches (Python's BM25 ranks every unit sharing a token); scores add up, so a unit
-        // matching more, rarer words ranks higher. SurrealDB's `@@` with several words would require all.
-        let refs: Vec<usize> = (1..=words.len()).collect();
-        let score = refs
-            .iter()
-            .map(|n| format!("search::score({n})"))
-            .collect::<Vec<_>>()
-            .join(" + ");
-        let marks = refs
-            .iter()
-            .map(|n| format!("search::highlight('\u{ab}', '\u{bb}', {n})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let matches = refs
-            .iter()
-            .map(|n| format!("text @{n}@ $w{n}"))
-            .collect::<Vec<_>>()
-            .join(" OR ");
+        let AnyWord {
+            score,
+            marks,
+            matches,
+            vars,
+        } = any_word(query)?;
         let mut sql = format!(
             "SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, ({score}) AS score, \
              [{marks}] AS marks FROM unit WHERE ({matches}) AND present = true"
         );
-        let mut vars = Vars::default().set("limit", limit);
-        for (n, word) in refs.iter().zip(&words) {
-            vars = vars.set(&format!("w{n}"), word.as_str());
-        }
+        let mut vars = vars.set("limit", limit);
         if let Some(expert) = expert {
             sql.push_str(" AND $expert IN experts");
             vars = vars.set("expert", expert);
@@ -606,6 +589,35 @@ impl Store {
                 .filter_map(Value::as_str)
                 .find(|m| m.contains('\u{ab}'))
                 .map(str::to_owned);
+        }
+        Ok(hits)
+    }
+
+    /// Live facts matching `query`, best first, each as the unit that is its evidence (with the fact's text
+    /// and grade on the hit). A fact with no present evidence unit is skipped: it cannot be quoted.
+    pub fn retrieve_facts(&self, project: &str, query: &str, limit: usize) -> Result<Vec<Hit>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let AnyWord {
+            score, matches, vars, ..
+        } = any_word(query)?;
+        let sql = format!(
+            "SELECT text AS fact, grade AS fact_grade, ({score}) AS score, \
+             (SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text FROM $parent->evidence->unit \
+              WHERE present = true) AS units \
+             FROM fact WHERE ({matches}) AND status = 'live' ORDER BY score DESC LIMIT $limit;"
+        );
+        let vars = vars.set("limit", limit);
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
+        let mut hits = Vec::new();
+        for row in rows[0].as_array().into_iter().flatten() {
+            for unit in row["units"].as_array().into_iter().flatten() {
+                let mut hit: Hit = serde_json::from_value(unit.clone()).context("reading a fact's evidence")?;
+                hit.project = project.to_owned();
+                hit.score = row["score"].as_f64();
+                hit.fact = row["fact"].as_str().map(str::to_owned);
+                hit.fact_grade = row["fact_grade"].as_str().map(str::to_owned);
+                hits.push(hit);
+            }
         }
         Ok(hits)
     }
@@ -955,6 +967,56 @@ pub struct Hit {
     /// One highlight per query word, as the store returns them.
     #[serde(default, skip_serializing)]
     pub marks: Vec<Value>,
+    /// When the hit is a recorded fact's evidence: the fact and its grade.
+    #[serde(default)]
+    pub fact: Option<String>,
+    #[serde(default)]
+    pub fact_grade: Option<String>,
+}
+
+/// The first line of a `path#Lstart-end` locator.
+pub fn first_line(locator: &str) -> Option<usize> {
+    locator.rsplit_once("#L")?.1.split('-').next()?.parse().ok()
+}
+
+/// A unit's text with its file line numbers (`120| ...`), so a reader can cite path:line without reopening
+/// the file. Text without lines (a commit) is returned as it is.
+pub fn numbered(text: &str, locator: &str) -> String {
+    match first_line(locator) {
+        Some(start) => text
+            .lines()
+            .enumerate()
+            .map(|(i, l)| format!("{}| {l}", start + i))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => text.to_owned(),
+    }
+}
+
+struct AnyWord {
+    score: String,
+    marks: String,
+    matches: String,
+    vars: Vars,
+}
+
+/// Any word matches (Python's BM25 ranks every unit sharing a token); scores add up, so a row matching
+/// more, rarer words ranks higher. SurrealDB's `@@` with several words would require all of them.
+fn any_word(query: &str) -> Result<AnyWord> {
+    let words = query_words(query);
+    ensure!(!words.is_empty(), "search for something");
+    let refs: Vec<usize> = (1..=words.len()).collect();
+    let join = |f: &dyn Fn(&usize) -> String, sep: &str| refs.iter().map(f).collect::<Vec<_>>().join(sep);
+    let mut vars = Vars::default();
+    for (n, word) in refs.iter().zip(&words) {
+        vars = vars.set(&format!("w{n}"), word.as_str());
+    }
+    Ok(AnyWord {
+        score: join(&|n| format!("search::score({n})"), " + "),
+        marks: join(&|n| format!("search::highlight('\u{ab}', '\u{bb}', {n})"), ", "),
+        matches: join(&|n| format!("text @{n}@ $w{n}"), " OR "),
+        vars,
+    })
 }
 
 /// The hash a quote's span (`path#Lstart-end`) has on disk now, or None if the file or lines are gone.
