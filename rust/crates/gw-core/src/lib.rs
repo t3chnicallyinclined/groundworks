@@ -63,15 +63,23 @@ mod tests {
             let line = source
                 .lines()
                 .find(|l| l.trim_start().starts_with(needle))
-                .unwrap_or_else(|| panic!("no line starting with {needle:?} in {}", harness.display()));
+                .unwrap_or_else(|| {
+                    panic!("no line starting with {needle:?} in {}", harness.display())
+                });
             let (_, rest) = line.split_once('"').expect("no opening quote");
             let (value, _) = rest.split_once('"').expect("no closing quote");
             value.to_string()
         };
 
-        assert_eq!(extract("ORACLE_TAG = "), ORACLE_TAG,
-                  "differential.py's ORACLE_TAG drifted from gw-core's ORACLE_TAG");
-        assert_eq!(extract("ORACLE_COMMIT = "), ORACLE_COMMIT,
-                  "differential.py's ORACLE_COMMIT drifted from gw-core's ORACLE_COMMIT");
+        assert_eq!(
+            extract("ORACLE_TAG = "),
+            ORACLE_TAG,
+            "differential.py's ORACLE_TAG drifted from gw-core's ORACLE_TAG"
+        );
+        assert_eq!(
+            extract("ORACLE_COMMIT = "),
+            ORACLE_COMMIT,
+            "differential.py's ORACLE_COMMIT drifted from gw-core's ORACLE_COMMIT"
+        );
     }
 }

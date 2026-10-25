@@ -44,6 +44,9 @@ fn fact(confidence: Confidence) -> FactIn {
         receipt: None,
         owner_statement: None,
         quote: None,
+        lens: None,
+        attacks: None,
+        stance: None,
     }
 }
 

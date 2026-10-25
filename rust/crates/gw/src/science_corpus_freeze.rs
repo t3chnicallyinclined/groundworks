@@ -220,7 +220,9 @@ fn validate_include(value: &str) -> Result<String, String> {
         match component {
             Component::Normal(part) => clean.push(part.to_string_lossy().into_owned()),
             Component::CurDir => {}
-            Component::ParentDir => return Err("include path must not contain parent traversal".into()),
+            Component::ParentDir => {
+                return Err("include path must not contain parent traversal".into())
+            }
             _ => return Err("include path must be root-relative".into()),
         }
     }

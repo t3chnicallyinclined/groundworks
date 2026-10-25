@@ -61,17 +61,24 @@ fn migrations_apply_once_and_a_failed_file_rolls_back() {
         migrate(&root, Scope::Project, SCHEMA, true).unwrap().is_empty(),
         "second run is a no-op"
     );
-    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 8);
+    // The number of the last project-scoped file.
+    let last: i64 = SCHEMA
+        .iter()
+        .filter(|(_, text)| text.starts_with("-- scope: project"))
+        .filter_map(|(name, _)| name[..4].parse().ok())
+        .max()
+        .unwrap();
+    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], last);
 
     let mut broken: Vec<(&str, &str)> = SCHEMA.to_vec();
     broken.push((
-        "0009_broken.surql",
+        "9999_broken.surql",
         "-- scope: project\nDEFINE TABLE ok_table SCHEMAFULL;\nTHROW 'a broken migration';",
     ));
     assert!(migrate(&root, Scope::Project, &broken, true).is_err());
     assert_eq!(
         current_version(&root).unwrap().unwrap()["applied"],
-        8,
+        last,
         "version did not move"
     );
     let tables = value(&root, "INFO FOR DB;");

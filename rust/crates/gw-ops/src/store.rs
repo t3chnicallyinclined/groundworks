@@ -10,7 +10,7 @@
 //! root/agent split guards against mistakes, not against a hostile agent; the owner/agent split
 //! holds because the owner's password is never on disk.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -313,6 +313,16 @@ impl Store {
             create.push_str(", owner_statement = $owner_statement");
             vars = vars.set("owner_statement", said.as_str());
         }
+        if let Some(lens) = fact.lens.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            create.push_str(", lens = $lens");
+            vars = vars.set("lens", lens);
+        }
+        if let Some(target) = &fact.attacks {
+            create.push_str(", attacks = type::record('fact', $attacks_key), stance = $stance");
+            vars = vars
+                .set("attacks_key", fact_key(target)?)
+                .set("stance", fact.stance.as_deref().unwrap_or_default());
+        }
         if let Some(origin) = origin {
             create.push_str(", at = <datetime>$at");
             vars = vars.set("at", origin.at.as_str()).set("fact_key", origin.key.as_str());
@@ -342,28 +352,40 @@ impl Store {
 
     /// The newest `limit` facts, oldest first, optionally of one kind.
     pub fn facts(&self, project: &str, kind_filter: Option<Kind>, limit: usize) -> Result<Vec<FactRow>> {
-        let db = self.agent(&project_ns(&slug(project)?)?)?;
-        let mut vars = Vars::default().set("limit", limit);
+        let mut vars = Vars::default();
         let filter = match kind_filter {
             Some(k) => {
                 vars = vars.set("kind", kind(k));
-                "WHERE kind = $kind "
+                "WHERE kind = $kind"
             }
             None => "",
         };
-        let rows = self.retrying(|| {
-            Ok(db.query(
-                &format!(
-                    "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
-                 owner_statement, <string> written_by AS written_by, <string> receipt AS receipt, \
-                 ->evidence->unit.locator AS quotes FROM fact {filter}ORDER BY at DESC LIMIT $limit;"
-                ),
-                &vars.0,
-                Some(1),
-            )?)
-        })?;
+        self.fact_rows(project, filter, vars, limit)
+    }
+
+    /// The findings made through a lens, and every attack on them, oldest first.
+    pub fn lens_findings(&self, project: &str, lens: &str, limit: usize) -> Result<Vec<FactRow>> {
+        let vars = Vars::default().set("lens", lens);
+        self.fact_rows(project, "WHERE lens = $lens OR attacks.lens = $lens", vars, limit)
+    }
+
+    /// The newest `limit` facts matching `filter`, oldest first.
+    fn fact_rows(&self, project: &str, filter: &str, vars: Vars, limit: usize) -> Result<Vec<FactRow>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = vars.set("limit", limit);
+        let sql = format!(
+            "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
+             owner_statement, <string> written_by AS written_by, <string> receipt AS receipt, lens, \
+             <string> attacks AS attacks, stance, ->evidence->unit.locator AS quotes \
+             FROM fact {filter} ORDER BY at DESC LIMIT $limit;"
+        );
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
         let mut facts: Vec<FactRow> = serde_json::from_value(rows[0].clone()).context("reading facts")?;
         facts.reverse();
+        // `<string> NONE` reads "NONE".
+        for f in &mut facts {
+            f.attacks = f.attacks.take().filter(|a| a != "NONE");
+        }
         Ok(facts)
     }
 
@@ -677,6 +699,162 @@ impl Store {
         }
     }
 
+    /// Create a locked panel in the project's store; returns its id.
+    pub fn panel_create(&self, project: &str, config: &str, digest: &str, by: &str) -> Result<String> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default()
+            .set("config", config)
+            .set("digest", digest)
+            .set("by", by);
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "CREATE panel SET config = $config, digest = $digest, by = $by RETURN VALUE id;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        record_id(&rows[0]).context("CREATE panel returned no id")
+    }
+
+    /// A panel and its answers, oldest first.
+    pub fn panel_get(&self, project: &str, id: &str) -> Result<(Value, Vec<Value>)> {
+        let key = panel_key(id)?;
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default().set("key", key);
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "LET $p = type::record('panel', $key);\
+                 SELECT * FROM ONLY $p;\
+                 SELECT round, seat, text, sha256, at FROM panel_answer WHERE panel = $p ORDER BY at ASC;",
+                &vars.0,
+                Some(3),
+            )?)
+        })?;
+        ensure!(!rows[1].is_null(), "no panel {id} in {project}");
+        Ok((rows[1].clone(), rows[2].as_array().cloned().unwrap_or_default()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn panel_answer(
+        &self,
+        project: &str,
+        id: &str,
+        round: &str,
+        seat: &str,
+        text: &str,
+        sha: &str,
+        by: &str,
+    ) -> Result<()> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default()
+            .set("key", panel_key(id)?)
+            .set("round", round)
+            .set("seat", seat)
+            .set("text", text)
+            .set("sha", sha)
+            .set("by", by);
+        self.retrying(|| {
+            Ok(db.query(
+                "CREATE panel_answer SET panel = type::record('panel', $key), round = $round, seat = $seat, \
+                 text = $text, sha256 = $sha, by = $by RETURN VALUE id;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(())
+    }
+
+    /// Write one of the panel's program fields (anon, counterfactual). With `once`, only while it is unset.
+    pub fn panel_set(
+        &self,
+        project: &str,
+        id: &str,
+        field: &str,
+        value: &str,
+        status: Option<&str>,
+        once: bool,
+    ) -> Result<()> {
+        ensure!(
+            matches!(field, "anon" | "counterfactual"),
+            "panel field {field} is not written here"
+        );
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let mut vars = Vars::default().set("key", panel_key(id)?).set("value", value);
+        let mut set = format!("{field} = $value");
+        if let Some(status) = status {
+            set.push_str(", status = $status");
+            vars = vars.set("status", status);
+        }
+        let guard = if once {
+            format!(" WHERE {field} = NONE")
+        } else {
+            String::new()
+        };
+        let sql = format!("UPDATE type::record('panel', $key) SET {set}{guard} RETURN VALUE id;");
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))))?;
+        match rows {
+            Ok(r) if r[0].as_array().is_some_and(|a| !a.is_empty()) => Ok(()),
+            _ if once => bail!("{id}: {field} was already written"),
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Log owed re-prompts, each once per version of the answer it concerns.
+    pub fn panel_owed(&self, project: &str, id: &str, rows: &[Value]) -> Result<()> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default().set("key", panel_key(id)?).set("rows", rows.to_vec());
+        self.retrying(|| {
+            Ok(db.query(
+                "FOR $r IN $rows { IF !record::exists(type::record('panel_owed', $r.key)) { \
+                 CREATE type::record('panel_owed', $r.key) SET panel = type::record('panel', $key), \
+                 condition = $r.condition, seat = $r.seat, answer_sha256 = $r.answer_sha256, detail = $r.detail; }; };",
+                &vars.0,
+                None,
+            )?)
+        })?;
+        Ok(())
+    }
+
+    /// How many re-prompts of each condition the panel has owed so far.
+    pub fn panel_enforcement(&self, project: &str, id: &str) -> Result<BTreeMap<String, u64>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default().set("key", panel_key(id)?);
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "SELECT condition, count() AS n FROM panel_owed WHERE panel = type::record('panel', $key) GROUP BY condition;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r["condition"].as_str()?.to_owned(), r["n"].as_u64()?)))
+            .collect())
+    }
+
+    /// Record the tally, once.
+    pub fn panel_tally(&self, project: &str, id: &str, tally: &str, status: &str, verdict: Option<&str>) -> Result<()> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let mut vars = Vars::default()
+            .set("key", panel_key(id)?)
+            .set("tally", tally)
+            .set("status", status);
+        let mut set = String::from("tally = $tally, status = $status");
+        if let Some(v) = verdict {
+            set.push_str(", verdict = $verdict");
+            vars = vars.set("verdict", v);
+        }
+        let sql = format!("UPDATE type::record('panel', $key) SET {set} WHERE tally = NONE RETURN VALUE id;");
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))))?;
+        match rows {
+            Ok(r) if r[0].as_array().is_some_and(|a| !a.is_empty()) => Ok(()),
+            _ => bail!("{id} was already tallied"),
+        }
+    }
+
     /// Record the expert directory in `global`: each expert's name, summary and definition file.
     pub fn upsert_experts(&self, experts: &[crate::intake::Expert]) -> Result<()> {
         let global = self.agent(GLOBAL_NS)?;
@@ -826,6 +1004,11 @@ pub struct FactIn {
     pub receipt: Option<String>,
     pub owner_statement: Option<String>,
     pub quote: Option<Quote>,
+    /// The lens (expert view) the finding was made through.
+    pub lens: Option<String>,
+    /// Another fact this one disputes or supports (`fact:...`), with `stance`.
+    pub attacks: Option<String>,
+    pub stance: Option<String>,
 }
 
 /// Text that must appear word for word at `line` (1-based) of `file` (relative to the project).
@@ -902,6 +1085,12 @@ pub struct FactRow {
     pub written_by: Option<String>,
     #[serde(default)]
     pub quotes: Vec<String>,
+    #[serde(default)]
+    pub lens: Option<String>,
+    #[serde(default)]
+    pub attacks: Option<String>,
+    #[serde(default)]
+    pub stance: Option<String>,
 }
 
 impl FactRow {
@@ -938,6 +1127,12 @@ impl FactRow {
         }
         for q in &self.quotes {
             let _ = write!(line, " [quote {q}]");
+        }
+        if let Some(lens) = &self.lens {
+            let _ = write!(line, " [lens {lens}]");
+        }
+        if let Some(target) = self.attacks.as_deref().filter(|t| *t != "NONE") {
+            let _ = write!(line, " [{} {target}]", self.stance.as_deref().unwrap_or("attacks"));
         }
         if let Some(r) = self.receipt.as_deref().filter(|r| *r != "NONE") {
             let _ = write!(line, " [{r}]");
@@ -1007,16 +1202,42 @@ fn record_id(v: &Value) -> Option<String> {
 /// CONFIRMED needs a receipt, an owner statement or a quote. The store enforces this too; checking
 /// first gives a plain answer instead of a schema error. A quote is verified separately.
 fn needs_evidence(fact: &FactIn) -> Result<()> {
+    match (&fact.attacks, fact.stance.as_deref()) {
+        (Some(_), Some("disputes" | "supports")) | (None, None) => {}
+        (Some(_), _) => bail!("an attack needs stance disputes or supports"),
+        (None, Some(_)) => bail!("a stance needs attacks: the fact it disputes or supports"),
+    }
     if fact.confidence == Confidence::Confirmed
         && fact.receipt.is_none()
         && fact.owner_statement.is_none()
         && fact.quote.is_none()
     {
         bail!(
-            "CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word in a file, or an              owner statement. Record it as INFERRED otherwise."
+            "CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word in a file, or an owner \
+             statement. Record it as INFERRED otherwise."
         );
     }
     Ok(())
+}
+
+/// The key of `fact:<key>`: letters, digits and _ only.
+fn fact_key(id: &str) -> Result<String> {
+    let key = id.strip_prefix("fact:").unwrap_or(id);
+    ensure!(
+        !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "{id:?} is not a fact id (fact:<letters and digits>)"
+    );
+    Ok(key.to_owned())
+}
+
+/// The key of `panel:<key>`: letters and digits only.
+fn panel_key(id: &str) -> Result<String> {
+    let key = id.strip_prefix("panel:").unwrap_or(id);
+    ensure!(
+        !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric()),
+        "{id:?} is not a panel id (panel:<letters and digits>)"
+    );
+    Ok(key.to_owned())
 }
 
 /// SHA-256 over `parts` in order, as lowercase hex.

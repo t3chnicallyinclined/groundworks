@@ -23,10 +23,16 @@ use serde_json::json;
 #[test]
 fn chunk_size_true_is_accepted_bool_is_int() {
     // `config.py:553-555`: `isinstance(True, int)` is True, so `chunk_size: true` == 1.
-    let data = broken1("units", json!([{"name": "line", "locator_fields": ["f"], "chunk_size": true}]));
+    let data = broken1(
+        "units",
+        json!([{"name": "line", "locator_fields": ["f"], "chunk_size": true}]),
+    );
     assert_accepted(data);
     // and `false` == 0, still refused as non-positive.
-    let data = broken1("units", json!([{"name": "line", "locator_fields": ["f"], "chunk_size": false}]));
+    let data = broken1(
+        "units",
+        json!([{"name": "line", "locator_fields": ["f"], "chunk_size": false}]),
+    );
     assert_refused(data, "positive chunk_size");
 }
 
@@ -35,8 +41,21 @@ fn originals_store_null_is_accepted() {
     // `originals.py:102-104`: `store is not None`, not "is present" -- an explicit `store: null`
     // passes the guard exactly like a missing key.
     let data = broken(&[
-        ("human_owned", Some(json!(["gates", "fidelity", "status", "evaluator", "privacy", "originals"]))),
-        ("originals", Some(json!({"mode": "required", "store": null}))),
+        (
+            "human_owned",
+            Some(json!([
+                "gates",
+                "fidelity",
+                "status",
+                "evaluator",
+                "privacy",
+                "originals"
+            ])),
+        ),
+        (
+            "originals",
+            Some(json!({"mode": "required", "store": null})),
+        ),
     ]);
     assert_accepted(data);
 }
@@ -45,10 +64,16 @@ fn originals_store_null_is_accepted() {
 fn human_owned_as_a_string_is_substring_membership() {
     // `config.py:648-649`: `k not in owned` where `owned` is a STRING checks substring
     // containment, not element equality.
-    let data = broken1("human_owned", json!("gates and fidelity and status and evaluator and privacy"));
+    let data = broken1(
+        "human_owned",
+        json!("gates and fidelity and status and evaluator and privacy"),
+    );
     assert_accepted(data);
     // a human_owned string missing one required word is still refused, naming it.
-    let data = broken1("human_owned", json!("gates and fidelity and status and privacy"));
+    let data = broken1(
+        "human_owned",
+        json!("gates and fidelity and status and privacy"),
+    );
     assert_refused(data, "human_owned must include evaluator");
 }
 
@@ -56,9 +81,7 @@ fn human_owned_as_a_string_is_substring_membership() {
 
 #[test]
 fn lens_names_must_be_unique() {
-    let lens = |name: &str| {
-        json!({"name": name, "kind": "perspective", "charter": "a charter long enough to mean something"})
-    };
+    let lens = |name: &str| json!({"name": name, "kind": "perspective", "charter": "a charter long enough to mean something"});
     let data = broken1("lenses", json!([lens("dup"), lens("dup")]));
     assert_refused(data, "lens names must be unique");
 }
@@ -90,8 +113,12 @@ fn required_top_missing_sections_are_named_in_declared_order() {
         Ok(_) => panic!("expected a refusal"),
         Err(e) => {
             let msg = e.to_string();
-            let units_at = msg.find("missing required section: units").expect("units named");
-            let gates_at = msg.find("missing required section: gates").expect("gates named");
+            let units_at = msg
+                .find("missing required section: units")
+                .expect("units named");
+            let gates_at = msg
+                .find("missing required section: gates")
+                .expect("gates named");
             assert!(units_at < gates_at, "expected units before gates in: {msg}");
         }
     }
@@ -184,7 +211,10 @@ fn vocabulary_tiers_mixed_types_is_a_type_error_not_a_refusal() {
         Ok(_) => panic!("expected a TypeError-kind ConfigError, got ACCEPT"),
         Err(e) => {
             assert_eq!(e.kind, "TypeError", "expected the TypeError kind, got: {e}");
-            assert!(e.to_string().contains("not supported between instances of"), "got: {e}");
+            assert!(
+                e.to_string().contains("not supported between instances of"),
+                "got: {e}"
+            );
         }
     }
 }
@@ -238,7 +268,10 @@ fn unit_names_dedup_follows_raw_set_bool_is_int() {
         Ok(_) => panic!("expected a refusal"),
         Err(e) => {
             let msg = e.to_string();
-            assert!(msg.contains("unit name True must match [a-z0-9_]+"), "got: {msg}");
+            assert!(
+                msg.contains("unit name True must match [a-z0-9_]+"),
+                "got: {msg}"
+            );
             assert!(msg.contains("unit names must be unique"), "got: {msg}");
         }
     }
@@ -278,7 +311,10 @@ fn fidelity_confirming_not_in_order_still_refuses_with_a_bare_string_order() {
 fn status_values_and_usable_as_bare_strings_use_string_semantics() {
     // `config.py:576-584`, the same pattern as `fidelity` above: `st["usable"]` substring-contained
     // in `st["values"]`, and `len()` of each is a code-point count. Live-oracle-verified ACCEPT.
-    let data = broken(&[("status__values", Some(json!("abc"))), ("status__usable", Some(json!("a")))]);
+    let data = broken(&[
+        ("status__values", Some(json!("abc"))),
+        ("status__usable", Some(json!("a"))),
+    ]);
     assert_accepted(data);
 }
 
@@ -298,6 +334,9 @@ fn chunk_size_past_i64_but_within_u64_is_still_accepted() {
     // `18446744073709551615`, `u64::MAX`) -- silently REFUSING a chunk_size the oracle's unbounded
     // Python `int` ACCEPTs, even though `serde_json` parsed it as a genuine whole number (not the
     // `f64`-degrades-everything-past-`u64::MAX` case, which is a documented, unfixed limitation).
-    let data = broken1("units", json!([{"name": "line", "locator_fields": ["f"], "chunk_size": 18_446_744_073_709_551_615u64}]));
+    let data = broken1(
+        "units",
+        json!([{"name": "line", "locator_fields": ["f"], "chunk_size": 18_446_744_073_709_551_615u64}]),
+    );
     assert_accepted(data);
 }

@@ -10,7 +10,9 @@ const SECTION_KEYS: &[&str] = &["mode", "store", "spans"];
 
 /// `groundworks/originals.py:90 config_problems`.
 pub fn config_problems(data: &Value, problems: &mut Vec<String>) {
-    let Some(value) = data.get("originals") else { return };
+    let Some(value) = data.get("originals") else {
+        return;
+    };
     let body: Value = match value {
         Value::String(_) => {
             let mut m = serde_json::Map::new();
@@ -26,13 +28,20 @@ pub fn config_problems(data: &Value, problems: &mut Vec<String>) {
         ));
         return;
     };
-    let mut unknown: Vec<&str> =
-        body_obj.keys().map(String::as_str).filter(|k| !SECTION_KEYS.contains(k)).collect();
+    let mut unknown: Vec<&str> = body_obj
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !SECTION_KEYS.contains(k))
+        .collect();
     unknown.sort();
     if !unknown.is_empty() {
         problems.push(format!(
             "originals: unknown key(s) {}; allowed: {}",
-            unknown.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(", "),
+            unknown
+                .iter()
+                .map(|k| k.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
             {
                 let mut allowed = SECTION_KEYS.to_vec();
                 allowed.sort();
@@ -71,18 +80,31 @@ pub fn config_problems(data: &Value, problems: &mut Vec<String>) {
         for (unit_type, spec) in spans {
             let where_ = format!("originals.spans.{unit_type}");
             let Some(unit) = units.get(unit_type) else {
-                problems.push(format!("{where_}: no unit type {}", super::py_repr_str(unit_type)));
+                problems.push(format!(
+                    "{where_}: no unit type {}",
+                    super::py_repr_str(unit_type)
+                ));
                 continue;
             };
             let spec_obj = spec.as_object();
-            let single_key = spec_obj.filter(|o| o.len() == 1).and_then(|o| o.keys().next());
-            let valid_kind = single_key.map(|k| SPAN_KINDS.contains(&k.as_str())).unwrap_or(false);
+            let single_key = spec_obj
+                .filter(|o| o.len() == 1)
+                .and_then(|o| o.keys().next());
+            let valid_kind = single_key
+                .map(|k| SPAN_KINDS.contains(&k.as_str()))
+                .unwrap_or(false);
             if spec_obj.is_none() || !valid_kind {
-                problems.push(format!("{where_}: must be exactly one of {}", SPAN_KINDS.join(", ")));
+                problems.push(format!(
+                    "{where_}: must be exactly one of {}",
+                    SPAN_KINDS.join(", ")
+                ));
                 continue;
             }
             let kind = single_key.unwrap().as_str();
-            let fields = spec_obj.unwrap().get(kind).expect("kind came from this map's own keys");
+            let fields = spec_obj
+                .unwrap()
+                .get(kind)
+                .expect("kind came from this map's own keys");
             let locator: Vec<String> = unit
                 .get("locator_fields")
                 .and_then(Value::as_array)
@@ -106,7 +128,11 @@ pub fn config_problems(data: &Value, problems: &mut Vec<String>) {
             if !names_is_list || names.len() != expected_len {
                 problems.push(format!(
                     "{where_}: {kind} takes {}",
-                    if kind == "line" { "one locator field" } else { "[start_field, end_field]" }
+                    if kind == "line" {
+                        "one locator field"
+                    } else {
+                        "[start_field, end_field]"
+                    }
                 ));
                 continue;
             }

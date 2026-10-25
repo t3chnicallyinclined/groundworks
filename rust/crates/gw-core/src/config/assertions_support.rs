@@ -9,7 +9,10 @@ use serde_json::Value;
 /// `groundworks/assertions.py:64 fields_of`: field -> TYPE NAME (not the full declared spec), for a
 /// built-in or declared node table; None for a table this instance does not have.
 pub fn fields_of(data: &Value, table: &str) -> Option<Value> {
-    if let Some((_, fields)) = super::BUILT_IN_FIELDS.iter().find(|(name, _)| *name == table) {
+    if let Some((_, fields)) = super::BUILT_IN_FIELDS
+        .iter()
+        .find(|(name, _)| *name == table)
+    {
         let mut m = serde_json::Map::new();
         for (field, ty) in *fields {
             m.insert(field.to_string(), Value::String(ty.to_string()));
@@ -20,7 +23,11 @@ pub fn fields_of(data: &Value, table: &str) -> Option<Value> {
     let fields_map = declared.get(table)?.as_object()?;
     let mut m = serde_json::Map::new();
     for (name, spec) in fields_map {
-        let ty = spec.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+        let ty = spec
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         m.insert(name.clone(), Value::String(ty));
     }
     Some(Value::Object(m))
@@ -54,17 +61,31 @@ pub fn field_domain(data: &Value, table: &str, field: &str) -> Option<Vec<Value>
         .unwrap_or_default();
     let values: Option<Vec<Value>> = match (table, field) {
         ("unit", "type") => Some(unit_names),
-        ("unit", "status") => status.and_then(|s| s.get("values")).map(super::py_iter_elems),
-        ("unit", "grade") => fidelity.and_then(|f| f.get("order")).map(super::py_iter_elems),
-        ("fact", "status") => Some(FACT_STATUSES.iter().map(|s| Value::String(s.to_string())).collect()),
-        ("critique", "verdict") => {
-            Some(CRITIQUE_VERDICTS.iter().map(|s| Value::String(s.to_string())).collect())
-        }
+        ("unit", "status") => status
+            .and_then(|s| s.get("values"))
+            .map(super::py_iter_elems),
+        ("unit", "grade") => fidelity
+            .and_then(|f| f.get("order"))
+            .map(super::py_iter_elems),
+        ("fact", "status") => Some(
+            FACT_STATUSES
+                .iter()
+                .map(|s| Value::String(s.to_string()))
+                .collect(),
+        ),
+        ("critique", "verdict") => Some(
+            CRITIQUE_VERDICTS
+                .iter()
+                .map(|s| Value::String(s.to_string()))
+                .collect(),
+        ),
         ("critique", "answered") | ("conclusion", "ready") | ("authority", "verified") => {
             Some(vec![Value::Bool(true), Value::Bool(false)])
         }
         ("label", "tier") => vocab.and_then(|v| v.get("tiers")).map(super::py_iter_elems),
-        ("label", "dir") => vocab.and_then(|v| v.get("directions")).map(super::py_iter_elems),
+        ("label", "dir") => vocab
+            .and_then(|v| v.get("directions"))
+            .map(super::py_iter_elems),
         ("label", "role") => vocab.and_then(|v| v.get("roles")).map(super::py_iter_elems),
         _ => None,
     };
@@ -72,8 +93,13 @@ pub fn field_domain(data: &Value, table: &str, field: &str) -> Option<Vec<Value>
 }
 
 const SPEC_KEYS: &[&str] = &["fields", "promoted_by", "enforce", "doc"];
-const EDGE_OWNED: &[&str] =
-    &["field", "value", "field_history", "value_history", "learned_at"];
+const EDGE_OWNED: &[&str] = &[
+    "field",
+    "value",
+    "field_history",
+    "value_history",
+    "learned_at",
+];
 
 fn gate_rules(data: &Value) -> Vec<Value> {
     data.get("gates")
@@ -91,17 +117,23 @@ fn gate_rules(data: &Value) -> Vec<Value> {
 /// is present (never in the corpus this port's differential covers today, but kept so a later
 /// instance that declares one gets the same refusals as the oracle).
 pub fn validate(data: &Value, problems: &mut Vec<String>) {
-    let Some(section) = data.get("assertions") else { return };
+    let Some(section) = data.get("assertions") else {
+        return;
+    };
     let Some(section_obj) = section.as_object().filter(|o| !o.is_empty()) else {
         problems.push(
-            "assertions must be a mapping of edge type -> {fields: [...], promoted_by, enforce}".to_string(),
+            "assertions must be a mapping of edge type -> {fields: [...], promoted_by, enforce}"
+                .to_string(),
         );
         return;
     };
     let edges = super::edge_map_of(data);
     let declared_edges = super::declared_edges_of(data);
     let rules = gate_rules(data);
-    let built_in_edges: Vec<&str> = super::BUILT_IN_EDGES.iter().map(|(name, _, _)| *name).collect();
+    let built_in_edges: Vec<&str> = super::BUILT_IN_EDGES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect();
 
     for (edge, spec) in section_obj {
         let where_ = format!("assertions.{edge}");
@@ -129,8 +161,11 @@ pub fn validate(data: &Value, problems: &mut Vec<String>) {
             problems.push(format!("{where_}: must be a mapping with fields"));
             continue;
         };
-        let mut unknown: Vec<&str> =
-            spec_obj.keys().map(String::as_str).filter(|k| !SPEC_KEYS.contains(k)).collect();
+        let mut unknown: Vec<&str> = spec_obj
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !SPEC_KEYS.contains(k))
+            .collect();
         unknown.sort();
         if !unknown.is_empty() {
             let mut allowed = SPEC_KEYS.to_vec();
@@ -145,7 +180,12 @@ pub fn validate(data: &Value, problems: &mut Vec<String>) {
             .get(edge.as_str())
             .and_then(|e| e.get("fields"))
             .and_then(Value::as_object)
-            .map(|f| f.keys().filter(|k| EDGE_OWNED.contains(&k.as_str())).cloned().collect())
+            .map(|f| {
+                f.keys()
+                    .filter(|k| EDGE_OWNED.contains(&k.as_str()))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default();
         owned.sort();
         if !owned.is_empty() {
@@ -155,7 +195,10 @@ pub fn validate(data: &Value, problems: &mut Vec<String>) {
             ));
         }
         let target_fields = fields_of(data, dst);
-        let fields = spec_obj.get("fields").and_then(Value::as_array).filter(|f| !f.is_empty());
+        let fields = spec_obj
+            .get("fields")
+            .and_then(Value::as_array)
+            .filter(|f| !f.is_empty());
         match fields {
             None => problems.push(format!(
                 "{where_}: fields must be a non-empty list of {dst} fields this edge may assert"
@@ -181,7 +224,11 @@ pub fn validate(data: &Value, problems: &mut Vec<String>) {
                             .map(|o| o.keys().map(String::as_str).collect())
                             .unwrap_or_default();
                         known.sort();
-                        let known_text = if known.is_empty() { "none".to_string() } else { known.join(", ") };
+                        let known_text = if known.is_empty() {
+                            "none".to_string()
+                        } else {
+                            known.join(", ")
+                        };
                         problems.push(format!(
                             "{where_}: {} is not a field of {dst}; its fields are {known_text}",
                             super::py_repr_str(field)
@@ -229,21 +276,30 @@ so no asserted value could be checked as legal; assert an enumerated field"
         }
         if let Some(wanted) = spec_obj.get("promoted_by") {
             match wanted.as_array().filter(|w| !w.is_empty()) {
-                None => problems.push(format!("{where_}: promoted_by must be a non-empty list of gate rule ids on {src}")),
+                None => problems.push(format!(
+                    "{where_}: promoted_by must be a non-empty list of gate rule ids on {src}"
+                )),
                 Some(wanted) => {
                     let ids: std::collections::HashSet<String> = on_source
                         .iter()
                         .filter_map(|r| r.get("id").map(super::py_str_of))
                         .collect();
-                    let bad: Vec<String> =
-                        wanted.iter().map(super::py_str_of).filter(|w| !ids.contains(w)).collect();
+                    let bad: Vec<String> = wanted
+                        .iter()
+                        .map(super::py_str_of)
+                        .filter(|w| !ids.contains(w))
+                        .collect();
                     if !bad.is_empty() {
                         let mut sorted_ids: Vec<&String> = ids.iter().collect();
                         sorted_ids.sort();
                         let ids_text = if sorted_ids.is_empty() {
                             "none".to_string()
                         } else {
-                            sorted_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                            sorted_ids
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         };
                         problems.push(format!(
                             "{where_}: promoted_by names {}, not a gate rule on {src} (rules on {src}: {ids_text})",
@@ -256,7 +312,10 @@ so no asserted value could be checked as legal; assert an enumerated field"
         // `assertions.py:192`: `spec.get("enforce", False) not in (True, False)`. Python's `in` on a
         // tuple of bools uses `==`, and `True == 1`/`False == 0` (bool is an int subtype), so
         // `enforce: 1` and `enforce: 0` are ACCEPTED, not just literal `true`/`false`.
-        let enforce_ok = spec_obj.get("enforce").map(super::py_equals_bool).unwrap_or(true);
+        let enforce_ok = spec_obj
+            .get("enforce")
+            .map(super::py_equals_bool)
+            .unwrap_or(true);
         if !enforce_ok {
             problems.push(format!("{where_}: enforce must be true or false"));
         }

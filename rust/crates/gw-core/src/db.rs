@@ -44,7 +44,10 @@ pub enum DbError {
     #[error("{0}")]
     Db(String),
     #[error("{message}")]
-    PermissionDenied { message: String, missing: Vec<String> },
+    PermissionDenied {
+        message: String,
+        missing: Vec<String>,
+    },
 }
 
 impl DbError {
@@ -293,7 +296,10 @@ impl Db {
     ) -> Self {
         let agent = ureq::AgentBuilder::new().timeout(timeout).build();
         let basic = base64_encode(format!("{}:{}", user, password).as_bytes());
-        let access = access.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let access = access
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         Db {
             url: url.to_string(),
             ns: ns.to_string(),
@@ -352,9 +358,12 @@ impl Db {
             .set("Content-Type", "application/json")
             .send_string(&body);
         let raw = match result {
-            Ok(response) => response
-                .into_string()
-                .map_err(|e| DbError::db(format!("signin response from {} was not valid UTF-8: {}", base, e)))?,
+            Ok(response) => response.into_string().map_err(|e| {
+                DbError::db(format!(
+                    "signin response from {} was not valid UTF-8: {}",
+                    base, e
+                ))
+            })?,
             Err(ureq::Error::Status(code, response)) => {
                 let detail = truncate(&response.into_string().unwrap_or_default(), 300);
                 return Err(DbError::db(format!(
@@ -409,17 +418,41 @@ impl Db {
         self.post_to(&self.url, "text/plain", body, retry)
     }
 
-    fn post_to(&self, url: &str, content_type: &str, body: &str, retry: bool) -> Result<Value, DbError> {
-        let bytes = self.send(url, content_type, "application/json", body.as_bytes(), retry)?;
-        let raw = String::from_utf8(bytes)
-            .map_err(|e| DbError::db(format!("response from {} was not valid UTF-8: {}", url, e)))?;
-        serde_json::from_str::<Value>(&raw)
-            .map_err(|_| DbError::db(format!("server did not return JSON: {}", truncate(&raw, 300))))
+    fn post_to(
+        &self,
+        url: &str,
+        content_type: &str,
+        body: &str,
+        retry: bool,
+    ) -> Result<Value, DbError> {
+        let bytes = self.send(
+            url,
+            content_type,
+            "application/json",
+            body.as_bytes(),
+            retry,
+        )?;
+        let raw = String::from_utf8(bytes).map_err(|e| {
+            DbError::db(format!("response from {} was not valid UTF-8: {}", url, e))
+        })?;
+        serde_json::from_str::<Value>(&raw).map_err(|_| {
+            DbError::db(format!(
+                "server did not return JSON: {}",
+                truncate(&raw, 300)
+            ))
+        })
     }
 
     /// POST `body` and return the response bytes. Shared by the `/sql` (JSON) and `/rpc` (CBOR)
     /// paths so token refresh and the one reconnect behave the same on both.
-    fn send(&self, url: &str, content_type: &str, accept: &str, body: &[u8], retry: bool) -> Result<Vec<u8>, DbError> {
+    fn send(
+        &self,
+        url: &str,
+        content_type: &str,
+        accept: &str,
+        body: &[u8],
+        retry: bool,
+    ) -> Result<Vec<u8>, DbError> {
         let auth = self.auth_header()?;
         let result = self
             .agent
@@ -433,8 +466,9 @@ impl Db {
         match result {
             Ok(response) => {
                 let mut bytes = Vec::new();
-                std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)
-                    .map_err(|e| DbError::db(format!("could not read the response from {}: {}", url, e)))?;
+                std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes).map_err(
+                    |e| DbError::db(format!("could not read the response from {}: {}", url, e)),
+                )?;
                 Ok(bytes)
             }
             Err(ureq::Error::Status(401, _response)) if self.access.is_some() && retry => {
@@ -444,7 +478,10 @@ impl Db {
             }
             Err(ureq::Error::Status(code, response)) => {
                 let detail = truncate(&response.into_string().unwrap_or_default(), 500);
-                Err(DbError::db(format!("HTTP {} from {}: {}", code, url, detail)))
+                Err(DbError::db(format!(
+                    "HTTP {} from {}: {}",
+                    code, url, detail
+                )))
             }
             Err(ureq::Error::Transport(t)) if retry => {
                 // ONE connection per `Db`, no pool -- but `ureq`'s agent keeps an idle keep-alive
@@ -468,7 +505,12 @@ impl Db {
         let value = self.post(&body, true)?;
         let blocks = value
             .as_array()
-            .ok_or_else(|| DbError::db(format!("unexpected response shape: {}", python_type_name(&value))))?
+            .ok_or_else(|| {
+                DbError::db(format!(
+                    "unexpected response shape: {}",
+                    python_type_name(&value)
+                ))
+            })?
             .clone();
         let first_is_use_ok = blocks
             .first()
@@ -503,13 +545,21 @@ impl Db {
             .filter(|s| !s.is_empty())
             .collect();
         let pairs: Vec<(&str, &Value)> = if parts.len() == blocks.len() {
-            parts.iter().map(String::as_str).zip(blocks.iter()).collect()
+            parts
+                .iter()
+                .map(String::as_str)
+                .zip(blocks.iter())
+                .collect()
         } else {
             blocks.iter().map(|b| (statement, b)).collect()
         };
         for (text, block) in pairs {
             let is_ok = block.get("status").and_then(Value::as_str) == Some("OK");
-            let is_empty = block.get("result").and_then(Value::as_array).map(Vec::is_empty).unwrap_or(false);
+            let is_empty = block
+                .get("result")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty)
+                .unwrap_or(false);
             if is_ok && is_empty {
                 if let Some(verb) = write_verb(text) {
                     return Some(format!(
@@ -552,7 +602,10 @@ impl Db {
                 missing: vec!["a launch credential whose role may perform this write".to_string()],
             });
         }
-        Ok(blocks.into_iter().map(|b| b.get("result").cloned().unwrap_or(Value::Null)).collect())
+        Ok(blocks
+            .into_iter()
+            .map(|b| b.get("result").cloned().unwrap_or(Value::Null))
+            .collect())
     }
 
     /// Run statements with BOUND variables (`$name` in the text, values in `vars`), through the
@@ -580,7 +633,10 @@ impl Db {
         if let Some(error) = value.get("error") {
             return Err(DbError::db(format!(
                 "query failed: {}\n  statement: {}",
-                error.get("message").and_then(Value::as_str).map_or_else(|| error.to_string(), str::to_string),
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map_or_else(|| error.to_string(), str::to_string),
                 truncate(statement, 300)
             )));
         }
@@ -588,8 +644,19 @@ impl Db {
             .get("result")
             .and_then(Value::as_array)
             .cloned()
-            .ok_or_else(|| DbError::db(format!("unexpected RPC response: {}", truncate(&value.to_string(), 300))))?;
-        if blocks.first().and_then(|b| b.get("status")).and_then(Value::as_str) == Some("OK") && blocks.len() > 1 {
+            .ok_or_else(|| {
+                DbError::db(format!(
+                    "unexpected RPC response: {}",
+                    truncate(&value.to_string(), 300)
+                ))
+            })?;
+        if blocks
+            .first()
+            .and_then(|b| b.get("status"))
+            .and_then(Value::as_str)
+            == Some("OK")
+            && blocks.len() > 1
+        {
             blocks.remove(0); // the USE statement
         }
         if let Some(expect) = expect {
@@ -610,9 +677,18 @@ impl Db {
             .iter()
             .enumerate()
             .filter(|(_, b)| b.get("status").and_then(Value::as_str) != Some("OK"))
-            .map(|(i, b)| (i + 1, python_str_value(&b.get("result").cloned().unwrap_or(Value::Null))))
+            .map(|(i, b)| {
+                (
+                    i + 1,
+                    python_str_value(&b.get("result").cloned().unwrap_or(Value::Null)),
+                )
+            })
             .collect();
-        if let Some((index, message)) = failed.iter().find(|(_, m)| !m.contains(CASCADE)).or(failed.first()) {
+        if let Some((index, message)) = failed
+            .iter()
+            .find(|(_, m)| !m.contains(CASCADE))
+            .or(failed.first())
+        {
             return Err(DbError::db(format!(
                 "statement {} failed: {}
   statement: {}",
@@ -635,7 +711,8 @@ impl Db {
         };
         for block in &blocks {
             if block.get("status").and_then(Value::as_str) != Some("OK") {
-                let message = python_str_value(&block.get("result").cloned().unwrap_or(Value::Null));
+                let message =
+                    python_str_value(&block.get("result").cloned().unwrap_or(Value::Null));
                 return Ok((false, message));
             }
         }
@@ -692,18 +769,22 @@ impl Db {
         let base = self.base_url();
         match self.agent.get(&format!("{}/version", base)).call() {
             Ok(response) => {
-                let text = response
-                    .into_string()
-                    .map_err(|e| DbError::db(format!("could not reach {} to ask its version: {}", base, e)))?;
+                let text = response.into_string().map_err(|e| {
+                    DbError::db(format!(
+                        "could not reach {} to ask its version: {}",
+                        base, e
+                    ))
+                })?;
                 Ok(text.trim().to_string())
             }
             Err(ureq::Error::Status(code, _response)) => Err(DbError::db(format!(
                 "could not reach {} to ask its version: HTTP {}",
                 base, code
             ))),
-            Err(ureq::Error::Transport(t)) => {
-                Err(DbError::db(format!("could not reach {} to ask its version: {}", base, t)))
-            }
+            Err(ureq::Error::Transport(t)) => Err(DbError::db(format!(
+                "could not reach {} to ask its version: {}",
+                base, t
+            ))),
         }
     }
 
@@ -734,12 +815,18 @@ impl Db {
     /// instead reported "0", the exact silence-as-knowledge this file forbids (minor m3) -- an
     /// unreadable count and an empty table must not look the same.
     pub fn count(&self, table: &str) -> Result<i64, DbError> {
-        let blocks = self.sql(&format!("SELECT count() AS n FROM {} GROUP ALL", table), Some(1))?;
+        let blocks = self.sql(
+            &format!("SELECT count() AS n FROM {} GROUP ALL", table),
+            Some(1),
+        )?;
         let rows = blocks[0].as_array().cloned().unwrap_or_default();
         match rows.first() {
             None => Ok(0),
             Some(row) => row.get("n").and_then(Value::as_i64).ok_or_else(|| {
-                DbError::db(format!("count() on {:?} got a row with no readable n: {}", table, row))
+                DbError::db(format!(
+                    "count() on {:?} got a row with no readable n: {}",
+                    table, row
+                ))
             }),
         }
     }
@@ -771,7 +858,11 @@ fn python_type_name(value: &Value) -> &'static str {
 /// for the agent/access identifiers and the reported version string; Rust's `{:?}` renders
 /// `"agent"`, not Python's `'agent'`).
 fn python_repr_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::with_capacity(s.len() + 2);
     out.push(quote);
     for ch in s.chars() {
@@ -816,8 +907,10 @@ fn python_repr_value(value: &Value) -> String {
             format!("[{}]", parts.join(", "))
         }
         Value::Object(map) => {
-            let parts: Vec<String> =
-                map.iter().map(|(k, v)| format!("{}: {}", python_repr_str(k), python_repr_value(v))).collect();
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", python_repr_str(k), python_repr_value(v)))
+                .collect();
             format!("{{{}}}", parts.join(", "))
         }
     }
@@ -847,8 +940,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
         out.push(B64[((n >> 18) & 0x3f) as usize] as char);
         out.push(B64[((n >> 12) & 0x3f) as usize] as char);
-        out.push(if chunk.len() > 1 { B64[((n >> 6) & 0x3f) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { B64[(n & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            B64[((n >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -894,7 +995,9 @@ mod tests {
         // Regression for blocking finding B1: a line break other than \n/\r\n/\r ALSO ends a `--`
         // comment (it is one of Python's other str.splitlines() boundaries), so the statement after
         // it must survive, not be swallowed into the comment.
-        for boundary in ['\u{0b}', '\u{0c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}'] {
+        for boundary in [
+            '\u{0b}', '\u{0c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}',
+        ] {
             let text = format!("SELECT 1; -- c{boundary}SELECT 2;\n");
             let parts: Vec<String> = split_statements(&text)
                 .into_iter()
@@ -938,15 +1041,26 @@ mod tests {
 
     #[test]
     fn the_measured_series_is_accepted() {
-        assert_eq!(version_problem_for(URL, "surrealdb-3.1.6+20260813.cfbaec4"), None);
+        assert_eq!(
+            version_problem_for(URL, "surrealdb-3.1.6+20260813.cfbaec4"),
+            None
+        );
     }
 
     #[test]
     fn another_major_series_is_refused_by_name() {
         let problem = version_problem_for(URL, "surrealdb-4.0.0").expect("must be a problem");
-        assert!(!problem.starts_with("NOTE:"), "a different major series is a refusal, not a note");
+        assert!(
+            !problem.starts_with("NOTE:"),
+            "a different major series is a refusal, not a note"
+        );
         for expected in ["4.0.0", "changefeeds", "re-measure"] {
-            assert!(problem.contains(expected), "missing {:?} in {}", expected, problem);
+            assert!(
+                problem.contains(expected),
+                "missing {:?} in {}",
+                expected,
+                problem
+            );
         }
     }
 
@@ -977,7 +1091,11 @@ mod tests {
     #[test]
     fn write_verb_matches_case_insensitively_on_a_word_boundary() {
         assert_eq!(write_verb("  create a:1 SET x=1"), Some("CREATE"));
-        assert_eq!(write_verb("CREATED_AT x=1"), None, "must not match a prefix of a longer word");
+        assert_eq!(
+            write_verb("CREATED_AT x=1"),
+            None,
+            "must not match a prefix of a longer word"
+        );
         assert_eq!(write_verb("SELECT * FROM a"), None);
         assert_eq!(write_verb("RELATE a->b->c"), Some("RELATE"));
     }

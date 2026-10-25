@@ -32,7 +32,10 @@ const SCALAR_NULL: &[&str] = &["null", "none", "~", ""];
 /// section 3, "Attempted, then reverted: a path dependency on `crates/ops-core`".
 fn is_space(c: char) -> bool {
     if c.is_ascii() {
-        matches!(c, '\t' | '\n' | '\x0b' | '\x0c' | '\r' | '\x1c'..='\x1f' | ' ')
+        matches!(
+            c,
+            '\t' | '\n' | '\x0b' | '\x0c' | '\r' | '\x1c'..='\x1f' | ' '
+        )
     } else {
         c.is_whitespace()
     }
@@ -59,7 +62,15 @@ fn py_splitlines(text: &str) -> Vec<&str> {
     fn is_boundary(c: char) -> bool {
         matches!(
             c,
-            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\u{0b}'
+                | '\u{0c}'
+                | '\u{1c}'
+                | '\u{1d}'
+                | '\u{1e}'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         )
     }
     let indices: Vec<(usize, char)> = text.char_indices().collect();
@@ -74,7 +85,11 @@ fn py_splitlines(text: &str) -> Vec<&str> {
             if ch == '\r' && next < indices.len() && indices[next].1 == '\n' {
                 next += 1;
             }
-            start = if next < indices.len() { indices[next].0 } else { text.len() };
+            start = if next < indices.len() {
+                indices[next].0
+            } else {
+                text.len()
+            };
             i = next;
             continue;
         }
@@ -98,38 +113,53 @@ pub fn parse_yaml(text: &str) -> R<Value> {
         let number = i + 1;
         let before_comment = raw.split('#').next().unwrap_or("");
         if before_comment.contains('\t') {
-            return Err(YamlError(format!("line {number}: tabs are not allowed for indentation")));
+            return Err(YamlError(format!(
+                "line {number}: tabs are not allowed for indentation"
+            )));
         }
         let stripped = strip_comment(raw);
         if py_strip(&stripped).is_empty() {
             continue;
         }
         let lstripped = py_lstrip(&stripped);
-        if lstripped.starts_with('&') || lstripped.starts_with('*') || lstripped.starts_with("---") {
+        if lstripped.starts_with('&') || lstripped.starts_with('*') || lstripped.starts_with("---")
+        {
             return Err(YamlError(format!(
                 "line {number}: anchors, aliases and documents are not supported"
             )));
         }
         if ends_with_block_scalar_marker(&stripped) {
-            return Err(YamlError(format!("line {number}: multi-line scalars are not supported")));
+            return Err(YamlError(format!(
+                "line {number}: multi-line scalars are not supported"
+            )));
         }
         // `len(stripped) - len(stripped.lstrip())` in Python counts CODE POINTS, not bytes -- a
         // line indented with a multi-byte space character (e.g. U+00A0 NBSP, which Python's
         // whitespace class also strips) would otherwise get a larger indent than the oracle sees.
         let indent = stripped.chars().count() - lstripped.chars().count();
-        lines.push(Line { number, indent, content: py_strip(&stripped).to_string() });
+        lines.push(Line {
+            number,
+            indent,
+            content: py_strip(&stripped).to_string(),
+        });
     }
     if lines.is_empty() {
         let (value, index) = parse_block(&lines, 0, 0)?;
         if index != lines.len() {
-            return Err(YamlError(format!("line {}: unexpected indentation", lines[index].number)));
+            return Err(YamlError(format!(
+                "line {}: unexpected indentation",
+                lines[index].number
+            )));
         }
         return Ok(value);
     }
     let base_indent = lines[0].indent;
     let (value, index) = parse_block(&lines, 0, base_indent)?;
     if index != lines.len() {
-        return Err(YamlError(format!("line {}: unexpected indentation", lines[index].number)));
+        return Err(YamlError(format!(
+            "line {}: unexpected indentation",
+            lines[index].number
+        )));
     }
     Ok(value)
 }
@@ -214,7 +244,10 @@ fn parse_map(lines: &[Line], mut index: usize, indent: usize) -> R<(Value, usize
             break;
         }
         if line.indent > indent {
-            return Err(YamlError(format!("line {}: unexpected indentation", line.number)));
+            return Err(YamlError(format!(
+                "line {}: unexpected indentation",
+                line.number
+            )));
         }
         if line.content.starts_with("- ") {
             break;
@@ -227,13 +260,20 @@ fn parse_map(lines: &[Line], mut index: usize, indent: usize) -> R<(Value, usize
         let key = py_strip(&content[..colon]).to_string();
         let rest = py_strip(&content[colon + 1..]).to_string();
         if out.contains_key(&key) {
-            return Err(YamlError(format!("line {number}: duplicate key {}", py_repr_str(&key))));
+            return Err(YamlError(format!(
+                "line {number}: duplicate key {}",
+                py_repr_str(&key)
+            )));
         }
         if !rest.is_empty() {
             out.insert(key, scalar(&rest, number)?);
             index += 1;
         } else {
-            let child_indent = if index + 1 < lines.len() { lines[index + 1].indent } else { line.indent };
+            let child_indent = if index + 1 < lines.len() {
+                lines[index + 1].indent
+            } else {
+                line.indent
+            };
             if index + 1 >= lines.len() || child_indent <= line.indent {
                 out.insert(key, Value::Null);
                 index += 1;
@@ -256,10 +296,17 @@ fn parse_list(lines: &[Line], mut index: usize, indent: usize) -> R<(Value, usiz
             break;
         }
         if line.indent > indent {
-            return Err(YamlError(format!("line {}: unexpected indentation", line.number)));
+            return Err(YamlError(format!(
+                "line {}: unexpected indentation",
+                line.number
+            )));
         }
         let number = line.number;
-        let item = if line.content == "-" { String::new() } else { py_strip(&line.content[2..]).to_string() };
+        let item = if line.content == "-" {
+            String::new()
+        } else {
+            py_strip(&line.content[2..]).to_string()
+        };
         let starts_flow = item.starts_with('{')
             || item.starts_with('[')
             || item.starts_with('"')
@@ -304,7 +351,11 @@ fn scalar(text: &str, number: usize) -> R<Value> {
         let first = text.chars().next().unwrap();
         let last = text.chars().last().unwrap();
         if first == last && (first == '\'' || first == '"') {
-            let inner: String = text.chars().skip(1).take(text.chars().count() - 2).collect();
+            let inner: String = text
+                .chars()
+                .skip(1)
+                .take(text.chars().count() - 2)
+                .collect();
             return Ok(Value::String(inner));
         }
     }
@@ -348,7 +399,10 @@ fn scalar(text: &str, number: usize) -> R<Value> {
         }
     }
     if text.chars().any(|c| "&*|>".contains(c)) {
-        return Err(YamlError(format!("line {number}: unsupported characters in scalar {}", py_repr_str(text))));
+        return Err(YamlError(format!(
+            "line {number}: unsupported characters in scalar {}",
+            py_repr_str(text)
+        )));
     }
     Ok(Value::String(text.to_string()))
 }
@@ -425,7 +479,10 @@ fn py_float(text: &str) -> Option<f64> {
     }
     // Reject things Rust's f64 parser accepts but Python's float() text form here should not need
     // (hex floats aren't part of this subset's inputs); a plain decimal/exponent check is enough.
-    if !cleaned.chars().all(|c| c.is_ascii_digit() || "+-.eE".contains(c)) {
+    if !cleaned
+        .chars()
+        .all(|c| c.is_ascii_digit() || "+-.eE".contains(c))
+    {
         return None;
     }
     if !cleaned.chars().any(|c| c.is_ascii_digit()) {
@@ -482,8 +539,12 @@ fn flow(text: &str, number: usize) -> R<Value> {
             out.push('"');
         }
     }
-    serde_json::from_str::<Value>(&out)
-        .map_err(|e| YamlError(format!("line {number}: cannot parse {} ({e})", py_repr_str(text))))
+    serde_json::from_str::<Value>(&out).map_err(|e| {
+        YamlError(format!(
+            "line {number}: cannot parse {} ({e})",
+            py_repr_str(text)
+        ))
+    })
 }
 
 fn is_plain_number(text: &str) -> bool {
@@ -554,7 +615,10 @@ mod tests {
         assert_eq!(got["d"], serde_json::json!(["x", "y", 3]));
         assert_eq!(got["e"], serde_json::json!({"k": "v", "n": [1, 2]}));
         assert_eq!(got["f"], serde_json::json!({"g": true, "h": null}));
-        assert_eq!(got["items"][0], serde_json::json!({"name": "one", "size": 2}));
+        assert_eq!(
+            got["items"][0],
+            serde_json::json!({"name": "one", "size": 2})
+        );
         assert_eq!(got["items"][1]["nested"], serde_json::json!({"deep": 3.5}));
         assert_eq!(got["plain"], serde_json::json!(["a", "b"]));
     }

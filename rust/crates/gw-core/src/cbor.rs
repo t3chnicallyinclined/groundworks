@@ -27,13 +27,15 @@ const TAG_UUID_BINARY: u64 = 37;
 /// Encode a JSON value as CBOR: text stays text, numbers stay numbers.
 pub fn encode(value: &Value) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    ciborium::into_writer(value, &mut out).map_err(|e| format!("could not encode a CBOR request: {e}"))?;
+    ciborium::into_writer(value, &mut out)
+        .map_err(|e| format!("could not encode a CBOR request: {e}"))?;
     Ok(out)
 }
 
 /// Decode a CBOR response into JSON, flattening SurrealDB's tags.
 pub fn decode(bytes: &[u8]) -> Result<Value, String> {
-    let value: Cbor = ciborium::from_reader(bytes).map_err(|e| format!("server did not return CBOR: {e}"))?;
+    let value: Cbor =
+        ciborium::from_reader(bytes).map_err(|e| format!("server did not return CBOR: {e}"))?;
     Ok(to_json(value))
 }
 
@@ -96,17 +98,30 @@ fn tagged(tag: u64, inner: Cbor) -> Value {
         }
         (TAG_UUID_BINARY, Cbor::Bytes(b)) if b.len() == 16 => {
             let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-            Value::String(format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]))
+            Value::String(format!(
+                "{}-{}-{}-{}-{}",
+                &h[..8],
+                &h[8..12],
+                &h[12..16],
+                &h[16..20],
+                &h[20..]
+            ))
         }
         (TAG_DURATION_COMPACT, Cbor::Array(parts)) => {
             let mut parts = parts.into_iter().map(to_json);
             let secs = parts.next().and_then(|v| v.as_u64()).unwrap_or(0);
             let nanos = parts.next().and_then(|v| v.as_u64()).unwrap_or(0);
-            Value::String(if nanos == 0 { format!("{secs}s") } else { format!("{secs}s{nanos}ns") })
+            Value::String(if nanos == 0 {
+                format!("{secs}s")
+            } else {
+                format!("{secs}s{nanos}ns")
+            })
         }
-        (TAG_DATETIME_TEXT | TAG_TABLE | TAG_RECORD_ID | TAG_UUID_TEXT | TAG_DECIMAL_TEXT | TAG_DURATION_TEXT, inner) => {
-            to_json(inner)
-        }
+        (
+            TAG_DATETIME_TEXT | TAG_TABLE | TAG_RECORD_ID | TAG_UUID_TEXT | TAG_DECIMAL_TEXT
+            | TAG_DURATION_TEXT,
+            inner,
+        ) => to_json(inner),
         (_, inner) => to_json(inner),
     }
 }
@@ -162,18 +177,30 @@ mod tests {
     #[test]
     fn surreal_tags_become_plain_json() {
         assert_eq!(
-            round_trip_tag(TAG_RECORD_ID, Cbor::Array(vec![Cbor::Text("receipt".into()), Cbor::Text("ab12".into())])),
+            round_trip_tag(
+                TAG_RECORD_ID,
+                Cbor::Array(vec![
+                    Cbor::Text("receipt".into()),
+                    Cbor::Text("ab12".into())
+                ])
+            ),
             json!("receipt:ab12")
         );
         assert_eq!(round_trip_tag(TAG_NONE, Cbor::Null), Value::Null);
         assert_eq!(
             round_trip_tag(
                 TAG_DATETIME_COMPACT,
-                Cbor::Array(vec![Cbor::Integer(1_761_284_828i64.into()), Cbor::Integer(500_000_000u64.into())])
+                Cbor::Array(vec![
+                    Cbor::Integer(1_761_284_828i64.into()),
+                    Cbor::Integer(500_000_000u64.into())
+                ])
             ),
             json!("2025-10-24T05:47:08.5Z")
         );
-        assert_eq!(round_trip_tag(TAG_DATETIME_TEXT, Cbor::Text("2026-10-24T05:47:08Z".into())), json!("2026-10-24T05:47:08Z"));
+        assert_eq!(
+            round_trip_tag(TAG_DATETIME_TEXT, Cbor::Text("2026-10-24T05:47:08Z".into())),
+            json!("2026-10-24T05:47:08Z")
+        );
     }
 
     #[test]

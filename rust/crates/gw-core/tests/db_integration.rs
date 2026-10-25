@@ -36,7 +36,11 @@ fn find_surreal() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let exe_name = if cfg!(windows) { "surreal.exe" } else { "surreal" };
+    let exe_name = if cfg!(windows) {
+        "surreal.exe"
+    } else {
+        "surreal"
+    };
     if let Some(path_var) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_var) {
             let candidate = dir.join(exe_name);
@@ -46,7 +50,11 @@ fn find_surreal() -> Option<PathBuf> {
         }
     }
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
-        let candidate = PathBuf::from(home).join("AppData").join("Local").join("SurrealDB").join("surreal.exe");
+        let candidate = PathBuf::from(home)
+            .join("AppData")
+            .join("Local")
+            .join("SurrealDB")
+            .join("surreal.exe");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -57,7 +65,11 @@ fn find_surreal() -> Option<PathBuf> {
 fn free_port() -> u16 {
     // Bind then drop: the OS will not hand this exact port to anyone else for a little while, and
     // it is never one of a live database's fixed ports (mirrors surreal_bin.free_port's reasoning).
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 /// A throwaway `surreal start ... memory` this test owns. Stopped by its own `Child` handle in
@@ -70,7 +82,16 @@ struct Throwaway {
 impl Throwaway {
     fn start(binary: &std::path::Path, port: u16) -> Self {
         let child = Command::new(binary)
-            .args(["start", "--bind", &format!("127.0.0.1:{port}"), "--user", "root", "--pass", "root", "memory"])
+            .args([
+                "start",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+                "--user",
+                "root",
+                "--pass",
+                "root",
+                "memory",
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -91,14 +112,21 @@ impl Throwaway {
                 panic!("surreal on port {} exited early: {status:?}", self.port);
             }
             let health = format!("http://127.0.0.1:{}/health", self.port);
-            if ureq::get(&health).timeout(Duration::from_millis(500)).call().is_ok() {
+            if ureq::get(&health)
+                .timeout(Duration::from_millis(500))
+                .call()
+                .is_ok()
+            {
                 std::thread::sleep(Duration::from_millis(300)); // settle, like surreal_bin.SETTLE
                 if matches!(self.child.try_wait(), Ok(None)) {
                     return;
                 }
             }
             if Instant::now() > deadline {
-                panic!("NOT EXECUTED: surreal did not become healthy on port {}", self.port);
+                panic!(
+                    "NOT EXECUTED: surreal did not become healthy on port {}",
+                    self.port
+                );
             }
             std::thread::sleep(Duration::from_millis(150));
         }
@@ -148,18 +176,40 @@ fn a_denied_write_under_record_auth_raises_and_is_never_read_as_empty_ok() {
     let port = free_port();
     let surreal = Throwaway::start(&binary, port);
 
-    let root = Db::new(&surreal.url(), "gwtest", "d1", "root", "root", Duration::from_secs(10), None);
+    let root = Db::new(
+        &surreal.url(),
+        "gwtest",
+        "d1",
+        "root",
+        "root",
+        Duration::from_secs(10),
+        None,
+    );
     root.script(SCHEMA).expect("schema must apply");
     root.sql("CREATE user:u1 SET login = 'agent1', pass = 'pw'", None)
         .expect("seeding the signin row must succeed");
 
-    let agent = Db::new(&surreal.url(), "gwtest", "d1", "agent1", "pw", Duration::from_secs(10), Some("agent"));
+    let agent = Db::new(
+        &surreal.url(),
+        "gwtest",
+        "d1",
+        "agent1",
+        "pw",
+        Duration::from_secs(10),
+        Some("agent"),
+    );
 
     // arm 1: `sql` raises PermissionDenied, never returns an empty-OK result.
     match agent.sql("CREATE locked:x SET v = 1", None) {
         Err(DbError::PermissionDenied { message, missing }) => {
-            assert!(message.contains("CREATE"), "message should name the verb: {message}");
-            assert!(message.contains("refused by datastore permissions"), "{message}");
+            assert!(
+                message.contains("CREATE"),
+                "message should name the verb: {message}"
+            );
+            assert!(
+                message.contains("refused by datastore permissions"),
+                "{message}"
+            );
             assert!(!missing.is_empty(), "a denial must name what is missing");
         }
         other => panic!("expected PermissionDenied, got {other:?}"),
@@ -174,7 +224,8 @@ fn a_denied_write_under_record_auth_raises_and_is_never_read_as_empty_ok() {
     }
 
     // root is never denied: the same write the agent could not make succeeds under root.
-    root.sql("CREATE locked:z SET v = 1", None).expect("root bypasses table PERMISSIONS");
+    root.sql("CREATE locked:z SET v = 1", None)
+        .expect("root bypasses table PERMISSIONS");
     assert_eq!(root.count("locked").unwrap(), 1, "only root's write landed");
 }
 
@@ -188,8 +239,19 @@ fn a_server_restart_mid_run_reconnects_on_the_same_db() {
     let port = free_port();
 
     let first = Throwaway::start(&binary, port);
-    let db = Db::new(&first.url(), "gwtest", "d1", "root", "root", Duration::from_secs(10), None);
-    assert_eq!(db.sql("RETURN 1", Some(1)).unwrap(), vec![serde_json::json!(1)]);
+    let db = Db::new(
+        &first.url(),
+        "gwtest",
+        "d1",
+        "root",
+        "root",
+        Duration::from_secs(10),
+        None,
+    );
+    assert_eq!(
+        db.sql("RETURN 1", Some(1)).unwrap(),
+        vec![serde_json::json!(1)]
+    );
     drop(first); // stop the first server by its own handle
 
     // Give the OS a moment to release the port before the second instance rebinds it.
@@ -203,7 +265,10 @@ fn a_server_restart_mid_run_reconnects_on_the_same_db() {
 
     let second = Throwaway::start(&binary, port);
     // Same `Db`, same URL, no pool to evict: it must not still be wedged on the dead connection.
-    assert_eq!(db.sql("RETURN 1", Some(1)).unwrap(), vec![serde_json::json!(1)]);
+    assert_eq!(
+        db.sql("RETURN 1", Some(1)).unwrap(),
+        vec![serde_json::json!(1)]
+    );
     drop(second);
 }
 
@@ -275,11 +340,24 @@ fn handle_fake_request(stream: TcpStream, version_body: &str) {
 #[test]
 fn ping_refuses_a_fake_server_reporting_a_different_major_series() {
     let (url, stop) = spawn_fake_version_server("surrealdb-2.0.0+fake");
-    let db = Db::new(&url, "gwtest", "d1", "root", "root", Duration::from_secs(5), None);
+    let db = Db::new(
+        &url,
+        "gwtest",
+        "d1",
+        "root",
+        "root",
+        Duration::from_secs(5),
+        None,
+    );
 
-    let err = db.ping(true).expect_err("a 2.x server must refuse, not pass");
+    let err = db
+        .ping(true)
+        .expect_err("a 2.x server must refuse, not pass");
     let message = err.to_string();
-    assert!(message.contains("measured against SurrealDB 3.1"), "{message}");
+    assert!(
+        message.contains("measured against SurrealDB 3.1"),
+        "{message}"
+    );
     assert!(message.contains("2.0.0"), "{message}");
     assert!(message.contains("re-measure"), "{message}");
 

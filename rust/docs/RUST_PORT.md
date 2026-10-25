@@ -509,3 +509,23 @@ candidate in full; `support` must come from a unit still present and unchanged s
 once. `search` and `ask` share one query type and one cross-project read (`fan_out`), and `search` is an excerpting
 view of `retrieve`, so there is one ranked read. Measured: SurrealDB's `@@` with several words requires all of
 them, so a plain-language question found nothing until retrieval matched any word.
+
+## lens and panel (2026-10-25): step 2 of porting the engine
+
+`crates/gw-ops/src/panel.rs` ports `groundworks/panel/panel.py` (v0.2.0): config validation, the machine
+lines (STANCE, OBJECTION, NEW, FLAW), every round-2 check (missing answer or stance, novelty gate, verbatim
+FLAW for a changed stance, objection categories, dissent quota by category, agreement check with
+counterfactuals that must add an objection), the weighted tally with its minority report, and the
+enforcement log, each with a unit test ported from `tests/test_panel.py`. Stated deviations: a panel is a
+store record locked when it is opened (config and digest written once, READONLY); the round-2 label order is
+sha256(digest, seat), not Python's seeded shuffle; one `panel` call anonymizes round 1 when it is complete and
+tallies when nothing is owed; the owner's thresholds come from `registry/panel.toml`; there is no launch
+identity, so each answer records who sent it instead of refusing another seat's.
+
+`crates/gw-ops/src/lens.rs` ports the behaviour of `lens.py`: a lens has a charter, a standard never looser
+than the store's, and reading through it shows what passes and what no longer does (Python's drift). Every
+expert definition is a lens; its checks are the bold lead words under `## What you check`; its standard is
+`lens-standard:` (default INFERRED). Findings are facts naming the lens; an attack is a fact that disputes
+or supports another (`attacks`, `stance`), and the store refuses an attack on a fact that does not exist.
+Not ported: datastore views over labels and the framework crosswalk, because the Rust store has no labels
+yet. Migration 0010; four rules each proven able to go red in `tests/mutations.rs`.

@@ -14,7 +14,7 @@ use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 use serde_json::{Value, json};
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 22] = [
+pub const TOOLS: [&str; 26] = [
     "answer",
     "ask",
     "bootstrap",
@@ -29,6 +29,10 @@ pub const TOOLS: [&str; 22] = [
     "knowledge_get",
     "knowledge_list",
     "knowledge_search",
+    "lens",
+    "panel",
+    "panel_open",
+    "panel_submit",
     "profile",
     "project_list",
     "project_register",
@@ -196,6 +200,10 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
         base.join("experts/selftest-expert.md"),
         "---\nname: selftest-expert\ndescription: Owns the demo notes and guide.\n---\n\nSee `notes.txt` and `docs/GUIDE.md`.\n",
     )?;
+    std::fs::write(
+        base.join("experts/selftest-reviewer.md"),
+        "---\nname: selftest-reviewer\ndescription: Reviews the demo.\n---\n\n## What you check\n- **Rollback.** What it resimulates.\n",
+    )?;
     let toml_path = |p: &Path| p.display().to_string().replace('\\', "/");
     std::fs::write(
         home.join("groundworks.toml"),
@@ -272,7 +280,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     )?;
     let tools = s.tools()?;
     c.check(
-        "the tool list is exactly the 22 tools",
+        "the tool list is exactly the 26 tools",
         tools == TOOLS,
         &format!("{tools:?}"),
     );
@@ -456,6 +464,112 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     c.check(
         "a made-up quote fails the check",
         err && text.contains("not found word for word"),
+        &text,
+    );
+
+    // Lenses: a finding through one lens, attacked by another; both stay on record, side by side.
+    let finding = json!({"project": "demo", "kind": "fact", "text": "rollback resimulates every frame",
+                         "source": "selftest", "confidence": "INFERRED", "by": "selftest", "lens": "selftest-expert"});
+    let (err, text) = s.call("journal_add", finding)?;
+    let fact = text
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .trim_end_matches(':')
+        .to_owned();
+    c.check(
+        "a finding is recorded through a lens",
+        !err && fact.starts_with("fact:") && text.contains("[lens selftest-expert]"),
+        &text,
+    );
+    let attack = json!({"project": "demo", "kind": "fact", "text": "only confirmed frames are resimulated",
+                        "source": "notes.txt", "confidence": "INFERRED", "by": "selftest", "lens": "selftest-reviewer",
+                        "attacks": fact, "stance": "disputes"});
+    let (err, text) = s.call("journal_add", attack)?;
+    c.check(
+        "another lens may dispute it",
+        !err && text.contains("disputes fact:"),
+        &text,
+    );
+    let (err, text) = s.call("lens", json!({"lens": "selftest-expert", "project": "demo"}))?;
+    c.check(
+        "reading through the lens shows the finding and the dispute together",
+        !err && text.contains("rollback resimulates every frame") && text.contains("DISPUTES by selftest-reviewer"),
+        &text,
+    );
+    let ghost = json!({"project": "demo", "kind": "fact", "text": "x", "source": "s", "confidence": "INFERRED",
+                       "by": "selftest", "attacks": "fact:nosuchfact", "stance": "disputes"});
+    let (err, text) = s.call("journal_add", ghost)?;
+    c.check("an attack on a fact that does not exist is refused", err, &text);
+    let (err, text) = s.call("lens", json!({}))?;
+    c.check(
+        "the lens list reads the checks from the expert file",
+        !err && text.contains("selftest-reviewer (standard INFERRED or CONFIRMED): checks Rollback"),
+        &text,
+    );
+
+    // A panel: locked at open, blind round 1, anonymized round 2, checks before the tally.
+    let seats = ["seat_a", "seat_b", "seat_c"];
+    let cats = ["record", "risk", "cost"];
+    let (err, text) = s.call(
+        "panel_open",
+        json!({"project": "demo", "panel": {"panel_id": "selftest", "target": "notes.txt",
+               "question": "Is the rollback note right?", "options": ["affirm", "reverse"],
+               "objection_categories": cats, "seats": seats.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()}}),
+    )?;
+    let panel = text.split_whitespace().next().unwrap_or_default().to_owned();
+    c.check(
+        "a panel is locked when it is opened",
+        !err && panel.starts_with("panel:") && text.contains("LOCKED"),
+        &text,
+    );
+    let stance = |o: &str| format!("STANCE: {o} | CONFIDENCE: high | DEALBREAKER: no");
+    let r1 = |i: usize| if i == 2 { "reverse" } else { "affirm" };
+    let submit = |round: &str, seat: &str, text: String| json!({"project": "demo", "panel": panel, "round": round, "seat": seat, "text": text});
+    for (i, seat) in seats.iter().enumerate() {
+        let text = format!("As {seat}, I read the note on its own terms.\n{}\n", stance(r1(i)));
+        s.call("panel_submit", submit("1", seat, text))?;
+    }
+    let (err, text) = s.call("panel", json!({"project": "demo", "panel": panel}))?;
+    c.check(
+        "round 1 is anonymized once complete, with every seat id taken out",
+        !err && text.contains("Member A") && !seats.iter().any(|s| text.contains(s)),
+        &text,
+    );
+    let (err, text) = s.call("panel_submit", submit("1", "seat_a", stance("affirm")))?;
+    c.check(
+        "round 1 is closed after anonymizing",
+        err && text.contains("round 1 is closed"),
+        &text,
+    );
+    let r2 = |i: usize| {
+        format!(
+            "Member B overlooks the frames.\nOBJECTION: {} | a concern only this seat raises\n\
+             NEW: the note never says which frames are confirmed, seat {i}\n{}\n",
+            cats[i],
+            stance(r1(i))
+        )
+    };
+    for (i, seat) in seats.iter().enumerate().take(2) {
+        s.call("panel_submit", submit("2", seat, r2(i)))?;
+    }
+    let (err, text) = s.call("panel", json!({"project": "demo", "panel": panel}))?;
+    c.check(
+        "the tally waits while a re-prompt is owed",
+        !err && text.contains("OWED missing_answer seat_c"),
+        &text,
+    );
+    s.call("panel_submit", submit("2", "seat_c", r2(2)))?;
+    let (err, text) = s.call("panel", json!({"project": "demo", "panel": panel}))?;
+    c.check(
+        "once nothing is owed the panel tallies (two of three reach the two-thirds bar)",
+        !err && text.contains("CONSENSUS: affirm"),
+        &text,
+    );
+    let (err, text) = s.call("panel_submit", submit("2", "seat_a", r2(0)))?;
+    c.check(
+        "nothing is accepted after the tally",
+        err && text.contains("tallied"),
         &text,
     );
 

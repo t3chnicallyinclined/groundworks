@@ -9,11 +9,27 @@ use std::path::Path;
 pub const FORMAT: &str = "groundworks.known_errors/1";
 const KINDS: &[&str] = &["writes", "loads", "validator"];
 const ENTRY_KEYS: &[&str] = &["id", "error", "found", "added", "check", "note"];
-const WRITE_OPS: &[&str] =
-    &["propose", "cite", "confirm", "rule_out", "support", "relate", "critique", "answer", "mark_ready"];
+const WRITE_OPS: &[&str] = &[
+    "propose",
+    "cite",
+    "confirm",
+    "rule_out",
+    "support",
+    "relate",
+    "critique",
+    "answer",
+    "mark_ready",
+];
 const WRITE_OUTCOMES: &[&str] = &["accepted", "refused", "denied"];
 const LOAD_LABELS: &[&str] = &["fixture", "empty_dir", "missing_dir", "wrong_extension"];
-const LOAD_STEPS: &[&str] = &["count", "load", "correct", "expect_count", "expect_unit", "expect_load"];
+const LOAD_STEPS: &[&str] = &[
+    "count",
+    "load",
+    "correct",
+    "expect_count",
+    "expect_unit",
+    "expect_load",
+];
 
 /// `groundworks/evaluator.py`'s `RegressionFileError`, carrying the same message text.
 #[derive(Debug, Clone)]
@@ -31,7 +47,9 @@ pub fn parse(text: &str, where_: &str) -> Result<Value, RegressionFileError> {
     let data: Value = serde_json::from_str(text)
         .map_err(|e| RegressionFileError(format!("{where_} is not valid JSON: {e}")))?;
     let Some(obj) = data.as_object() else {
-        return Err(RegressionFileError(format!("{where_} must be a JSON object with format and entries")));
+        return Err(RegressionFileError(format!(
+            "{where_} must be a JSON object with format and entries"
+        )));
     };
     let mut problems = Vec::new();
     if obj.get("format").and_then(Value::as_str) != Some(FORMAT) {
@@ -42,7 +60,10 @@ pub fn parse(text: &str, where_: &str) -> Result<Value, RegressionFileError> {
     }
     let entries = obj.get("entries").and_then(Value::as_array);
     if entries.is_none() {
-        problems.push("entries must be a list (it may be empty only until the first error is recorded)".to_string());
+        problems.push(
+            "entries must be a list (it may be empty only until the first error is recorded)"
+                .to_string(),
+        );
     }
     let empty = Vec::new();
     let entries = entries.unwrap_or(&empty);
@@ -58,8 +79,11 @@ pub fn parse(text: &str, where_: &str) -> Result<Value, RegressionFileError> {
             .map(super::py_str_of)
             .unwrap_or_else(|| i.to_string());
         label = format!("entry {id_repr}");
-        let mut unknown: Vec<&str> =
-            entry_obj.keys().map(String::as_str).filter(|k| !ENTRY_KEYS.contains(k)).collect();
+        let mut unknown: Vec<&str> = entry_obj
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !ENTRY_KEYS.contains(k))
+            .collect();
         unknown.sort();
         if !unknown.is_empty() {
             problems.push(format!("{label} has unknown key(s) {}", unknown.join(", ")));
@@ -114,12 +138,16 @@ fn check_problems(check: &serde_json::Map<String, Value>) -> Vec<String> {
     };
     let mut problems = Vec::new();
     if kind == "writes" {
-        let writers = check.get("writers").and_then(Value::as_object).filter(|w| !w.is_empty());
+        let writers = check
+            .get("writers")
+            .and_then(Value::as_object)
+            .filter(|w| !w.is_empty());
         if writers.is_none() {
             problems.push("a writes check needs writers: {name: {role, lens}}".to_string());
         }
-        let writer_names: std::collections::HashSet<&str> =
-            writers.map(|w| w.keys().map(String::as_str).collect()).unwrap_or_default();
+        let writer_names: std::collections::HashSet<&str> = writers
+            .map(|w| w.keys().map(String::as_str).collect())
+            .unwrap_or_default();
         let steps = check.get("steps").and_then(Value::as_array);
         if steps.map(|s| s.is_empty()).unwrap_or(true) {
             problems.push("a writes check needs steps".to_string());
@@ -142,18 +170,25 @@ fn check_problems(check: &serde_json::Map<String, Value>) -> Vec<String> {
             }
             let op = step_obj.get("op").and_then(Value::as_str);
             if !op.map(|o| WRITE_OPS.contains(&o)).unwrap_or(false) {
-                problems.push(format!("step {n}: op must be one of {}", WRITE_OPS.join(", ")));
+                problems.push(format!(
+                    "step {n}: op must be one of {}",
+                    WRITE_OPS.join(", ")
+                ));
             }
             let expect = step_obj.get("expect").and_then(Value::as_str);
             if !expect.map(|e| WRITE_OUTCOMES.contains(&e)).unwrap_or(false) {
-                problems.push(format!("step {n}: expect must be one of {}", WRITE_OUTCOMES.join(", ")));
+                problems.push(format!(
+                    "step {n}: expect must be one of {}",
+                    WRITE_OUTCOMES.join(", ")
+                ));
             }
             if let Some(e) = expect {
                 expects.insert(e.to_string());
             }
         }
         if !steps.is_empty()
-            && (!expects.contains("accepted") || !(expects.contains("refused") || expects.contains("denied")))
+            && (!expects.contains("accepted")
+                || !(expects.contains("refused") || expects.contains("denied")))
         {
             problems.push(
                 "a writes check must show both directions: at least one step accepted and at least one \
@@ -167,10 +202,17 @@ refused or denied (a check that only refuses passes a gate that refuses everythi
         }
     } else if kind == "loads" {
         let empty = Vec::new();
-        let steps = check.get("steps").and_then(Value::as_array).unwrap_or(&empty);
+        let steps = check
+            .get("steps")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
         let names: Vec<Option<String>> = steps
             .iter()
-            .map(|s| s.as_object().filter(|o| o.len() == 1).and_then(|o| o.keys().next().cloned()))
+            .map(|s| {
+                s.as_object()
+                    .filter(|o| o.len() == 1)
+                    .and_then(|o| o.keys().next().cloned())
+            })
             .collect();
         for (n, (step, name)) in steps.iter().zip(names.iter()).enumerate() {
             let n = n + 1;
@@ -190,7 +232,10 @@ refused or denied (a check that only refuses passes a gate that refuses everythi
                         .and_then(Value::as_str)
                         .unwrap_or("fixture");
                     if !LOAD_LABELS.contains(&labels) {
-                        problems.push(format!("step {n}: load labels must be one of {}", LOAD_LABELS.join(", ")));
+                        problems.push(format!(
+                            "step {n}: load labels must be one of {}",
+                            LOAD_LABELS.join(", ")
+                        ));
                     }
                 }
                 _ => {}
@@ -207,15 +252,26 @@ refused or denied (a check that only refuses passes a gate that refuses everythi
         }
     } else if kind == "validator" {
         for key in ["slice", "labels", "control_labels", "expect_errors"] {
-            let ok = check.get(key).and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false);
+            let ok = check
+                .get(key)
+                .and_then(Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
             if !ok {
                 problems.push(format!("a validator check needs a non-empty {key} list"));
             }
         }
-        for pair in check.get("expect_errors").and_then(Value::as_array).unwrap_or(&Vec::new()) {
+        for pair in check
+            .get("expect_errors")
+            .and_then(Value::as_array)
+            .unwrap_or(&Vec::new())
+        {
             let ok = pair
                 .as_object()
-                .map(|o| !is_falsy(o.get("unit").unwrap_or(&Value::Null)) && !is_falsy(o.get("field").unwrap_or(&Value::Null)))
+                .map(|o| {
+                    !is_falsy(o.get("unit").unwrap_or(&Value::Null))
+                        && !is_falsy(o.get("field").unwrap_or(&Value::Null))
+                })
                 .unwrap_or(false);
             if !ok {
                 problems.push("expect_errors entries are {unit, field}".to_string());
@@ -231,9 +287,17 @@ refused or denied (a check that only refuses passes a gate that refuses everythi
 /// `refuse_unusable_regression_file` -- discards that value, and nothing in the config port needs it,
 /// so it is left for whichever port unit adds `groundworks.evaluator` itself.)
 pub fn read_file(path: &Path) -> Result<Value, RegressionFileError> {
-    let raw = std::fs::read(path)
-        .map_err(|e| RegressionFileError(format!("regression file {} cannot be read: {e}", path.display())))?;
-    let text = String::from_utf8(raw)
-        .map_err(|e| RegressionFileError(format!("regression file {} is not UTF-8: {e}", path.display())))?;
+    let raw = std::fs::read(path).map_err(|e| {
+        RegressionFileError(format!(
+            "regression file {} cannot be read: {e}",
+            path.display()
+        ))
+    })?;
+    let text = String::from_utf8(raw).map_err(|e| {
+        RegressionFileError(format!(
+            "regression file {} is not UTF-8: {e}",
+            path.display()
+        ))
+    })?;
     parse(&text, &path.display().to_string())
 }

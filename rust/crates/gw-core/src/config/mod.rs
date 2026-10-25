@@ -37,7 +37,10 @@ pub struct ConfigError {
 
 impl ConfigError {
     pub fn new(message: impl Into<String>) -> Self {
-        ConfigError { kind: "ConfigError", message: message.into() }
+        ConfigError {
+            kind: "ConfigError",
+            message: message.into(),
+        }
     }
 }
 
@@ -48,7 +51,10 @@ fn ConfigError(message: String) -> ConfigError {
 
 impl From<yaml::YamlError> for ConfigError {
     fn from(e: yaml::YamlError) -> Self {
-        ConfigError { kind: "YamlError", message: e.0 }
+        ConfigError {
+            kind: "YamlError",
+            message: e.0,
+        }
     }
 }
 impl From<evaluator_support::RegressionFileError> for ConfigError {
@@ -61,8 +67,16 @@ pub type R<T> = Result<T, ConfigError>;
 
 // ---- the graph shape (config.py module level) -----------------------------------------------------
 
-pub const BUILT_IN_NODE_TABLES: &[&str] =
-    &["unit", "label", "fact", "conclusion", "authority", "critique", "answer", "document"];
+pub const BUILT_IN_NODE_TABLES: &[&str] = &[
+    "unit",
+    "label",
+    "fact",
+    "conclusion",
+    "authority",
+    "critique",
+    "answer",
+    "document",
+];
 
 /// (name, from, to) -- `groundworks/config.py:43 BUILT_IN_EDGES`.
 pub const BUILT_IN_EDGES: &[(&str, &str, &str)] = &[
@@ -82,42 +96,87 @@ pub const BUILT_IN_FIELDS: &[(&str, &[(&str, &str)])] = &[
     (
         "unit",
         &[
-            ("type", "string"), ("text", "string"), ("locator", "object"), ("status", "string"),
-            ("grade", "string"), ("hash", "string"), ("meta", "object"), ("document", "record"),
+            ("type", "string"),
+            ("text", "string"),
+            ("locator", "object"),
+            ("status", "string"),
+            ("grade", "string"),
+            ("hash", "string"),
+            ("meta", "object"),
+            ("document", "record"),
         ],
     ),
     (
         "label",
         &[
-            ("unit", "record"), ("tier", "int"), ("dir", "string"), ("issues", "array"),
-            ("targets", "array"), ("role", "string"), ("reason", "string"), ("quote", "string"),
-            ("grade", "string"), ("chunk", "string"), ("run", "string"),
+            ("unit", "record"),
+            ("tier", "int"),
+            ("dir", "string"),
+            ("issues", "array"),
+            ("targets", "array"),
+            ("role", "string"),
+            ("reason", "string"),
+            ("quote", "string"),
+            ("grade", "string"),
+            ("chunk", "string"),
+            ("run", "string"),
         ],
     ),
     (
         "fact",
         &[
-            ("statement", "string"), ("status", "string"), ("note", "string"), ("tried", "string"),
-            ("evidence", "string"), ("reasoning_type", "string"), ("author", "string"),
-            ("lens", "string"), ("learned_at", "datetime"),
+            ("statement", "string"),
+            ("status", "string"),
+            ("note", "string"),
+            ("tried", "string"),
+            ("evidence", "string"),
+            ("reasoning_type", "string"),
+            ("author", "string"),
+            ("lens", "string"),
+            ("learned_at", "datetime"),
         ],
     ),
-    ("conclusion", &[("statement", "string"), ("ready", "bool"), ("rating", "string"), ("author", "string")]),
-    ("authority", &[("citation", "string"), ("verified", "bool"), ("source_grade", "string")]),
+    (
+        "conclusion",
+        &[
+            ("statement", "string"),
+            ("ready", "bool"),
+            ("rating", "string"),
+            ("author", "string"),
+        ],
+    ),
+    (
+        "authority",
+        &[
+            ("citation", "string"),
+            ("verified", "bool"),
+            ("source_grade", "string"),
+        ],
+    ),
     (
         "critique",
         &[
-            ("lens", "string"), ("head", "string"), ("verdict", "string"), ("text", "string"),
-            ("author", "string"), ("answered", "bool"),
+            ("lens", "string"),
+            ("head", "string"),
+            ("verdict", "string"),
+            ("text", "string"),
+            ("author", "string"),
+            ("answered", "bool"),
         ],
     ),
     ("answer", &[("text", "string"), ("author", "string")]),
     (
         "document",
         &[
-            ("sha256", "string"), ("media_type", "string"), ("bytes", "int"), ("capture", "string"),
-            ("source_uri", "string"), ("retrieved_at", "datetime"), ("original_name", "string"),
-            ("integrity", "string"), ("verified_at", "datetime"),
+            ("sha256", "string"),
+            ("media_type", "string"),
+            ("bytes", "int"),
+            ("capture", "string"),
+            ("source_uri", "string"),
+            ("retrieved_at", "datetime"),
+            ("original_name", "string"),
+            ("integrity", "string"),
+            ("verified_at", "datetime"),
         ],
     ),
 ];
@@ -125,7 +184,12 @@ pub const BUILT_IN_FIELDS: &[(&str, &[(&str, &str)])] = &[
 pub const INDEPENDENCE_FIELD: &str = "written_by";
 pub const INDEPENDENCE_BETWEEN: &[&str] = &["credential", "principal"];
 const INDEPENDENCE_KEYS: &[&str] = &["between", "own_evidence"];
-const AUDIT_TABLES: &[&str] = &["row_writer", "link_creator", "promotion_log", "promotion_head"];
+const AUDIT_TABLES: &[&str] = &[
+    "row_writer",
+    "link_creator",
+    "promotion_log",
+    "promotion_head",
+];
 
 const FIELD_TYPES: &[&str] = &["string", "int", "float", "bool", "datetime"];
 const TABLE_KEYS: &[&str] = &["fields", "doc"];
@@ -134,25 +198,82 @@ const FIELD_KEYS: &[&str] = &["type", "one_of", "optional", "doc"];
 const EDGE_RESERVED_FIELDS: &[&str] = &["id", "in", "out"];
 
 const TOP_KEYS: &[&str] = &[
-    "instance", "units", "fidelity", "status", "vocabulary", "gates", "lenses", "roles", "evaluator",
-    "human_owned", "privacy", "panel", "present", "embed", "access", "authority", "staleness",
-    "discovery", "tables", "edges", "verdicts", "unique", "assertions", "promotion_log", "labels",
+    "instance",
+    "units",
+    "fidelity",
+    "status",
+    "vocabulary",
+    "gates",
+    "lenses",
+    "roles",
+    "evaluator",
+    "human_owned",
+    "privacy",
+    "panel",
+    "present",
+    "embed",
+    "access",
+    "authority",
+    "staleness",
+    "discovery",
+    "tables",
+    "edges",
+    "verdicts",
+    "unique",
+    "assertions",
+    "promotion_log",
+    "labels",
     "originals",
 ];
-const REQUIRED_TOP: &[&str] =
-    &["instance", "units", "fidelity", "status", "vocabulary", "gates", "evaluator", "human_owned", "privacy"];
+const REQUIRED_TOP: &[&str] = &[
+    "instance",
+    "units",
+    "fidelity",
+    "status",
+    "vocabulary",
+    "gates",
+    "evaluator",
+    "human_owned",
+    "privacy",
+];
 const MUST_BE_HUMAN_OWNED: &[&str] = &["gates", "fidelity", "status", "evaluator", "privacy"];
-const HUMAN_OWNED_IF_PRESENT: &[&str] = &["verdicts", "unique", "assertions", "promotion_log", "originals", "labels"];
+const HUMAN_OWNED_IF_PRESENT: &[&str] = &[
+    "verdicts",
+    "unique",
+    "assertions",
+    "promotion_log",
+    "originals",
+    "labels",
+];
 
 const LENS_KINDS: &[&str] = &["perspective", "discipline", "framework"];
 const LENS_BACKINGS: &[&str] = &["prompt", "source", "graph", "calibrated"];
 const LENS_KEYS: &[&str] = &[
-    "name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk", "signed", "order",
+    "name",
+    "kind",
+    "charter",
+    "standard",
+    "filter",
+    "backing",
+    "frame",
+    "crosswalk",
+    "signed",
+    "order",
 ];
 const LENS_STANDARD_KEYS: &[&str] = &["status", "grade"];
 const LENS_FILTER_FIELDS: &[&str] = &["tier", "dir", "issues", "targets", "role", "chunk"];
 const LENS_FILTER_WORDS: &[&str] = &[
-    "AND", "OR", "NOT", "IN", "CONTAINS", "CONTAINSANY", "CONTAINSALL", "CONTAINSNOT", "NONE", "true", "false",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "CONTAINS",
+    "CONTAINSANY",
+    "CONTAINSALL",
+    "CONTAINSNOT",
+    "NONE",
+    "true",
+    "false",
 ];
 
 // ---- small python-shaped helpers ------------------------------------------------------------------
@@ -185,10 +306,23 @@ pub fn py_repr_str(s: &str) -> String {
 pub fn py_repr_value(v: &Value) -> String {
     match v {
         Value::Null => "None".to_string(),
-        Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Value::Bool(b) => {
+            if *b {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
         Value::Number(n) => py_number_str(n),
         Value::String(s) => py_repr_str(s),
-        Value::Array(items) => format!("[{}]", items.iter().map(py_repr_value).collect::<Vec<_>>().join(", ")),
+        Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(py_repr_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Value::Object(map) => format!(
             "{{{}}}",
             map.iter()
@@ -204,7 +338,13 @@ pub fn py_str_of(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => "None".to_string(),
-        Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Value::Bool(b) => {
+            if *b {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
         Value::Number(n) => py_number_str(n),
         other => py_repr_value(other),
     }
@@ -319,7 +459,11 @@ pub fn py_int_like(v: &Value) -> Option<i64> {
     match v {
         Value::Bool(b) => Some(if *b { 1 } else { 0 }),
         Value::Number(n) if n.is_i64() => n.as_i64(),
-        Value::Number(n) if n.is_u64() => Some(n.as_u64().map(|u| u.min(i64::MAX as u64) as i64).unwrap_or(i64::MAX)),
+        Value::Number(n) if n.is_u64() => Some(
+            n.as_u64()
+                .map(|u| u.min(i64::MAX as u64) as i64)
+                .unwrap_or(i64::MAX),
+        ),
         _ => None,
     }
 }
@@ -332,7 +476,10 @@ pub fn py_int_like(v: &Value) -> Option<i64> {
 /// `[a-z0-9_]+` character class.
 fn is_id(s: &str) -> bool {
     let body = s.strip_suffix('\n').unwrap_or(s);
-    !body.is_empty() && body.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    !body.is_empty()
+        && body
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn sorted_unique_strs<'a>(items: impl Iterator<Item = &'a str>) -> Vec<String> {
@@ -370,14 +517,25 @@ fn field_spec(value: &Value) -> (Option<Value>, Option<String>) {
         value.clone()
     };
     let Some(obj) = value.as_object() else {
-        return (None, Some("must be a type name or a mapping with a type".to_string()));
+        return (
+            None,
+            Some("must be a type name or a mapping with a type".to_string()),
+        );
     };
-    let unknown = sorted_unique_strs(obj.keys().map(String::as_str).filter(|k| !FIELD_KEYS.contains(k)));
+    let unknown = sorted_unique_strs(
+        obj.keys()
+            .map(String::as_str)
+            .filter(|k| !FIELD_KEYS.contains(k)),
+    );
     if !unknown.is_empty() {
         let allowed = sorted_unique_strs(FIELD_KEYS.iter().copied());
         return (
             None,
-            Some(format!("unknown key(s) {}; allowed: {}", unknown.join(", "), allowed.join(", "))),
+            Some(format!(
+                "unknown key(s) {}; allowed: {}",
+                unknown.join(", "),
+                allowed.join(", ")
+            )),
         );
     }
     let kind = obj.get("type").and_then(Value::as_str);
@@ -396,7 +554,10 @@ fn field_spec(value: &Value) -> (Option<Value>, Option<String>) {
     if let Some(one_of_v) = one_of {
         let arr = one_of_v.as_array();
         if arr.map(|a| a.is_empty()).unwrap_or(true) {
-            return (None, Some("one_of must be a non-empty list of values".to_string()));
+            return (
+                None,
+                Some("one_of must be a non-empty list of values".to_string()),
+            );
         }
         let arr = arr.unwrap();
         let mut seen = std::collections::HashSet::new();
@@ -415,7 +576,10 @@ fn field_spec(value: &Value) -> (Option<Value>, Option<String>) {
     let mut spec = Map::new();
     spec.insert("type".to_string(), Value::String(kind));
     spec.insert("one_of".to_string(), one_of.cloned().unwrap_or(Value::Null));
-    spec.insert("optional".to_string(), Value::Bool(py_truthy_bool(&optional)));
+    spec.insert(
+        "optional".to_string(),
+        Value::Bool(py_truthy_bool(&optional)),
+    );
     (Some(Value::Object(spec)), None)
 }
 
@@ -425,7 +589,11 @@ pub fn declared_tables_of(data: &Value) -> Map<String, Value> {
     if let Some(declared) = declared_section(data, "tables") {
         for (name, body) in declared {
             let mut fields = Map::new();
-            if let Some(f) = body.as_object().and_then(|b| b.get("fields")).and_then(Value::as_object) {
+            if let Some(f) = body
+                .as_object()
+                .and_then(|b| b.get("fields"))
+                .and_then(Value::as_object)
+            {
                 for (field, value) in f {
                     if let (Some(spec), None) = field_spec(value) {
                         fields.insert(field.clone(), spec);
@@ -445,7 +613,10 @@ pub fn declared_edges_of(data: &Value) -> Map<String, Value> {
         for (name, body) in declared {
             let body_obj = body.as_object();
             let mut fields = Map::new();
-            if let Some(f) = body_obj.and_then(|b| b.get("fields")).and_then(Value::as_object) {
+            if let Some(f) = body_obj
+                .and_then(|b| b.get("fields"))
+                .and_then(Value::as_object)
+            {
                 for (field, value) in f {
                     if let (Some(spec), None) = field_spec(value) {
                         fields.insert(field.clone(), spec);
@@ -453,8 +624,20 @@ pub fn declared_edges_of(data: &Value) -> Map<String, Value> {
                 }
             }
             let mut entry = Map::new();
-            entry.insert("from".to_string(), body_obj.and_then(|b| b.get("from")).cloned().unwrap_or(Value::Null));
-            entry.insert("to".to_string(), body_obj.and_then(|b| b.get("to")).cloned().unwrap_or(Value::Null));
+            entry.insert(
+                "from".to_string(),
+                body_obj
+                    .and_then(|b| b.get("from"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            entry.insert(
+                "to".to_string(),
+                body_obj
+                    .and_then(|b| b.get("to"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
             entry.insert("fields".to_string(), Value::Object(fields));
             out.insert(name.clone(), Value::Object(entry));
         }
@@ -479,7 +662,10 @@ pub fn edge_map_of(data: &Value) -> Map<String, Value> {
     for (name, from, to) in BUILT_IN_EDGES {
         out.insert(
             name.to_string(),
-            Value::Array(vec![Value::String(from.to_string()), Value::String(to.to_string())]),
+            Value::Array(vec![
+                Value::String(from.to_string()),
+                Value::String(to.to_string()),
+            ]),
         );
     }
     for (name, body) in declared_edges_of(data) {
@@ -489,7 +675,13 @@ pub fn edge_map_of(data: &Value) -> Map<String, Value> {
         let from = body.get("from").cloned().unwrap_or(Value::Null);
         let to = body.get("to").cloned().unwrap_or(Value::Null);
         if is_truthy_nonempty(Some(&from)) && is_truthy_nonempty(Some(&to)) {
-            out.insert(name, Value::Array(vec![Value::String(py_str_of(&from)), Value::String(py_str_of(&to))]));
+            out.insert(
+                name,
+                Value::Array(vec![
+                    Value::String(py_str_of(&from)),
+                    Value::String(py_str_of(&to)),
+                ]),
+            );
         }
     }
     out
@@ -497,15 +689,25 @@ pub fn edge_map_of(data: &Value) -> Map<String, Value> {
 
 /// `groundworks/config.py:118 independence_of`.
 pub fn independence_of(rule: &Value) -> Option<Value> {
-    let value = rule.get("independent").cloned().unwrap_or(Value::Bool(false));
+    let value = rule
+        .get("independent")
+        .cloned()
+        .unwrap_or(Value::Bool(false));
     if value == Value::Bool(true) {
         let mut m = Map::new();
-        m.insert("between".to_string(), Value::String("credential".to_string()));
+        m.insert(
+            "between".to_string(),
+            Value::String("credential".to_string()),
+        );
         m.insert("own_evidence".to_string(), Value::Bool(false));
         return Some(Value::Object(m));
     }
     if let Some(obj) = value.as_object().filter(|o| !o.is_empty()) {
-        let between = obj.get("between").and_then(Value::as_str).unwrap_or("credential").to_string();
+        let between = obj
+            .get("between")
+            .and_then(Value::as_str)
+            .unwrap_or("credential")
+            .to_string();
         let own_evidence = obj.get("own_evidence") == Some(&Value::Bool(true));
         let mut m = Map::new();
         m.insert("between".to_string(), Value::String(between));
@@ -518,8 +720,10 @@ pub fn independence_of(rule: &Value) -> Option<Value> {
 /// `groundworks/config.py:757 expand_where`.
 pub fn expand_where(data: &Value, where_: Option<&str>) -> String {
     fn lit(values: &[Value]) -> String {
-        let items: Vec<String> =
-            values.iter().map(|v| format!("'{}'", py_str_of(v).replace('\'', "\\'"))).collect();
+        let items: Vec<String> = values
+            .iter()
+            .map(|v| format!("'{}'", py_str_of(v).replace('\'', "\\'")))
+            .collect();
         format!("[{}]", items.join(", "))
     }
     // Duck-typed like `validate`'s own fidelity.confirming/status.usable reads (round 3 blocking 1):
@@ -536,7 +740,10 @@ pub fn expand_where(data: &Value, where_: Option<&str>) -> String {
         .and_then(|s| s.get("usable"))
         .map(py_iter_elems)
         .unwrap_or_default();
-    where_.unwrap_or("").replace("$confirming", &lit(&confirming)).replace("$usable", &lit(&usable))
+    where_
+        .unwrap_or("")
+        .replace("$confirming", &lit(&confirming))
+        .replace("$usable", &lit(&usable))
 }
 
 // ---- validate() and its helpers -------------------------------------------------------------------
@@ -549,7 +756,12 @@ pub fn validate(data: Value) -> R<Value> {
             type_name(&data)
         )));
     };
-    let unknown = sorted_unique_strs(data_obj.keys().map(String::as_str).filter(|k| !TOP_KEYS.contains(k)));
+    let unknown = sorted_unique_strs(
+        data_obj
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !TOP_KEYS.contains(k)),
+    );
     if !unknown.is_empty() {
         let allowed = sorted_unique_strs(TOP_KEYS.iter().copied());
         problems.push(format!(
@@ -569,13 +781,20 @@ pub fn validate(data: Value) -> R<Value> {
 
     let inst = &data["instance"];
     let inst_obj = inst.as_object();
-    let id_ok = inst_obj.map(|o| is_truthy_nonempty(o.get("id"))).unwrap_or(false);
-    let goal_ok = inst_obj.map(|o| is_truthy_nonempty(o.get("goal"))).unwrap_or(false);
+    let id_ok = inst_obj
+        .map(|o| is_truthy_nonempty(o.get("id")))
+        .unwrap_or(false);
+    let goal_ok = inst_obj
+        .map(|o| is_truthy_nonempty(o.get("goal")))
+        .unwrap_or(false);
     match inst_obj {
         Some(obj) if id_ok && goal_ok => {
             let id_str = py_str_of(&obj["id"]);
             if !is_id(&id_str) {
-                problems.push(format!("instance.id {} must match [a-z0-9_]+", py_repr_value(&inst["id"])));
+                problems.push(format!(
+                    "instance.id {} must match [a-z0-9_]+",
+                    py_repr_value(&inst["id"])
+                ));
             }
         }
         _ => problems.push("instance needs an id and a goal".to_string()),
@@ -595,7 +814,9 @@ pub fn validate(data: Value) -> R<Value> {
         let mut raw_names: Vec<Value> = Vec::new();
         for unit in units_arr {
             let unit_obj = unit.as_object();
-            let name_ok = unit_obj.map(|o| is_truthy_nonempty(o.get("name"))).unwrap_or(false);
+            let name_ok = unit_obj
+                .map(|o| is_truthy_nonempty(o.get("name")))
+                .unwrap_or(false);
             if unit_obj.is_none() || !name_ok {
                 problems.push("each unit needs a name".to_string());
                 continue;
@@ -605,15 +826,24 @@ pub fn validate(data: Value) -> R<Value> {
             names.push(name.clone());
             raw_names.push(unit_obj["name"].clone());
             if !is_id(&name) {
-                problems.push(format!("unit name {} must match [a-z0-9_]+", py_repr_value(&unit_obj["name"])));
+                problems.push(format!(
+                    "unit name {} must match [a-z0-9_]+",
+                    py_repr_value(&unit_obj["name"])
+                ));
             }
             if !is_truthy_nonempty(unit_obj.get("locator_fields")) {
-                problems.push(format!("unit {name} needs locator_fields a program can resolve"));
+                problems.push(format!(
+                    "unit {name} needs locator_fields a program can resolve"
+                ));
             }
             // `config.py:553-555`: `size = unit.get("chunk_size", 0); if not isinstance(size, int) or
             // size <= 0`. `isinstance(True, int)` is True in Python (bool is an int subtype), so
             // `chunk_size: true` is ACCEPTED as 1; only `chunk_size: false` (0) is refused.
-            let size_ok = unit_obj.get("chunk_size").and_then(py_int_like).map(|v| v > 0).unwrap_or(false);
+            let size_ok = unit_obj
+                .get("chunk_size")
+                .and_then(py_int_like)
+                .map(|v| v > 0)
+                .unwrap_or(false);
             if !size_ok {
                 problems.push(format!("unit {name} needs a positive chunk_size"));
             }
@@ -625,8 +855,12 @@ pub fn validate(data: Value) -> R<Value> {
 
     let fid = data.get("fidelity");
     let fid_obj = fid.and_then(Value::as_object);
-    let order_ok = fid_obj.map(|o| is_truthy_nonempty(o.get("order"))).unwrap_or(false);
-    let confirming_ok = fid_obj.map(|o| is_truthy_nonempty(o.get("confirming"))).unwrap_or(false);
+    let order_ok = fid_obj
+        .map(|o| is_truthy_nonempty(o.get("order")))
+        .unwrap_or(false);
+    let confirming_ok = fid_obj
+        .map(|o| is_truthy_nonempty(o.get("confirming")))
+        .unwrap_or(false);
     if !order_ok || !confirming_ok || fid_obj.is_none() {
         problems.push("fidelity needs order (best first) and confirming".to_string());
     } else if let Some(fid_obj) = fid_obj {
@@ -644,18 +878,33 @@ pub fn validate(data: Value) -> R<Value> {
             .map(py_str_of)
             .collect();
         if !missing.is_empty() {
-            problems.push(format!("fidelity.confirming not in order: {}", missing.join(", ")));
+            problems.push(format!(
+                "fidelity.confirming not in order: {}",
+                missing.join(", ")
+            ));
         }
         if py_len(&confirming_val) >= py_len(&order_val) {
-            problems.push("fidelity.confirming cannot be every grade: some grade must be unable to establish".to_string());
+            problems.push(
+                "fidelity.confirming cannot be every grade: some grade must be unable to establish"
+                    .to_string(),
+            );
         }
         if !is_truthy_nonempty(fid_obj.get("agent_grades")) {
-            problems.push("fidelity needs agent_grades: the grades that are model output".to_string());
+            problems
+                .push("fidelity needs agent_grades: the grades that are model output".to_string());
         } else {
             let agent_grades_val = fid_obj.get("agent_grades").cloned().unwrap_or(Value::Null);
-            let agent_grades_strs: Vec<String> = py_iter_elems(&agent_grades_val).iter().map(py_str_of).collect();
+            let agent_grades_strs: Vec<String> = py_iter_elems(&agent_grades_val)
+                .iter()
+                .map(py_str_of)
+                .collect();
             let confirming_strs: Vec<String> = confirming_elems.iter().map(py_str_of).collect();
-            let overlap = sorted_unique_strs(confirming_strs.iter().map(String::as_str).filter(|g| agent_grades_strs.iter().any(|a| a == g)));
+            let overlap = sorted_unique_strs(
+                confirming_strs
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|g| agent_grades_strs.iter().any(|a| a == g)),
+            );
             if !overlap.is_empty() {
                 problems.push(format!(
                     "agent output may never confirm: {} is in both confirming and agent_grades",
@@ -667,8 +916,12 @@ pub fn validate(data: Value) -> R<Value> {
 
     let st = data.get("status");
     let st_obj = st.and_then(Value::as_object);
-    let values_ok = st_obj.map(|o| is_truthy_nonempty(o.get("values"))).unwrap_or(false);
-    let usable_ok = st_obj.map(|o| is_truthy_nonempty(o.get("usable"))).unwrap_or(false);
+    let values_ok = st_obj
+        .map(|o| is_truthy_nonempty(o.get("values")))
+        .unwrap_or(false);
+    let usable_ok = st_obj
+        .map(|o| is_truthy_nonempty(o.get("usable")))
+        .unwrap_or(false);
     if !values_ok || !usable_ok || st_obj.is_none() {
         problems.push("status needs values and usable".to_string());
     } else if let Some(st_obj) = st_obj {
@@ -682,10 +935,16 @@ pub fn validate(data: Value) -> R<Value> {
             .map(py_str_of)
             .collect();
         if !missing.is_empty() {
-            problems.push(format!("status.usable not in values: {}", missing.join(", ")));
+            problems.push(format!(
+                "status.usable not in values: {}",
+                missing.join(", ")
+            ));
         }
         if py_len(&usable_val) >= py_len(&values_val) {
-            problems.push("status.usable cannot be every status: 'true but unusable' must be expressible".to_string());
+            problems.push(
+                "status.usable cannot be every status: 'true but unusable' must be expressible"
+                    .to_string(),
+            );
         }
     }
 
@@ -709,7 +968,11 @@ pub fn validate(data: Value) -> R<Value> {
         // `config.py:595`: `tiers = vocab.get("tiers") or []` -- the raw declared value (a string
         // iterates by character below, matching `fidelity`/`status` above), not coerced to a list.
         let tiers_raw = vocab_obj.get("tiers").cloned().unwrap_or(Value::Null);
-        let tiers: Vec<Value> = if is_truthy_nonempty(Some(&tiers_raw)) { py_iter_elems(&tiers_raw) } else { Vec::new() };
+        let tiers: Vec<Value> = if is_truthy_nonempty(Some(&tiers_raw)) {
+            py_iter_elems(&tiers_raw)
+        } else {
+            Vec::new()
+        };
         if !tiers.is_empty() {
             // `config.py:597`: `if tiers and list(tiers) != sorted(tiers):`. `sorted()` compares
             // adjacent elements as it scans for the initial run; the FIRST incomparable pair (e.g. a
@@ -721,11 +984,15 @@ pub fn validate(data: Value) -> R<Value> {
                 if let Err((a_type, b_type)) = py_less_than(&w[1], &w[0]) {
                     return Err(ConfigError {
                         kind: "TypeError",
-                        message: format!("'<' not supported between instances of '{a_type}' and '{b_type}'"),
+                        message: format!(
+                            "'<' not supported between instances of '{a_type}' and '{b_type}'"
+                        ),
                     });
                 }
             }
-            let is_sorted = tiers.windows(2).all(|w| py_less_than(&w[1], &w[0]) == Ok(false));
+            let is_sorted = tiers
+                .windows(2)
+                .all(|w| py_less_than(&w[1], &w[0]) == Ok(false));
             if !is_sorted {
                 problems.push("vocabulary.tiers must ascend".to_string());
             }
@@ -742,13 +1009,16 @@ pub fn validate(data: Value) -> R<Value> {
     let gates_val = data.get("gates");
     let gates_arr = gates_val.and_then(Value::as_array);
     if gates_arr.map(|a| a.is_empty()).unwrap_or(true) {
-        problems.push("gates must be a non-empty list: a graph with no gate is not gated".to_string());
+        problems
+            .push("gates must be a non-empty list: a graph with no gate is not gated".to_string());
     } else {
         let gates_arr = gates_arr.unwrap().clone();
         let mut ids: Vec<String> = Vec::new();
         for rule in &gates_arr {
             let rule_obj = rule.as_object();
-            let has_id = rule_obj.map(|o| is_truthy_nonempty(o.get("id"))).unwrap_or(false);
+            let has_id = rule_obj
+                .map(|o| is_truthy_nonempty(o.get("id")))
+                .unwrap_or(false);
             if rule_obj.is_none() || !has_id {
                 problems.push("each gate rule needs an id".to_string());
                 continue;
@@ -783,7 +1053,10 @@ pub fn validate(data: Value) -> R<Value> {
         let meanings_obj = meanings.as_object().filter(|o| !o.is_empty());
         if let Some(meanings_obj) = meanings_obj {
             let unknown = sorted_unique_strs(
-                meanings_obj.keys().map(String::as_str).filter(|k| !gates_support::CRITIQUE_VERDICTS.contains(k)),
+                meanings_obj
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|k| !gates_support::CRITIQUE_VERDICTS.contains(k)),
             );
             if !unknown.is_empty() {
                 problems.push(format!(
@@ -792,8 +1065,11 @@ pub fn validate(data: Value) -> R<Value> {
                     gates_support::CRITIQUE_VERDICTS.join(", ")
                 ));
             }
-            let undefined: Vec<&str> =
-                gates_support::CRITIQUE_VERDICTS.iter().copied().filter(|v| !meanings_obj.contains_key(*v)).collect();
+            let undefined: Vec<&str> = gates_support::CRITIQUE_VERDICTS
+                .iter()
+                .copied()
+                .filter(|v| !meanings_obj.contains_key(*v))
+                .collect();
             if !undefined.is_empty() {
                 problems.push(format!(
                     "verdicts: {} left undefined. Define every verdict or none: a partly defined set is the \
@@ -811,7 +1087,9 @@ case where a role reaches for the one with no meaning attached",
                 }
             }
         } else {
-            problems.push("verdicts must be a mapping of verdict name -> what it means here".to_string());
+            problems.push(
+                "verdicts must be a mapping of verdict name -> what it means here".to_string(),
+            );
         }
     }
 
@@ -821,8 +1099,11 @@ case where a role reaches for the one with no meaning attached",
     // `human_owned: "gates and fidelity and status and evaluator and privacy"` is ACCEPTED for every
     // key that appears as a substring. `owned()` below reproduces that per-type `in`.
     let owned = human_owned_value(&data);
-    let mut missing: Vec<String> =
-        MUST_BE_HUMAN_OWNED.iter().filter(|k| !human_owned_contains(&owned, k)).map(|s| s.to_string()).collect();
+    let mut missing: Vec<String> = MUST_BE_HUMAN_OWNED
+        .iter()
+        .filter(|k| !human_owned_contains(&owned, k))
+        .map(|s| s.to_string())
+        .collect();
     missing.extend(
         HUMAN_OWNED_IF_PRESENT
             .iter()
@@ -830,12 +1111,18 @@ case where a role reaches for the one with no meaning attached",
             .map(|s| s.to_string()),
     );
     if !missing.is_empty() {
-        problems.push(format!("human_owned must include {} (CLAUDE.md rule 6)", missing.join(", ")));
+        problems.push(format!(
+            "human_owned must include {} (CLAUDE.md rule 6)",
+            missing.join(", ")
+        ));
     }
 
     if let Some(acc) = data.get("access") {
         let acc_obj = acc.as_object();
-        let roles = acc_obj.and_then(|a| a.get("roles")).and_then(Value::as_object).filter(|r| !r.is_empty());
+        let roles = acc_obj
+            .and_then(|a| a.get("roles"))
+            .and_then(Value::as_object)
+            .filter(|r| !r.is_empty());
         if let Some(roles) = roles {
             let known_tables: Vec<String> = {
                 let mut v = node_tables_of(&data);
@@ -844,23 +1131,47 @@ case where a role reaches for the one with no meaning attached",
             };
             for (name, spec) in roles {
                 if !is_id(name) {
-                    problems.push(format!("access role {} must match [a-z0-9_]+", py_repr_str(name)));
+                    problems.push(format!(
+                        "access role {} must match [a-z0-9_]+",
+                        py_repr_str(name)
+                    ));
                 }
                 let spec_obj = spec.as_object();
-                let read_ok = spec_obj.map(|o| is_truthy_nonempty(o.get("read")) && o.get("read").unwrap().is_array()).unwrap_or(false);
+                let read_ok = spec_obj
+                    .map(|o| is_truthy_nonempty(o.get("read")) && o.get("read").unwrap().is_array())
+                    .unwrap_or(false);
                 let Some(spec_obj) = spec_obj.filter(|_| read_ok) else {
-                    problems.push(format!("access role {name} needs read: a non-empty list of tables"));
+                    problems.push(format!(
+                        "access role {name} needs read: a non-empty list of tables"
+                    ));
                     continue;
                 };
                 if let Some(write) = spec_obj.get("write") {
                     if !write.is_array() {
-                        problems.push(format!("access role {name}: write must be a list of tables"));
+                        problems.push(format!(
+                            "access role {name}: write must be a list of tables"
+                        ));
                         continue;
                     }
                 }
-                let mut named: Vec<String> = spec_obj.get("read").and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect::<Vec<_>>()).unwrap_or_default();
-                named.extend(spec_obj.get("write").and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect::<Vec<_>>()).unwrap_or_default());
-                let unknown = sorted_unique_strs(named.iter().map(String::as_str).filter(|t| !known_tables.contains(&t.to_string())));
+                let mut named: Vec<String> = spec_obj
+                    .get("read")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(py_str_of).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                named.extend(
+                    spec_obj
+                        .get("write")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().map(py_str_of).collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                );
+                let unknown = sorted_unique_strs(
+                    named
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|t| !known_tables.contains(&t.to_string())),
+                );
                 if !unknown.is_empty() {
                     problems.push(format!(
                         "access role {name} names unknown table(s) {}; known: {}",
@@ -868,15 +1179,23 @@ case where a role reaches for the one with no meaning attached",
                         known_tables.join(", ")
                     ));
                 }
-                let writes: Vec<String> = spec_obj.get("write").and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
+                let writes: Vec<String> = spec_obj
+                    .get("write")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(py_str_of).collect())
+                    .unwrap_or_default();
                 if writes.contains(&"label".to_string()) && name != "loader" {
-                    problems.push(format!("access role {name} may not write label: only the loader writes labels"));
+                    problems.push(format!(
+                        "access role {name} may not write label: only the loader writes labels"
+                    ));
                 }
                 if let Some(lb) = spec_obj.get("lens_bound") {
                     // `spec.get("lens_bound") not in (None, True, False)`: null passes (not present /
                     // explicit `~`), and `1`/`0` pass too (bool-is-int against `True`/`False`).
                     if !lb.is_null() && !py_equals_bool(lb) {
-                        problems.push(format!("access role {name}: lens_bound must be true or false"));
+                        problems.push(format!(
+                            "access role {name}: lens_bound must be true or false"
+                        ));
                     }
                 }
             }
@@ -894,15 +1213,24 @@ case where a role reaches for the one with no meaning attached",
     validate_labels(&data, &mut problems);
 
     let ev = data.get("evaluator");
-    let ev_ok = ev.and_then(Value::as_object).map(|o| is_truthy_nonempty(o.get("regression_file"))).unwrap_or(false);
+    let ev_ok = ev
+        .and_then(Value::as_object)
+        .map(|o| is_truthy_nonempty(o.get("regression_file")))
+        .unwrap_or(false);
     if !ev.map(Value::is_object).unwrap_or(false) || !ev_ok {
-        problems.push("evaluator needs a regression_file: the errors this project has actually made".to_string());
+        problems.push(
+            "evaluator needs a regression_file: the errors this project has actually made"
+                .to_string(),
+        );
     }
 
     validate_lenses(&data, &mut problems);
 
     if !problems.is_empty() {
-        return Err(ConfigError(format!("config invalid:\n  - {}", problems.join("\n  - "))));
+        return Err(ConfigError(format!(
+            "config invalid:\n  - {}",
+            problems.join("\n  - ")
+        )));
     }
     Ok(data)
 }
@@ -911,7 +1239,13 @@ fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Null => "NoneType",
         Value::Bool(_) => "bool",
-        Value::Number(n) => if n.is_i64() || n.is_u64() { "int" } else { "float" },
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                "int"
+            } else {
+                "float"
+            }
+        }
         Value::String(_) => "str",
         Value::Array(_) => "list",
         Value::Object(_) => "dict",
@@ -1029,7 +1363,9 @@ fn py_set_len(items: &[Value]) -> usize {
 }
 
 fn validate_labels(data: &Value, problems: &mut Vec<String>) {
-    let Some(section) = data.get("labels") else { return };
+    let Some(section) = data.get("labels") else {
+        return;
+    };
     let Some(section_obj) = section.as_object() else {
         problems.push(
             "labels must be a mapping: {quote_min_words: <int>, quote_distinct_units: {<unit type>: <int>}}"
@@ -1038,7 +1374,12 @@ fn validate_labels(data: &Value, problems: &mut Vec<String>) {
         return;
     };
     let allowed = ["quote_min_words", "quote_distinct_units"];
-    let unknown = sorted_unique_strs(section_obj.keys().map(String::as_str).filter(|k| !allowed.contains(k)));
+    let unknown = sorted_unique_strs(
+        section_obj
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !allowed.contains(k)),
+    );
     if !unknown.is_empty() {
         problems.push(format!(
             "labels: unknown key(s) {}; allowed: quote_min_words, quote_distinct_units",
@@ -1047,19 +1388,32 @@ fn validate_labels(data: &Value, problems: &mut Vec<String>) {
     }
     if let Some(v) = section_obj.get("quote_min_words") {
         if !is_whole_number(v) {
-            problems.push(format!("labels.quote_min_words must be a whole number of at least 1, not {}", py_repr_value(v)));
+            problems.push(format!(
+                "labels.quote_min_words must be a whole number of at least 1, not {}",
+                py_repr_value(v)
+            ));
         }
     }
     if let Some(distinct) = section_obj.get("quote_distinct_units") {
         if !distinct.is_null() {
             let Some(distinct_obj) = distinct.as_object() else {
-                problems.push("labels.quote_distinct_units must map a unit type to a whole number".to_string());
+                problems.push(
+                    "labels.quote_distinct_units must map a unit type to a whole number"
+                        .to_string(),
+                );
                 return;
             };
             let types: Vec<String> = data
                 .get("units")
                 .and_then(Value::as_array)
-                .map(|units| units.iter().filter_map(|u| u.as_object()).filter_map(|o| o.get("name")).map(py_str_of).collect())
+                .map(|units| {
+                    units
+                        .iter()
+                        .filter_map(|u| u.as_object())
+                        .filter_map(|o| o.get("name"))
+                        .map(py_str_of)
+                        .collect()
+                })
                 .unwrap_or_default();
             for (name, limit) in distinct_obj {
                 if !types.contains(name) {
@@ -1097,7 +1451,9 @@ fn human_owned_value(data: &Value) -> Value {
 /// treated as not containing the key -- config.py itself would crash first in that case.
 fn human_owned_contains(owned: &Value, key: &str) -> bool {
     match owned {
-        Value::Array(items) => items.iter().any(|v| matches!(v, Value::String(s) if s == key)),
+        Value::Array(items) => items
+            .iter()
+            .any(|v| matches!(v, Value::String(s) if s == key)),
         Value::String(s) => s.contains(key),
         Value::Object(m) => m.contains_key(key),
         _ => false,
@@ -1111,7 +1467,10 @@ fn is_whole_number(v: &Value) -> bool {
 fn independence_value(rule: &Value, problems: &mut Vec<String>) -> Option<Value> {
     let id = rule.get("id").map(py_str_of).unwrap_or_default();
     let where_ = format!("gate {id}");
-    let value = rule.get("independent").cloned().unwrap_or(Value::Bool(false));
+    let value = rule
+        .get("independent")
+        .cloned()
+        .unwrap_or(Value::Bool(false));
     if value == Value::Bool(true) || value == Value::Bool(false) {
         return independence_of(rule);
     }
@@ -1122,12 +1481,23 @@ fn independence_value(rule: &Value, problems: &mut Vec<String>) -> Option<Value>
         ));
         return None;
     };
-    let unknown = sorted_unique_strs(obj.keys().map(String::as_str).filter(|k| !INDEPENDENCE_KEYS.contains(k)));
+    let unknown = sorted_unique_strs(
+        obj.keys()
+            .map(String::as_str)
+            .filter(|k| !INDEPENDENCE_KEYS.contains(k)),
+    );
     if !unknown.is_empty() {
         let allowed = sorted_unique_strs(INDEPENDENCE_KEYS.iter().copied());
-        problems.push(format!("{where_}: independent has unknown key(s) {}; allowed: {}", unknown.join(", "), allowed.join(", ")));
+        problems.push(format!(
+            "{where_}: independent has unknown key(s) {}; allowed: {}",
+            unknown.join(", "),
+            allowed.join(", ")
+        ));
     }
-    let between = obj.get("between").cloned().unwrap_or(Value::String("credential".to_string()));
+    let between = obj
+        .get("between")
+        .cloned()
+        .unwrap_or(Value::String("credential".to_string()));
     let between_str = between.as_str().unwrap_or("");
     if !INDEPENDENCE_BETWEEN.contains(&between_str) {
         problems.push(format!(
@@ -1136,16 +1506,24 @@ fn independence_value(rule: &Value, problems: &mut Vec<String>) -> Option<Value>
             py_repr_value(&between)
         ));
     }
-    let own_evidence = obj.get("own_evidence").cloned().unwrap_or(Value::Bool(false));
+    let own_evidence = obj
+        .get("own_evidence")
+        .cloned()
+        .unwrap_or(Value::Bool(false));
     if own_evidence != Value::Bool(true) && own_evidence != Value::Bool(false) {
-        problems.push(format!("{where_}: independent.own_evidence must be true or false (got {})", py_repr_value(&own_evidence)));
+        problems.push(format!(
+            "{where_}: independent.own_evidence must be true or false (got {})",
+            py_repr_value(&own_evidence)
+        ));
     }
     independence_of(rule)
 }
 
 fn validate_gate_domains(data: &Value, rule: &Value, problems: &mut Vec<String>) {
     let rule_obj = rule.as_object();
-    let has_all = ["table", "field", "value"].iter().all(|k| rule_obj.map(|o| o.contains_key(*k)).unwrap_or(false));
+    let has_all = ["table", "field", "value"]
+        .iter()
+        .all(|k| rule_obj.map(|o| o.contains_key(*k)).unwrap_or(false));
     if !has_all {
         return;
     }
@@ -1178,9 +1556,14 @@ one_of, or gate a field that has one"
     let edges = edge_map_of(data);
     for kind in ["requires", "forbids"] {
         let empty = Vec::new();
-        let clauses = rule_obj.get(kind).and_then(Value::as_array).unwrap_or(&empty);
+        let clauses = rule_obj
+            .get(kind)
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
         for clause in clauses {
-            let Some(clause_obj) = clause.as_object() else { continue };
+            let Some(clause_obj) = clause.as_object() else {
+                continue;
+            };
             let where_clause = clause_obj.get("where").and_then(Value::as_str);
             let has_where = where_clause.map(|w| !w.is_empty()).unwrap_or(false);
             let edge_name = clause_obj.get("edge").and_then(Value::as_str);
@@ -1202,10 +1585,14 @@ one_of, or gate a field that has one"
             };
             let expanded = expand_where(data, Some(where_clause));
             let terms = gates_support::where_terms(&expanded);
-            let (Ok(terms), Some(other)) = (terms, other) else { continue };
+            let (Ok(terms), Some(other)) = (terms, other) else {
+                continue;
+            };
             for (term_field, literals) in terms {
                 let values = assertions_support::field_domain(data, other, &term_field);
-                let said = format!("{where_}: a {kind} clause on {edge_name} compares {other}.{term_field}");
+                let said = format!(
+                    "{where_}: a {kind} clause on {edge_name} compares {other}.{term_field}"
+                );
                 match &values {
                     None => {
                         problems.push(format!(
@@ -1215,18 +1602,27 @@ declare the field with one_of",
                         ));
                     }
                     Some(values) => {
-                        let allowed: Vec<String> = values.iter().map(gates_support::value_literal).collect();
+                        let allowed: Vec<String> =
+                            values.iter().map(gates_support::value_literal).collect();
                         for literal in &literals {
                             let text = literal.trim();
-                            let mapped = if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
-                                gates_support::value_literal(&Value::String(text[1..text.len() - 1].to_string()))
-                            } else if text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false") {
+                            let mapped = if text.len() >= 2
+                                && text.starts_with('"')
+                                && text.ends_with('"')
+                            {
+                                gates_support::value_literal(&Value::String(
+                                    text[1..text.len() - 1].to_string(),
+                                ))
+                            } else if text.eq_ignore_ascii_case("true")
+                                || text.eq_ignore_ascii_case("false")
+                            {
                                 text.to_lowercase()
                             } else {
                                 text.to_string()
                             };
                             if !allowed.contains(&mapped) {
-                                let values_strs: Vec<String> = values.iter().map(py_str_of).collect();
+                                let values_strs: Vec<String> =
+                                    values.iter().map(py_str_of).collect();
                                 problems.push(format!(
                                     "{said} with {literal}, which is not one of its values ({}), so the clause never matches",
                                     values_strs.join(", ")
@@ -1251,14 +1647,21 @@ fn validate_independent(data: &Value, rule: &Value, problems: &mut Vec<String>) 
         ));
         return;
     }
-    if declared_tables_of(data).get(&table).and_then(Value::as_object).map(|f| f.contains_key(INDEPENDENCE_FIELD)).unwrap_or(false) {
+    if declared_tables_of(data)
+        .get(&table)
+        .and_then(Value::as_object)
+        .map(|f| f.contains_key(INDEPENDENCE_FIELD))
+        .unwrap_or(false)
+    {
         problems.push(format!(
             "{where_}: tables.{table} declares a field {}, which the engine owns for independent promotion",
             py_repr_str(INDEPENDENCE_FIELD)
         ));
     }
     let access = data.get("access").and_then(Value::as_object);
-    let roles = access.and_then(|a| a.get("roles")).and_then(Value::as_object);
+    let roles = access
+        .and_then(|a| a.get("roles"))
+        .and_then(Value::as_object);
     let Some(roles) = roles.filter(|r| !r.is_empty()) else {
         problems.push(format!(
             "{where_}: independent: true needs an access: section. Without record credentials every write \
@@ -1271,8 +1674,14 @@ comes from root, which has no identity to tell apart, so nothing could ever make
         .filter(|(_, spec)| {
             spec.as_object()
                 .map(|o| {
-                    o.get("write").and_then(Value::as_array).map(|w| w.iter().any(|v| py_str_of(v) == table)).unwrap_or(false)
-                        && o.get("read").and_then(Value::as_array).map(|r| r.iter().any(|v| py_str_of(v) == table)).unwrap_or(false)
+                    o.get("write")
+                        .and_then(Value::as_array)
+                        .map(|w| w.iter().any(|v| py_str_of(v) == table))
+                        .unwrap_or(false)
+                        && o.get("read")
+                            .and_then(Value::as_array)
+                            .map(|r| r.iter().any(|v| py_str_of(v) == table))
+                            .unwrap_or(false)
                 })
                 .unwrap_or(false)
         })
@@ -1286,7 +1695,12 @@ could propose or promote it"
     }
 }
 
-fn validate_independence_mode(data: &Value, rule: &Value, mode: &Value, problems: &mut Vec<String>) {
+fn validate_independence_mode(
+    data: &Value,
+    rule: &Value,
+    mode: &Value,
+    problems: &mut Vec<String>,
+) {
     let own_evidence = mode.get("own_evidence") == Some(&Value::Bool(true));
     if !own_evidence {
         return;
@@ -1296,7 +1710,12 @@ fn validate_independence_mode(data: &Value, rule: &Value, mode: &Value, problems
     let edges: Vec<String> = rule
         .get("requires")
         .and_then(Value::as_array)
-        .map(|reqs| reqs.iter().filter_map(|c| c.as_object()).map(|c| py_str_of(c.get("edge").unwrap_or(&Value::Null))).collect())
+        .map(|reqs| {
+            reqs.iter()
+                .filter_map(|c| c.as_object())
+                .map(|c| py_str_of(c.get("edge").unwrap_or(&Value::Null)))
+                .collect()
+        })
         .unwrap_or_default();
     if edges.is_empty() {
         problems.push(format!(
@@ -1307,15 +1726,27 @@ the links they count, and this rule counts none"
     }
     let table = py_str_of(rule.get("table").unwrap_or(&Value::Null));
     let access = data.get("access").and_then(Value::as_object);
-    let roles = access.and_then(|a| a.get("roles")).and_then(Value::as_object);
+    let roles = access
+        .and_then(|a| a.get("roles"))
+        .and_then(Value::as_object);
     let Some(roles) = roles else { return };
     let edge_set: std::collections::HashSet<&String> = edges.iter().collect();
     let able = roles.iter().any(|(_, spec)| {
         spec.as_object()
             .map(|o| {
-                let writes: Vec<String> = o.get("write").and_then(Value::as_array).map(|w| w.iter().map(py_str_of).collect()).unwrap_or_default();
-                let reads: Vec<String> = o.get("read").and_then(Value::as_array).map(|r| r.iter().map(py_str_of).collect()).unwrap_or_default();
-                writes.contains(&table) && reads.contains(&table) && writes.iter().any(|w| edge_set.contains(w))
+                let writes: Vec<String> = o
+                    .get("write")
+                    .and_then(Value::as_array)
+                    .map(|w| w.iter().map(py_str_of).collect())
+                    .unwrap_or_default();
+                let reads: Vec<String> = o
+                    .get("read")
+                    .and_then(Value::as_array)
+                    .map(|r| r.iter().map(py_str_of).collect())
+                    .unwrap_or_default();
+                writes.contains(&table)
+                    && reads.contains(&table)
+                    && writes.iter().any(|w| edge_set.contains(w))
             })
             .unwrap_or(false)
     });
@@ -1344,18 +1775,30 @@ choose another name",
             }
         }
     }
-    let Some(pl) = data.get("promotion_log") else { return };
+    let Some(pl) = data.get("promotion_log") else {
+        return;
+    };
     if !matches!(pl, Value::Bool(_)) {
-        problems.push(format!("promotion_log must be true or false (got {})", py_repr_value(pl)));
+        problems.push(format!(
+            "promotion_log must be true or false (got {})",
+            py_repr_value(pl)
+        ));
         return;
     }
     if pl == &Value::Bool(true) {
         let declared = declared_tables_of(data);
         if let Some(gates_arr) = data.get("gates").and_then(Value::as_array) {
             for rule in gates_arr {
-                let Some(rule_obj) = rule.as_object() else { continue };
+                let Some(rule_obj) = rule.as_object() else {
+                    continue;
+                };
                 let table = py_str_of(rule_obj.get("table").unwrap_or(&Value::Null));
-                if declared.get(&table).and_then(Value::as_object).map(|f| f.contains_key(INDEPENDENCE_FIELD)).unwrap_or(false) {
+                if declared
+                    .get(&table)
+                    .and_then(Value::as_object)
+                    .map(|f| f.contains_key(INDEPENDENCE_FIELD))
+                    .unwrap_or(false)
+                {
                     problems.push(format!(
                         "promotion_log: tables.{table} declares a field {}, which the engine owns for \
 recording who wrote a gated row",
@@ -1368,7 +1811,9 @@ recording who wrote a gated row",
 }
 
 fn validate_unique(data: &Value, problems: &mut Vec<String>) {
-    let Some(section) = data.get("unique") else { return };
+    let Some(section) = data.get("unique") else {
+        return;
+    };
     let Some(section_obj) = section.as_object().filter(|o| !o.is_empty()) else {
         problems.push("unique must be a mapping of table -> [field, ...]".to_string());
         return;
@@ -1378,18 +1823,26 @@ fn validate_unique(data: &Value, problems: &mut Vec<String>) {
     for (table, fields) in section_obj {
         let where_ = format!("unique.{table}");
         if edges.contains_key(table) {
-            problems.push(format!("{where_}: {} is an edge type; unique applies to node tables", py_repr_str(table)));
+            problems.push(format!(
+                "{where_}: {} is an edge type; unique applies to node tables",
+                py_repr_str(table)
+            ));
             continue;
         }
-        let known: Vec<String> = if let Some((_, f)) = BUILT_IN_FIELDS.iter().find(|(name, _)| name == table) {
-            f.iter().map(|(n, _)| n.to_string()).collect()
-        } else if let Some(f) = declared.get(table).and_then(Value::as_object) {
-            f.keys().cloned().collect()
-        } else {
-            let node_tables = node_tables_of(data);
-            problems.push(format!("{where_}: unknown table {}; known node tables: {}", py_repr_str(table), node_tables.join(", ")));
-            continue;
-        };
+        let known: Vec<String> =
+            if let Some((_, f)) = BUILT_IN_FIELDS.iter().find(|(name, _)| name == table) {
+                f.iter().map(|(n, _)| n.to_string()).collect()
+            } else if let Some(f) = declared.get(table).and_then(Value::as_object) {
+                f.keys().cloned().collect()
+            } else {
+                let node_tables = node_tables_of(data);
+                problems.push(format!(
+                    "{where_}: unknown table {}; known node tables: {}",
+                    py_repr_str(table),
+                    node_tables.join(", ")
+                ));
+                continue;
+            };
         let Some(fields_arr) = fields.as_array().filter(|a| !a.is_empty()) else {
             problems.push(format!("{where_}: must be a non-empty list of field names"));
             continue;
@@ -1447,10 +1900,18 @@ fn validate_graph_shape(data: &Value, problems: &mut Vec<String>) {
             }
             if built_in.contains(&name.as_str()) {
                 problems.push(format!("{where_}: {} is a built-in {other} and may not be redeclared; choose another name", py_repr_str(name)));
-            } else if BUILT_IN_NODE_TABLES.contains(&name.as_str()) || BUILT_IN_EDGES.iter().any(|(n, _, _)| n == name) {
-                problems.push(format!("{where_}: {} is already a built-in table name; choose another name", py_repr_str(name)));
+            } else if BUILT_IN_NODE_TABLES.contains(&name.as_str())
+                || BUILT_IN_EDGES.iter().any(|(n, _, _)| n == name)
+            {
+                problems.push(format!(
+                    "{where_}: {} is already a built-in table name; choose another name",
+                    py_repr_str(name)
+                ));
             } else if RESERVED_TABLES.contains(&name.as_str()) {
-                problems.push(format!("{where_}: {} is reserved by the engine; choose another name", py_repr_str(name)));
+                problems.push(format!(
+                    "{where_}: {} is reserved by the engine; choose another name",
+                    py_repr_str(name)
+                ));
             } else if let Some(section_taken) = taken.get(name.as_str()) {
                 problems.push(format!("{where_}: {} is already declared under {section_taken}; a name is one thing or the other", py_repr_str(name)));
             } else {
@@ -1459,25 +1920,37 @@ fn validate_graph_shape(data: &Value, problems: &mut Vec<String>) {
         }
     }
 
-    let check_fields = |where_: &str, body: Option<&Value>, reserved: &[&str], problems: &mut Vec<String>| {
-        let fields = body.and_then(|b| b.as_object()).and_then(|o| o.get("fields")).and_then(Value::as_object);
-        let Some(fields) = fields.filter(|f| !f.is_empty()) else {
-            problems.push(format!("{where_}: fields must be a non-empty mapping of name -> type"));
-            return;
+    let check_fields =
+        |where_: &str, body: Option<&Value>, reserved: &[&str], problems: &mut Vec<String>| {
+            let fields = body
+                .and_then(|b| b.as_object())
+                .and_then(|o| o.get("fields"))
+                .and_then(Value::as_object);
+            let Some(fields) = fields.filter(|f| !f.is_empty()) else {
+                problems.push(format!(
+                    "{where_}: fields must be a non-empty mapping of name -> type"
+                ));
+                return;
+            };
+            for (field, value) in fields {
+                if !is_id(field) {
+                    problems.push(format!(
+                        "{where_}: field name {} must match [a-z0-9_]+",
+                        py_repr_str(field)
+                    ));
+                }
+                if reserved.contains(&field.as_str()) {
+                    problems.push(format!(
+                        "{where_}: field {} is owned by the datastore on a relation table",
+                        py_repr_str(field)
+                    ));
+                }
+                let (_, problem) = field_spec(value);
+                if let Some(problem) = problem {
+                    problems.push(format!("{where_}.{field}: {problem}"));
+                }
+            }
         };
-        for (field, value) in fields {
-            if !is_id(field) {
-                problems.push(format!("{where_}: field name {} must match [a-z0-9_]+", py_repr_str(field)));
-            }
-            if reserved.contains(&field.as_str()) {
-                problems.push(format!("{where_}: field {} is owned by the datastore on a relation table", py_repr_str(field)));
-            }
-            let (_, problem) = field_spec(value);
-            if let Some(problem) = problem {
-                problems.push(format!("{where_}.{field}: {problem}"));
-            }
-        }
-    };
 
     for (name, body) in tables {
         let where_ = format!("tables.{name}");
@@ -1486,10 +1959,19 @@ fn validate_graph_shape(data: &Value, problems: &mut Vec<String>) {
             continue;
         }
         let body_obj = body.as_object().unwrap();
-        let unknown = sorted_unique_strs(body_obj.keys().map(String::as_str).filter(|k| !TABLE_KEYS.contains(k)));
+        let unknown = sorted_unique_strs(
+            body_obj
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !TABLE_KEYS.contains(k)),
+        );
         if !unknown.is_empty() {
             let allowed = sorted_unique_strs(TABLE_KEYS.iter().copied());
-            problems.push(format!("{where_}: unknown key(s) {}; allowed: {}", unknown.join(", "), allowed.join(", ")));
+            problems.push(format!(
+                "{where_}: unknown key(s) {}; allowed: {}",
+                unknown.join(", "),
+                allowed.join(", ")
+            ));
         }
         check_fields(&where_, Some(body), &[], problems);
     }
@@ -1498,22 +1980,36 @@ fn validate_graph_shape(data: &Value, problems: &mut Vec<String>) {
     for (name, body) in edges {
         let where_ = format!("edges.{name}");
         if !body.is_object() {
-            problems.push(format!("{where_}: must be a mapping with from, to and fields"));
+            problems.push(format!(
+                "{where_}: must be a mapping with from, to and fields"
+            ));
             continue;
         }
         let body_obj = body.as_object().unwrap();
-        let unknown = sorted_unique_strs(body_obj.keys().map(String::as_str).filter(|k| !EDGE_KEYS.contains(k)));
+        let unknown = sorted_unique_strs(
+            body_obj
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !EDGE_KEYS.contains(k)),
+        );
         if !unknown.is_empty() {
             let allowed = sorted_unique_strs(EDGE_KEYS.iter().copied());
-            problems.push(format!("{where_}: unknown key(s) {}; allowed: {}", unknown.join(", "), allowed.join(", ")));
+            problems.push(format!(
+                "{where_}: unknown key(s) {}; allowed: {}",
+                unknown.join(", "),
+                allowed.join(", ")
+            ));
         }
         for (end, verb) in [("from", "starts at"), ("to", "ends at")] {
             let table = body_obj.get(end);
             if !is_truthy_nonempty(table) {
-                problems.push(format!("{where_}: {end} must name the table this edge {verb}"));
+                problems.push(format!(
+                    "{where_}: {end} must name the table this edge {verb}"
+                ));
             } else {
                 let table_str = py_str_of(table.unwrap());
-                let is_edge_type = BUILT_IN_EDGES.iter().any(|(n, _, _)| *n == table_str) || edges.contains_key(&table_str);
+                let is_edge_type = BUILT_IN_EDGES.iter().any(|(n, _, _)| *n == table_str)
+                    || edges.contains_key(&table_str);
                 if is_edge_type {
                     let mut sorted_known = known_tables.clone();
                     sorted_known.sort();
@@ -1533,7 +2029,11 @@ fn validate_graph_shape(data: &Value, problems: &mut Vec<String>) {
                 }
             }
         }
-        if body_obj.get("fields").map(|f| !f.is_null()).unwrap_or(false) {
+        if body_obj
+            .get("fields")
+            .map(|f| !f.is_null())
+            .unwrap_or(false)
+        {
             check_fields(&where_, Some(body), EDGE_RESERVED_FIELDS, problems);
         }
     }
@@ -1557,21 +2057,37 @@ pub fn check_lens_filter(text: &Value) -> Option<String> {
     while pos < text.len() {
         let Some(caps) = re.captures(&text[pos..]) else {
             let tail: String = text[pos..].chars().take(10).collect();
-            return Some(format!("filter {}: cannot read {}", py_repr_str(text), py_repr_str(&tail)));
+            return Some(format!(
+                "filter {}: cannot read {}",
+                py_repr_str(text),
+                py_repr_str(&tail)
+            ));
         };
         let whole = caps.get(0).unwrap();
         if whole.end() == 0 {
             let tail: String = text[pos..].chars().take(10).collect();
-            return Some(format!("filter {}: cannot read {}", py_repr_str(text), py_repr_str(&tail)));
+            return Some(format!(
+                "filter {}: cannot read {}",
+                py_repr_str(text),
+                py_repr_str(&tail)
+            ));
         }
         let word = caps.get(5).map(|m| m.as_str());
         let stray = caps.get(6).map(|m| m.as_str());
         if let Some(stray) = stray {
-            return Some(format!("filter {}: character {} is not allowed", py_repr_str(text), py_repr_str(stray)));
+            return Some(format!(
+                "filter {}: character {} is not allowed",
+                py_repr_str(text),
+                py_repr_str(stray)
+            ));
         }
         if let Some(word) = word {
             let upper = word.to_uppercase();
-            if !LENS_FILTER_FIELDS.contains(&word) && !LENS_FILTER_WORDS.contains(&upper.as_str()) && word != "true" && word != "false" {
+            if !LENS_FILTER_FIELDS.contains(&word)
+                && !LENS_FILTER_WORDS.contains(&upper.as_str())
+                && word != "true"
+                && word != "false"
+            {
                 return Some(format!(
                     "filter {}: {} is not a label field ({}) or an operator; unit fields belong in the standard",
                     py_repr_str(text),
@@ -1586,7 +2102,9 @@ pub fn check_lens_filter(text: &Value) -> Option<String> {
 }
 
 fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
-    let Some(lenses) = data.get("lenses") else { return };
+    let Some(lenses) = data.get("lenses") else {
+        return;
+    };
     if lenses.is_null() {
         return;
     }
@@ -1597,11 +2115,17 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
     let status = data.get("status").and_then(Value::as_object);
     let fid = data.get("fidelity").and_then(Value::as_object);
     let vocab = data.get("vocabulary").and_then(Value::as_object);
-    let issues: Vec<Value> = vocab.and_then(|v| v.get("issues")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let issues: Vec<Value> = vocab
+        .and_then(|v| v.get("issues"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut names: Vec<String> = Vec::new();
     for lens in lenses_arr {
         let lens_obj = lens.as_object();
-        let has_name = lens_obj.map(|o| is_truthy_nonempty(o.get("name"))).unwrap_or(false);
+        let has_name = lens_obj
+            .map(|o| is_truthy_nonempty(o.get("name")))
+            .unwrap_or(false);
         if lens_obj.is_none() || !has_name {
             problems.push("each lens needs a name".to_string());
             continue;
@@ -1613,10 +2137,19 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
         if !is_id(&name) {
             problems.push(format!("{where_}: name must match [a-z0-9_]+"));
         }
-        let unknown = sorted_unique_strs(lens_obj.keys().map(String::as_str).filter(|k| !LENS_KEYS.contains(k)));
+        let unknown = sorted_unique_strs(
+            lens_obj
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !LENS_KEYS.contains(k)),
+        );
         if !unknown.is_empty() {
             let allowed = sorted_unique_strs(LENS_KEYS.iter().copied());
-            problems.push(format!("{where_}: unknown key(s) {}; allowed: {}", unknown.join(", "), allowed.join(", ")));
+            problems.push(format!(
+                "{where_}: unknown key(s) {}; allowed: {}",
+                unknown.join(", "),
+                allowed.join(", ")
+            ));
         }
         let kind = lens_obj.get("kind").and_then(Value::as_str);
         if !kind.map(|k| LENS_KINDS.contains(&k)).unwrap_or(false) {
@@ -1626,13 +2159,21 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
                 py_repr_value(lens_obj.get("kind").unwrap_or(&Value::Null))
             ));
         }
-        let charter_ok = lens_obj.get("charter").and_then(Value::as_str).map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let charter_ok = lens_obj
+            .get("charter")
+            .and_then(Value::as_str)
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         if !charter_ok {
             problems.push(format!("{where_}: charter is required (who looks, what they want, what hurts them; human-signed)"));
         }
         let backing = lens_obj.get("backing");
         let backing_str = backing.and_then(Value::as_str);
-        if backing.map(|b| !b.is_null()).unwrap_or(false) && !backing_str.map(|b| LENS_BACKINGS.contains(&b)).unwrap_or(false) {
+        if backing.map(|b| !b.is_null()).unwrap_or(false)
+            && !backing_str
+                .map(|b| LENS_BACKINGS.contains(&b))
+                .unwrap_or(false)
+        {
             problems.push(format!(
                 "{where_}: backing must be one of {} (got {})",
                 LENS_BACKINGS.join(", "),
@@ -1640,11 +2181,19 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
             ));
         }
         let signed = lens_obj.get("signed");
-        if signed.map(|s| !s.is_null()).unwrap_or(false) && !matches!(signed, Some(Value::Bool(_))) {
-            problems.push(format!("{where_}: signed must be true or false (a human signed this charter, or did not)"));
+        if signed.map(|s| !s.is_null()).unwrap_or(false) && !matches!(signed, Some(Value::Bool(_)))
+        {
+            problems.push(format!(
+                "{where_}: signed must be true or false (a human signed this charter, or did not)"
+            ));
         }
         let signed_true = signed == Some(&Value::Bool(true));
-        if !signed_true && matches!(backing_str, Some("source") | Some("graph") | Some("calibrated")) {
+        if !signed_true
+            && matches!(
+                backing_str,
+                Some("source") | Some("graph") | Some("calibrated")
+            )
+        {
             problems.push(format!(
                 "{where_}: backing {} claims more than prompt-backed, but signed is not true; sign the charter or set backing: prompt",
                 py_repr_value(backing.unwrap())
@@ -1652,60 +2201,96 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
         }
         if let Some(order) = lens_obj.get("order") {
             if !order.is_null() && !order.is_string() {
-                problems.push(format!("{where_}: order must be a string (an ORDER BY over label fields)"));
+                problems.push(format!(
+                    "{where_}: order must be a string (an ORDER BY over label fields)"
+                ));
             }
         }
         let standard = lens_obj.get("standard");
         if let Some(standard) = standard.filter(|s| !s.is_null()) {
-          if standard.as_object().is_none() {
-            problems.push(format!("{where_}: standard must be a mapping of status and/or grade lists"));
-          } else {
-            let standard_obj = standard.as_object().unwrap();
-            let bad = sorted_unique_strs(standard_obj.keys().map(String::as_str).filter(|k| !LENS_STANDARD_KEYS.contains(k)));
-            if !bad.is_empty() {
-                problems.push(format!("{where_}: standard may only name {} (got {})", LENS_STANDARD_KEYS.join(", "), bad.join(", ")));
-            }
-            for (key, exists, base, base_name) in [
-                (
-                    "status",
-                    status.and_then(|s| s.get("values")).and_then(Value::as_array).cloned().unwrap_or_default(),
-                    status.and_then(|s| s.get("usable")).and_then(Value::as_array).cloned().unwrap_or_default(),
-                    "status.usable",
-                ),
-                (
-                    "grade",
-                    fid.and_then(|f| f.get("order")).and_then(Value::as_array).cloned().unwrap_or_default(),
-                    fid.and_then(|f| f.get("confirming")).and_then(Value::as_array).cloned().unwrap_or_default(),
-                    "fidelity.confirming",
-                ),
-            ] {
-                let Some(values) = standard_obj.get(key) else { continue };
-                if values.is_null() {
-                    continue;
-                }
-                let Some(values_arr) = values.as_array().filter(|a| !a.is_empty()) else {
-                    problems.push(format!("{where_}: standard.{key} must be a non-empty list"));
-                    continue;
-                };
-                let exists_strs: Vec<String> = exists.iter().map(py_str_of).collect();
-                let missing: Vec<String> = values_arr.iter().map(py_str_of).filter(|v| !exists.iter().any(|e| py_str_of(e) == *v)).collect();
-                if !missing.is_empty() {
-                    problems.push(format!("{where_}: standard.{key} names {}, which does not exist", missing.join(", ")));
-                }
-                let base_strs: Vec<String> = base.iter().map(py_str_of).collect();
-                let looser: Vec<String> = values_arr
-                    .iter()
-                    .map(py_str_of)
-                    .filter(|v| exists_strs.contains(v) && !base_strs.contains(v))
-                    .collect();
-                if !looser.is_empty() {
+            if standard.as_object().is_none() {
+                problems.push(format!(
+                    "{where_}: standard must be a mapping of status and/or grade lists"
+                ));
+            } else {
+                let standard_obj = standard.as_object().unwrap();
+                let bad = sorted_unique_strs(
+                    standard_obj
+                        .keys()
+                        .map(String::as_str)
+                        .filter(|k| !LENS_STANDARD_KEYS.contains(k)),
+                );
+                if !bad.is_empty() {
                     problems.push(format!(
+                        "{where_}: standard may only name {} (got {})",
+                        LENS_STANDARD_KEYS.join(", "),
+                        bad.join(", ")
+                    ));
+                }
+                for (key, exists, base, base_name) in [
+                    (
+                        "status",
+                        status
+                            .and_then(|s| s.get("values"))
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        status
+                            .and_then(|s| s.get("usable"))
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        "status.usable",
+                    ),
+                    (
+                        "grade",
+                        fid.and_then(|f| f.get("order"))
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        fid.and_then(|f| f.get("confirming"))
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default(),
+                        "fidelity.confirming",
+                    ),
+                ] {
+                    let Some(values) = standard_obj.get(key) else {
+                        continue;
+                    };
+                    if values.is_null() {
+                        continue;
+                    }
+                    let Some(values_arr) = values.as_array().filter(|a| !a.is_empty()) else {
+                        problems.push(format!("{where_}: standard.{key} must be a non-empty list"));
+                        continue;
+                    };
+                    let exists_strs: Vec<String> = exists.iter().map(py_str_of).collect();
+                    let missing: Vec<String> = values_arr
+                        .iter()
+                        .map(py_str_of)
+                        .filter(|v| !exists.iter().any(|e| py_str_of(e) == *v))
+                        .collect();
+                    if !missing.is_empty() {
+                        problems.push(format!(
+                            "{where_}: standard.{key} names {}, which does not exist",
+                            missing.join(", ")
+                        ));
+                    }
+                    let base_strs: Vec<String> = base.iter().map(py_str_of).collect();
+                    let looser: Vec<String> = values_arr
+                        .iter()
+                        .map(py_str_of)
+                        .filter(|v| exists_strs.contains(v) && !base_strs.contains(v))
+                        .collect();
+                    if !looser.is_empty() {
+                        problems.push(format!(
                         "{where_}: standard.{key} admits {}, outside the base {base_name}: a lens may be stricter, never looser",
                         looser.join(", ")
                     ));
+                    }
                 }
             }
-          }
         }
         if let Some(filter) = lens_obj.get("filter") {
             if !filter.is_null() {
@@ -1722,11 +2307,20 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
         let mut nodes: Vec<String> = Vec::new();
         if let Some(frame) = frame {
             let frame_obj = frame.as_object();
-            let source_ok = frame_obj.and_then(|f| f.get("source")).and_then(Value::as_str).map(|s| !s.trim().is_empty()).unwrap_or(false);
+            let source_ok = frame_obj
+                .and_then(|f| f.get("source"))
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
             if frame_obj.is_none() || !source_ok {
-                problems.push(format!("{where_}: frame.source must say where the frame was transcribed from"));
+                problems.push(format!(
+                    "{where_}: frame.source must say where the frame was transcribed from"
+                ));
             }
-            let raw_nodes = frame_obj.and_then(|f| f.get("nodes")).and_then(Value::as_array).filter(|n| !n.is_empty());
+            let raw_nodes = frame_obj
+                .and_then(|f| f.get("nodes"))
+                .and_then(Value::as_array)
+                .filter(|n| !n.is_empty());
             if let Some(raw_nodes) = raw_nodes {
                 nodes = raw_nodes.iter().map(py_str_of).collect();
                 let uniq = sorted_unique_strs(nodes.iter().map(String::as_str));
@@ -1737,11 +2331,16 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
                 if !bad.is_empty() {
                     problems.push(format!(
                         "{where_}: frame node id(s) {} must match [a-z0-9_]+",
-                        bad.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        bad.iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
             } else {
-                problems.push(format!("{where_}: frame.nodes must be a non-empty list of node ids"));
+                problems.push(format!(
+                    "{where_}: frame.nodes must be a non-empty list of node ids"
+                ));
             }
         }
         if let Some(crosswalk) = crosswalk {
@@ -1749,28 +2348,54 @@ fn validate_lenses(data: &Value, problems: &mut Vec<String>) {
                 problems.push(format!("{where_}: a crosswalk needs a frame to file under"));
             }
             let Some(crosswalk_obj) = crosswalk.as_object() else {
-                problems.push(format!("{where_}: crosswalk must map frame node -> list of issues"));
+                problems.push(format!(
+                    "{where_}: crosswalk must map frame node -> list of issues"
+                ));
                 continue;
             };
-            let not_nodes = sorted_unique_strs(crosswalk_obj.keys().map(String::as_str).filter(|k| !nodes.contains(&k.to_string())));
+            let not_nodes = sorted_unique_strs(
+                crosswalk_obj
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|k| !nodes.contains(&k.to_string())),
+            );
             if !not_nodes.is_empty() && !nodes.is_empty() {
-                problems.push(format!("{where_}: crosswalk key(s) {} are not frame nodes", not_nodes.join(", ")));
+                problems.push(format!(
+                    "{where_}: crosswalk key(s) {} are not frame nodes",
+                    not_nodes.join(", ")
+                ));
             }
-            let uncovered: Vec<&String> = nodes.iter().filter(|n| !crosswalk_obj.contains_key(*n)).collect();
+            let uncovered: Vec<&String> = nodes
+                .iter()
+                .filter(|n| !crosswalk_obj.contains_key(*n))
+                .collect();
             if !uncovered.is_empty() {
                 problems.push(format!(
                     "{where_}: crosswalk must name every frame node (missing {}; use [] for none)",
-                    uncovered.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    uncovered
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
             for (node, values) in crosswalk_obj {
                 let Some(values_arr) = values.as_array() else {
-                    problems.push(format!("{where_}: crosswalk.{node} must be a list of issues"));
+                    problems.push(format!(
+                        "{where_}: crosswalk.{node} must be a list of issues"
+                    ));
                     continue;
                 };
-                let bad: Vec<String> = values_arr.iter().filter(|v| !issues.iter().any(|i| i == *v)).map(py_str_of).collect();
+                let bad: Vec<String> = values_arr
+                    .iter()
+                    .filter(|v| !issues.iter().any(|i| i == *v))
+                    .map(py_str_of)
+                    .collect();
                 if !bad.is_empty() {
-                    problems.push(format!("{where_}: crosswalk.{node} names {}, not in vocabulary.issues", bad.join(", ")));
+                    problems.push(format!(
+                        "{where_}: crosswalk.{node} names {}, not in vocabulary.issues",
+                        bad.join(", ")
+                    ));
                 }
             }
         }
@@ -1792,34 +2417,66 @@ pub struct Instance {
 
 impl Instance {
     pub fn confirming_grades(&self) -> Vec<Value> {
-        self.data["fidelity"]["confirming"].as_array().cloned().unwrap_or_default()
+        self.data["fidelity"]["confirming"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn grades(&self) -> Vec<Value> {
-        self.data["fidelity"]["order"].as_array().cloned().unwrap_or_default()
+        self.data["fidelity"]["order"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn usable_statuses(&self) -> Vec<Value> {
-        self.data["status"]["usable"].as_array().cloned().unwrap_or_default()
+        self.data["status"]["usable"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn status_values(&self) -> Vec<Value> {
-        self.data["status"]["values"].as_array().cloned().unwrap_or_default()
+        self.data["status"]["values"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn verdict_meanings(&self) -> Map<String, Value> {
-        self.data.get("verdicts").and_then(Value::as_object).cloned().unwrap_or_default()
+        self.data
+            .get("verdicts")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn unit_names(&self) -> Vec<String> {
-        self.data["units"].as_array().map(|a| a.iter().filter_map(|u| u.get("name")).map(py_str_of).collect()).unwrap_or_default()
+        self.data["units"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|u| u.get("name"))
+                    .map(py_str_of)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
     /// `config.py:439 unit_type`: the declared unit whose `name` equals `name`, or `None` (the
     /// oracle raises `KeyError`; a missing unit is a programming error here too, not a config
     /// refusal, so callers that need the oracle's exact message can match on `None` themselves).
     pub fn unit_type(&self, name: &str) -> Option<&Value> {
-        self.data["units"].as_array()?.iter().find(|u| u.get("name").map(py_str_of).as_deref() == Some(name))
+        self.data["units"]
+            .as_array()?
+            .iter()
+            .find(|u| u.get("name").map(py_str_of).as_deref() == Some(name))
     }
     /// `config.py:445 allowed_vocabulary`: every declared vocabulary list, plus `grades` and
     /// `statuses` (which are not literally under `vocabulary:` but are part of what a label
     /// validator accepts).
     pub fn allowed_vocabulary(&self) -> Map<String, Value> {
-        let mut vocab = self.data.get("vocabulary").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut vocab = self
+            .data
+            .get("vocabulary")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         vocab.insert("grades".to_string(), Value::Array(self.grades()));
         vocab.insert("statuses".to_string(), Value::Array(self.status_values()));
         vocab
@@ -1836,7 +2493,10 @@ impl Instance {
     /// `config.py:471 table_fields`: the declared fields of a declared node table; `{}` for a
     /// built-in (its fields are the engine's).
     pub fn table_fields(&self, table: &str) -> Value {
-        self.declared_tables().get(table).cloned().unwrap_or(Value::Object(Map::new()))
+        self.declared_tables()
+            .get(table)
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()))
     }
     /// `config.py:475 edge_fields`: the declared fields of a declared edge type; `{}` for a
     /// built-in (they carry none).
@@ -1861,37 +2521,69 @@ impl Instance {
         let mut out = Map::new();
         if let Some(section) = self.data.get("unique").and_then(Value::as_object) {
             for (table, fields) in section {
-                let strs: Vec<String> = fields.as_array().map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
-                out.insert(table.clone(), Value::Array(strs.into_iter().map(Value::String).collect()));
+                let strs: Vec<String> = fields
+                    .as_array()
+                    .map(|a| a.iter().map(py_str_of).collect())
+                    .unwrap_or_default();
+                out.insert(
+                    table.clone(),
+                    Value::Array(strs.into_iter().map(Value::String).collect()),
+                );
             }
         }
         out
     }
     pub fn independent_rules(&self) -> Vec<Value> {
-        self.gate_rules().into_iter().filter(|r| independence_of(r).is_some()).collect()
+        self.gate_rules()
+            .into_iter()
+            .filter(|r| independence_of(r).is_some())
+            .collect()
     }
     pub fn promotion_log_enabled(&self) -> bool {
         self.data.get("promotion_log") == Some(&Value::Bool(true))
     }
     pub fn access_roles(&self) -> Map<String, Value> {
         let mut out = Map::new();
-        if let Some(roles) = self.data.get("access").and_then(Value::as_object).and_then(|a| a.get("roles")).and_then(Value::as_object) {
+        if let Some(roles) = self
+            .data
+            .get("access")
+            .and_then(Value::as_object)
+            .and_then(|a| a.get("roles"))
+            .and_then(Value::as_object)
+        {
             for (name, spec) in roles {
                 let mut m = Map::new();
-                m.insert("read".to_string(), spec.get("read").cloned().unwrap_or(Value::Array(vec![])));
-                m.insert("write".to_string(), spec.get("write").cloned().unwrap_or(Value::Array(vec![])));
+                m.insert(
+                    "read".to_string(),
+                    spec.get("read").cloned().unwrap_or(Value::Array(vec![])),
+                );
+                m.insert(
+                    "write".to_string(),
+                    spec.get("write").cloned().unwrap_or(Value::Array(vec![])),
+                );
                 // `config.py:499`: `bool(spec.get("lens_bound"))` -- Python truthiness, not `== True`.
-                m.insert("lens_bound".to_string(), Value::Bool(is_truthy_nonempty(spec.get("lens_bound"))));
+                m.insert(
+                    "lens_bound".to_string(),
+                    Value::Bool(is_truthy_nonempty(spec.get("lens_bound"))),
+                );
                 out.insert(name.clone(), Value::Object(m));
             }
         }
         out
     }
     pub fn lenses(&self) -> Vec<Value> {
-        self.data.get("lenses").and_then(Value::as_array).cloned().unwrap_or_default()
+        self.data
+            .get("lenses")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn roles(&self) -> Vec<Value> {
-        self.data.get("roles").and_then(Value::as_array).cloned().unwrap_or_default()
+        self.data
+            .get("roles")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn evaluator(&self) -> Value {
         self.data.get("evaluator").cloned().unwrap_or(Value::Null)
@@ -1912,7 +2604,11 @@ impl Instance {
 pub fn load_from_mapping(data: Value) -> R<Instance> {
     let validated = validate(data)?;
     let id = py_str_of(&validated["instance"]["id"]);
-    Ok(Instance { data: validated, source: None, id })
+    Ok(Instance {
+        data: validated,
+        source: None,
+        id,
+    })
 }
 
 pub fn load_from_path(path: &Path) -> R<Instance> {
@@ -1926,14 +2622,21 @@ pub fn load_from_path(path: &Path) -> R<Instance> {
     };
     let validated = validate(data)?;
     let id = py_str_of(&validated["instance"]["id"]);
-    let inst = Instance { data: validated, source: Some(path.to_path_buf()), id };
+    let inst = Instance {
+        data: validated,
+        source: Some(path.to_path_buf()),
+        id,
+    };
     refuse_unusable_regression_file(&inst, None)?;
     Ok(inst)
 }
 
 /// `groundworks/config.py:1194 regression_file_path`.
 pub fn regression_file_path(inst: &Instance, base_dir: Option<&Path>) -> R<PathBuf> {
-    let declared = inst.data["evaluator"]["regression_file"].as_str().unwrap_or("").to_string();
+    let declared = inst.data["evaluator"]["regression_file"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let declared_path = shellexpand_home(&declared);
     if declared_path.is_absolute() {
         return Ok(declared_path);
@@ -1980,7 +2683,9 @@ the first real error is recorded)",
     }
     match evaluator_support::read_file(&path) {
         Ok(_) => Ok(path),
-        Err(e) => Err(ConfigError(format!("config invalid:\n  - evaluator.regression_file: {e}"))),
+        Err(e) => Err(ConfigError(format!(
+            "config invalid:\n  - evaluator.regression_file: {e}"
+        ))),
     }
 }
 
@@ -2025,10 +2730,25 @@ pub fn spec(inst: &Instance) -> Value {
                 for clause in clause_list {
                     let mut c = Map::new();
                     c.insert("kind".to_string(), Value::String(kind.to_string()));
-                    c.insert("edge".to_string(), clause.get("edge").cloned().unwrap_or(Value::Null));
-                    c.insert("min".to_string(), clause.get("min").cloned().unwrap_or(Value::Number(1.into())));
-                    let where_expanded = expand_where(&inst.data, clause.get("where").and_then(Value::as_str));
-                    let where_val = if clause.get("where").and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false) {
+                    c.insert(
+                        "edge".to_string(),
+                        clause.get("edge").cloned().unwrap_or(Value::Null),
+                    );
+                    c.insert(
+                        "min".to_string(),
+                        clause
+                            .get("min")
+                            .cloned()
+                            .unwrap_or(Value::Number(1.into())),
+                    );
+                    let where_expanded =
+                        expand_where(&inst.data, clause.get("where").and_then(Value::as_str));
+                    let where_val = if clause
+                        .get("where")
+                        .and_then(Value::as_str)
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false)
+                    {
                         Value::String(where_expanded)
                     } else {
                         Value::Null
@@ -2040,22 +2760,37 @@ pub fn spec(inst: &Instance) -> Value {
         }
         clauses.sort_by_key(|c| {
             (
-                c.get("kind").and_then(Value::as_str).unwrap_or("").to_string(),
+                c.get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 py_str_of(c.get("edge").unwrap_or(&Value::Null)),
                 py_str_of(c.get("where").unwrap_or(&Value::Null)),
             )
         });
         let id = py_str_of(rule.get("id").unwrap_or(&Value::Null));
         let mut r = Map::new();
-        r.insert("table".to_string(), rule.get("table").cloned().unwrap_or(Value::Null));
-        r.insert("field".to_string(), rule.get("field").cloned().unwrap_or(Value::Null));
-        r.insert("value".to_string(), rule.get("value").cloned().unwrap_or(Value::Null));
+        r.insert(
+            "table".to_string(),
+            rule.get("table").cloned().unwrap_or(Value::Null),
+        );
+        r.insert(
+            "field".to_string(),
+            rule.get("field").cloned().unwrap_or(Value::Null),
+        );
+        r.insert(
+            "value".to_string(),
+            rule.get("value").cloned().unwrap_or(Value::Null),
+        );
         r.insert("clauses".to_string(), Value::Array(clauses));
         if let Some(mode) = independence_of(rule) {
             r.insert("independent".to_string(), Value::Bool(true));
             let default_mode = {
                 let mut m = Map::new();
-                m.insert("between".to_string(), Value::String("credential".to_string()));
+                m.insert(
+                    "between".to_string(),
+                    Value::String("credential".to_string()),
+                );
                 m.insert("own_evidence".to_string(), Value::Bool(false));
                 Value::Object(m)
             };
@@ -2078,10 +2813,16 @@ pub fn spec(inst: &Instance) -> Value {
         tables.sort();
         let mut unique_out = Map::new();
         for table in tables {
-            let mut fields: Vec<String> =
-                unique.get(table).and_then(Value::as_array).map(|a| a.iter().map(py_str_of).collect()).unwrap_or_default();
+            let mut fields: Vec<String> = unique
+                .get(table)
+                .and_then(Value::as_array)
+                .map(|a| a.iter().map(py_str_of).collect())
+                .unwrap_or_default();
             fields.sort();
-            unique_out.insert(table.clone(), Value::Array(fields.into_iter().map(Value::String).collect()));
+            unique_out.insert(
+                table.clone(),
+                Value::Array(fields.into_iter().map(Value::String).collect()),
+            );
         }
         out.insert("unique".to_string(), Value::Object(unique_out));
     }
@@ -2116,7 +2857,16 @@ mod const_table_pins {
         // config.py:42 + :84 (`+ ("document",)`)
         assert_eq!(
             BUILT_IN_NODE_TABLES,
-            ["unit", "label", "fact", "conclusion", "authority", "critique", "answer", "document"]
+            [
+                "unit",
+                "label",
+                "fact",
+                "conclusion",
+                "authority",
+                "critique",
+                "answer",
+                "document"
+            ]
         );
     }
 
@@ -2150,42 +2900,87 @@ mod const_table_pins {
             (
                 "unit",
                 &[
-                    ("type", "string"), ("text", "string"), ("locator", "object"), ("status", "string"),
-                    ("grade", "string"), ("hash", "string"), ("meta", "object"), ("document", "record"),
+                    ("type", "string"),
+                    ("text", "string"),
+                    ("locator", "object"),
+                    ("status", "string"),
+                    ("grade", "string"),
+                    ("hash", "string"),
+                    ("meta", "object"),
+                    ("document", "record"),
                 ],
             ),
             (
                 "label",
                 &[
-                    ("unit", "record"), ("tier", "int"), ("dir", "string"), ("issues", "array"),
-                    ("targets", "array"), ("role", "string"), ("reason", "string"), ("quote", "string"),
-                    ("grade", "string"), ("chunk", "string"), ("run", "string"),
+                    ("unit", "record"),
+                    ("tier", "int"),
+                    ("dir", "string"),
+                    ("issues", "array"),
+                    ("targets", "array"),
+                    ("role", "string"),
+                    ("reason", "string"),
+                    ("quote", "string"),
+                    ("grade", "string"),
+                    ("chunk", "string"),
+                    ("run", "string"),
                 ],
             ),
             (
                 "fact",
                 &[
-                    ("statement", "string"), ("status", "string"), ("note", "string"), ("tried", "string"),
-                    ("evidence", "string"), ("reasoning_type", "string"), ("author", "string"),
-                    ("lens", "string"), ("learned_at", "datetime"),
+                    ("statement", "string"),
+                    ("status", "string"),
+                    ("note", "string"),
+                    ("tried", "string"),
+                    ("evidence", "string"),
+                    ("reasoning_type", "string"),
+                    ("author", "string"),
+                    ("lens", "string"),
+                    ("learned_at", "datetime"),
                 ],
             ),
-            ("conclusion", &[("statement", "string"), ("ready", "bool"), ("rating", "string"), ("author", "string")]),
-            ("authority", &[("citation", "string"), ("verified", "bool"), ("source_grade", "string")]),
+            (
+                "conclusion",
+                &[
+                    ("statement", "string"),
+                    ("ready", "bool"),
+                    ("rating", "string"),
+                    ("author", "string"),
+                ],
+            ),
+            (
+                "authority",
+                &[
+                    ("citation", "string"),
+                    ("verified", "bool"),
+                    ("source_grade", "string"),
+                ],
+            ),
             (
                 "critique",
                 &[
-                    ("lens", "string"), ("head", "string"), ("verdict", "string"), ("text", "string"),
-                    ("author", "string"), ("answered", "bool"),
+                    ("lens", "string"),
+                    ("head", "string"),
+                    ("verdict", "string"),
+                    ("text", "string"),
+                    ("author", "string"),
+                    ("answered", "bool"),
                 ],
             ),
             ("answer", &[("text", "string"), ("author", "string")]),
             (
                 "document",
                 &[
-                    ("sha256", "string"), ("media_type", "string"), ("bytes", "int"), ("capture", "string"),
-                    ("source_uri", "string"), ("retrieved_at", "datetime"), ("original_name", "string"),
-                    ("integrity", "string"), ("verified_at", "datetime"),
+                    ("sha256", "string"),
+                    ("media_type", "string"),
+                    ("bytes", "int"),
+                    ("capture", "string"),
+                    ("source_uri", "string"),
+                    ("retrieved_at", "datetime"),
+                    ("original_name", "string"),
+                    ("integrity", "string"),
+                    ("verified_at", "datetime"),
                 ],
             ),
         ];
@@ -2201,7 +2996,15 @@ mod const_table_pins {
     #[test]
     fn audit_tables_pin() {
         // config.py:115
-        assert_eq!(AUDIT_TABLES, ["row_writer", "link_creator", "promotion_log", "promotion_head"]);
+        assert_eq!(
+            AUDIT_TABLES,
+            [
+                "row_writer",
+                "link_creator",
+                "promotion_log",
+                "promotion_head"
+            ]
+        );
     }
 
     #[test]
@@ -2223,20 +3026,43 @@ mod const_table_pins {
         // (round-1's still-green fidelity<->status mutant) changes which key a refusal names.
         assert_eq!(
             REQUIRED_TOP,
-            ["instance", "units", "fidelity", "status", "vocabulary", "gates", "evaluator", "human_owned", "privacy"]
+            [
+                "instance",
+                "units",
+                "fidelity",
+                "status",
+                "vocabulary",
+                "gates",
+                "evaluator",
+                "human_owned",
+                "privacy"
+            ]
         );
     }
 
     #[test]
     fn must_be_human_owned_pin() {
         // config.py:33
-        assert_eq!(MUST_BE_HUMAN_OWNED, ["gates", "fidelity", "status", "evaluator", "privacy"]);
+        assert_eq!(
+            MUST_BE_HUMAN_OWNED,
+            ["gates", "fidelity", "status", "evaluator", "privacy"]
+        );
     }
 
     #[test]
     fn human_owned_if_present_pin() {
         // config.py:35 + :81 (`+ ["originals"]`) + :83 (`+ ["labels"]`)
-        assert_eq!(HUMAN_OWNED_IF_PRESENT, ["verdicts", "unique", "assertions", "promotion_log", "originals", "labels"]);
+        assert_eq!(
+            HUMAN_OWNED_IF_PRESENT,
+            [
+                "verdicts",
+                "unique",
+                "assertions",
+                "promotion_log",
+                "originals",
+                "labels"
+            ]
+        );
     }
 
     #[test]
@@ -2260,7 +3086,10 @@ mod const_table_pins {
     #[test]
     fn lens_filter_fields_pin() {
         // config.py:215 -- label fields only.
-        assert_eq!(LENS_FILTER_FIELDS, ["tier", "dir", "issues", "targets", "role", "chunk"]);
+        assert_eq!(
+            LENS_FILTER_FIELDS,
+            ["tier", "dir", "issues", "targets", "role", "chunk"]
+        );
     }
 
     #[test]
@@ -2268,7 +3097,19 @@ mod const_table_pins {
         // config.py:216-217
         assert_eq!(
             LENS_FILTER_WORDS,
-            ["AND", "OR", "NOT", "IN", "CONTAINS", "CONTAINSANY", "CONTAINSALL", "CONTAINSNOT", "NONE", "true", "false"]
+            [
+                "AND",
+                "OR",
+                "NOT",
+                "IN",
+                "CONTAINS",
+                "CONTAINSANY",
+                "CONTAINSALL",
+                "CONTAINSNOT",
+                "NONE",
+                "true",
+                "false"
+            ]
         );
     }
 
@@ -2304,10 +3145,32 @@ mod const_table_pins {
         assert_eq!(
             set(TOP_KEYS),
             set(&[
-                "instance", "units", "fidelity", "status", "vocabulary", "gates", "lenses", "roles",
-                "evaluator", "human_owned", "privacy", "panel", "present", "embed", "access", "authority",
-                "staleness", "discovery", "tables", "edges", "verdicts", "unique", "assertions",
-                "promotion_log", "labels", "originals",
+                "instance",
+                "units",
+                "fidelity",
+                "status",
+                "vocabulary",
+                "gates",
+                "lenses",
+                "roles",
+                "evaluator",
+                "human_owned",
+                "privacy",
+                "panel",
+                "present",
+                "embed",
+                "access",
+                "authority",
+                "staleness",
+                "discovery",
+                "tables",
+                "edges",
+                "verdicts",
+                "unique",
+                "assertions",
+                "promotion_log",
+                "labels",
+                "originals",
             ])
         );
     }
@@ -2319,7 +3182,15 @@ mod const_table_pins {
         assert_eq!(
             set(LENS_KEYS),
             set(&[
-                "name", "kind", "charter", "standard", "filter", "backing", "frame", "crosswalk", "signed",
+                "name",
+                "kind",
+                "charter",
+                "standard",
+                "filter",
+                "backing",
+                "frame",
+                "crosswalk",
+                "signed",
                 "order",
             ])
         );
@@ -2341,16 +3212,18 @@ mod const_table_pins {
     #[test]
     fn every_str_slice_const_has_a_matching_pin() {
         let src = include_str!("mod.rs");
-        let decl_re =
-            regex::Regex::new(r#"(?ms)^(?:pub(?:\(crate\))?\s+)?const ([A-Z_]+): &\[&str\]\s*=\s*&\[(.*?)\];"#)
-                .unwrap();
+        let decl_re = regex::Regex::new(
+            r#"(?ms)^(?:pub(?:\(crate\))?\s+)?const ([A-Z_]+): &\[&str\]\s*=\s*&\[(.*?)\];"#,
+        )
+        .unwrap();
         let str_re = regex::Regex::new(r#""((?:[^"\\]|\\.)*)""#).unwrap();
         let fn_re = regex::Regex::new(r#"(?ms)fn (\w+_pin)\s*\(\)\s*\{(.*?)\n    \}"#).unwrap();
 
         // Scope pin lookup to this module's own text so a constant's declaration line (which also
         // contains its quoted elements) is never mistaken for its pin.
-        let pins_start =
-            src.find("mod const_table_pins {").expect("const_table_pins module not found in mod.rs");
+        let pins_start = src
+            .find("mod const_table_pins {")
+            .expect("const_table_pins module not found in mod.rs");
         let pins_src = &src[pins_start..];
         let pin_bodies: std::collections::HashMap<String, String> = fn_re
             .captures_iter(pins_src)
@@ -2360,8 +3233,10 @@ mod const_table_pins {
         let mut checked = 0;
         for cap in decl_re.captures_iter(src) {
             let name = &cap[1];
-            let expected: BTreeSet<String> =
-                str_re.captures_iter(&cap[2]).map(|m| m[1].to_string()).collect();
+            let expected: BTreeSet<String> = str_re
+                .captures_iter(&cap[2])
+                .map(|m| m[1].to_string())
+                .collect();
             let pin_fn = format!("{}_pin", name.to_lowercase());
             let body = pin_bodies.get(&pin_fn).unwrap_or_else(|| {
                 panic!(
@@ -2376,8 +3251,10 @@ mod const_table_pins {
                 .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
                 .collect::<Vec<_>>()
                 .join("\n");
-            let actual: BTreeSet<String> =
-                str_re.captures_iter(&code_only).map(|m| m[1].to_string()).collect();
+            let actual: BTreeSet<String> = str_re
+                .captures_iter(&code_only)
+                .map(|m| m[1].to_string())
+                .collect();
             assert_eq!(
                 actual, expected,
                 "{pin_fn} does not pin {name}'s actual contents (asserts a different table, checks \
@@ -2387,7 +3264,10 @@ mod const_table_pins {
         }
         // A regression on the regex itself (e.g. a formatting change this pattern can't parse) must
         // not silently check zero constants and report green.
-        assert!(checked >= 20, "expected to find at least 20 `&[&str]` const declarations, found {checked}");
+        assert!(
+            checked >= 20,
+            "expected to find at least 20 `&[&str]` const declarations, found {checked}"
+        );
     }
 }
 
@@ -2433,8 +3313,17 @@ mod round3_duck_typed_consumers {
     #[test]
     fn field_domain_label_fields_treat_bare_string_vocabulary_lists_as_their_characters() {
         let data = json!({"vocabulary": {"tiers": "01", "directions": "fg", "roles": "hi"}});
-        assert_eq!(assertions_support::field_domain(&data, "label", "tier"), Some(vec![json!("0"), json!("1")]));
-        assert_eq!(assertions_support::field_domain(&data, "label", "dir"), Some(vec![json!("f"), json!("g")]));
-        assert_eq!(assertions_support::field_domain(&data, "label", "role"), Some(vec![json!("h"), json!("i")]));
+        assert_eq!(
+            assertions_support::field_domain(&data, "label", "tier"),
+            Some(vec![json!("0"), json!("1")])
+        );
+        assert_eq!(
+            assertions_support::field_domain(&data, "label", "dir"),
+            Some(vec![json!("f"), json!("g")])
+        );
+        assert_eq!(
+            assertions_support::field_domain(&data, "label", "role"),
+            Some(vec![json!("h"), json!("i")])
+        );
     }
 }

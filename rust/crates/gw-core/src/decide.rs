@@ -54,8 +54,17 @@ pub const MIN_ANGLES: usize = 2;
 
 /// Words naming a judgement the unit cannot settle on its own. Allowed only with explicit criteria.
 const VAGUE_WORDS: &[&str] = &[
-    "important", "significant", "relevant", "interesting", "noteworthy", "problematic",
-    "concerning", "appropriate", "reasonable", "good", "bad",
+    "important",
+    "significant",
+    "relevant",
+    "interesting",
+    "noteworthy",
+    "problematic",
+    "concerning",
+    "appropriate",
+    "reasonable",
+    "good",
+    "bad",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -104,7 +113,10 @@ impl Question {
     pub fn noul(instructions: &str, yes: &str, no: &str) -> Self {
         Question {
             instructions: instructions.to_string(),
-            criteria: Criteria::Noul { yes: yes.to_string(), no: no.to_string() },
+            criteria: Criteria::Noul {
+                yes: yes.to_string(),
+                no: no.to_string(),
+            },
             angles: Vec::new(),
         }
     }
@@ -139,7 +151,10 @@ pub fn check_question(q: &Question) -> Option<String> {
         Criteria::Score(v) => v.len() >= 2 && v.iter().all(|s| !s.trim().is_empty()),
     };
 
-    if let Some(w) = VAGUE_WORDS.iter().find(|w| low.split_whitespace().any(|t| t.trim_matches(|c: char| !c.is_alphanumeric()) == **w)) {
+    if let Some(w) = VAGUE_WORDS.iter().find(|w| {
+        low.split_whitespace()
+            .any(|t| t.trim_matches(|c: char| !c.is_alphanumeric()) == **w)
+    }) {
         if !has_descriptions {
             return Some(format!(
                 "instructions {instr:?}: {w:?} is a judgement the unit cannot settle on its own; \
@@ -222,7 +237,10 @@ impl QuestionSchema {
         if !problems.is_empty() {
             return Err(DecideError::Question(problems.join("; ")));
         }
-        Ok(QuestionSchema { name: name.to_string(), questions })
+        Ok(QuestionSchema {
+            name: name.to_string(),
+            questions,
+        })
     }
 
     pub fn name(&self) -> &str {
@@ -259,16 +277,29 @@ impl QuestionSchema {
                 out.push(',');
             }
             out.push_str(&format!("{}:{{", quote(id)));
-            out.push_str(&format!("\"angles\":[{}],", q.angles.iter().map(|a| quote(a)).collect::<Vec<_>>().join(",")));
+            out.push_str(&format!(
+                "\"angles\":[{}],",
+                q.angles
+                    .iter()
+                    .map(|a| quote(a))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
             out.push_str(&format!("\"instructions\":{},", quote(&q.instructions)));
             out.push_str(&format!("\"type\":{},", quote(q.criteria.kind())));
             match &q.criteria {
                 Criteria::Noul { yes, no } => {
-                    out.push_str(&format!("\"criteria\":{{\"false\":{},\"true\":{}}}", quote(no), quote(yes)));
+                    out.push_str(&format!(
+                        "\"criteria\":{{\"false\":{},\"true\":{}}}",
+                        quote(no),
+                        quote(yes)
+                    ));
                 }
                 Criteria::Choice(m) => {
-                    let body: Vec<String> =
-                        m.iter().map(|(k, v)| format!("{}:{}", quote(k), quote(v))).collect();
+                    let body: Vec<String> = m
+                        .iter()
+                        .map(|(k, v)| format!("{}:{}", quote(k), quote(v)))
+                        .collect();
                     out.push_str(&format!("\"criteria\":{{{}}}", body.join(",")));
                 }
                 Criteria::Score(levels) => {
@@ -433,7 +464,10 @@ mod tests {
         // measured: the generic wording scored 0.41 where explicit criteria scored 0.89
         let q = Question::noul("The court refuses to rescind an order.", "", "");
         let problem = check_question(&q).expect("must be refused");
-        assert!(problem.contains("0.41"), "the refusal names its measurement: {problem}");
+        assert!(
+            problem.contains("0.41"),
+            "the refusal names its measurement: {problem}"
+        );
     }
 
     #[test]
@@ -449,7 +483,10 @@ mod tests {
     fn a_vague_judgement_is_refused_bare_and_allowed_with_criteria() {
         let bare = Question {
             instructions: "This passage is relevant to the appeal.".to_string(),
-            criteria: Criteria::Noul { yes: String::new(), no: String::new() },
+            criteria: Criteria::Noul {
+                yes: String::new(),
+                no: String::new(),
+            },
             angles: Vec::new(),
         };
         assert!(check_question(&bare).is_some());
@@ -481,9 +518,14 @@ mod tests {
         };
         assert_eq!(check_question(&q), None);
 
-        let one: BTreeMap<String, String> =
-            [("court", "the judge")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        let q1 = Question { criteria: Criteria::Choice(one), ..q.clone() };
+        let one: BTreeMap<String, String> = [("court", "the judge")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let q1 = Question {
+            criteria: Criteria::Choice(one),
+            ..q.clone()
+        };
         assert!(check_question(&q1).is_some());
 
         let s = Question {
@@ -492,7 +534,10 @@ mod tests {
             angles: Vec::new(),
         };
         assert_eq!(check_question(&s), None);
-        let s1 = Question { criteria: Criteria::Score(vec!["only".into()]), ..s };
+        let s1 = Question {
+            criteria: Criteria::Score(vec!["only".into()]),
+            ..s
+        };
         assert!(check_question(&s1).is_some());
     }
 
@@ -500,7 +545,11 @@ mod tests {
     fn digest_is_build_order_independent_and_change_sensitive() {
         let a = schema_of(vec![("x", good()), ("y", good_b())]);
         let b = schema_of(vec![("y", good_b()), ("x", good())]);
-        assert_eq!(a.digest(), b.digest(), "build order must not change the digest");
+        assert_eq!(
+            a.digest(),
+            b.digest(),
+            "build order must not change the digest"
+        );
 
         let mut moved = good_b();
         moved.instructions.push('.');
@@ -516,7 +565,10 @@ mod tests {
     fn a_bad_question_refuses_the_whole_schema() {
         let map: BTreeMap<String, Question> = [
             ("ok".to_string(), good()),
-            ("bad".to_string(), Question::noul("no descriptions here", "", "")),
+            (
+                "bad".to_string(),
+                Question::noul("no descriptions here", "", ""),
+            ),
         ]
         .into_iter()
         .collect();
@@ -526,8 +578,9 @@ mod tests {
     #[test]
     fn empty_and_oversized_schemas_are_refused() {
         assert!(QuestionSchema::new("t", BTreeMap::new()).is_err());
-        let big: BTreeMap<String, Question> =
-            (0..=MAX_QUESTIONS).map(|i| (format!("q{i}"), good())).collect();
+        let big: BTreeMap<String, Question> = (0..=MAX_QUESTIONS)
+            .map(|i| (format!("q{i}"), good()))
+            .collect();
         assert!(QuestionSchema::new("t", big).is_err());
     }
 
@@ -540,7 +593,10 @@ mod tests {
         let s: BTreeMap<String, BTreeMap<String, f64>> = scores
             .into_iter()
             .map(|(u, a)| {
-                (u.to_string(), a.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+                (
+                    u.to_string(),
+                    a.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+                )
             })
             .collect();
         Finding::new(s, &schema, "q", 0.60, 0.60).expect("finding builds")
@@ -560,7 +616,10 @@ mod tests {
     #[test]
     fn a_single_angle_hit_survives_the_union_and_fails_consensus() {
         // the measured case: best single angle 20, union 24, all three agreeing 1
-        let f = finding_of(vec![("only_one", vec![("reader", 0.95), ("opponent", 0.02)])]);
+        let f = finding_of(vec![(
+            "only_one",
+            vec![("reader", 0.95), ("opponent", 0.02)],
+        )]);
         assert_eq!(f.union(), vec!["only_one".to_string()]);
         assert!(f.consensus().is_empty());
     }
@@ -574,7 +633,10 @@ mod tests {
         assert!(text.contains("reader"), "{text}");
         assert!(text.contains("opponent"), "{text}");
         assert!(text.contains(&f.schema_digest), "{text}");
-        assert!(text.contains("not what the corpus does not contain"), "{text}");
+        assert!(
+            text.contains("not what the corpus does not contain"),
+            "{text}"
+        );
     }
 
     #[test]

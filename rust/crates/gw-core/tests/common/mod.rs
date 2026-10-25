@@ -11,16 +11,23 @@ use std::path::PathBuf;
 
 pub fn oracle_dir() -> PathBuf {
     PathBuf::from(
-        std::env::var("GROUNDWORKS_ORACLE_DIR").unwrap_or_else(|_| "C:/Users/trist/projects/groundworks-oracle".to_string()),
+        std::env::var("GROUNDWORKS_ORACLE_DIR")
+            .unwrap_or_else(|_| "C:/Users/trist/projects/groundworks-oracle".to_string()),
     )
 }
 
 pub fn demo_path() -> PathBuf {
-    oracle_dir().join("instances").join("demo-incident").join("instance.yaml")
+    oracle_dir()
+        .join("instances")
+        .join("demo-incident")
+        .join("instance.yaml")
 }
 
 pub fn template_path() -> PathBuf {
-    oracle_dir().join("instances").join("_template").join("instance.yaml")
+    oracle_dir()
+        .join("instances")
+        .join("_template")
+        .join("instance.yaml")
 }
 
 /// `tests/test_config.py:21-34 MINIMAL`.
@@ -52,9 +59,13 @@ pub fn broken(changes: &[(&str, Option<Value>)]) -> Value {
         let leaf = leaf[0];
         let mut node = &mut data;
         for part in path {
-            node = node.get_mut(*part).unwrap_or_else(|| panic!("no path segment {part} in {dotted}"));
+            node = node
+                .get_mut(*part)
+                .unwrap_or_else(|| panic!("no path segment {part} in {dotted}"));
         }
-        let obj = node.as_object_mut().unwrap_or_else(|| panic!("{dotted}'s parent is not a mapping"));
+        let obj = node
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("{dotted}'s parent is not a mapping"));
         match value {
             None => {
                 obj.remove(leaf);
@@ -82,15 +93,21 @@ pub fn assert_refused(data: Value, phrase: &str) {
         Ok(_) => panic!("expected a refusal containing {phrase:?}, but the config was accepted"),
         Err(e) => {
             let msg = e.to_string().to_lowercase();
-            assert!(msg.contains(&phrase.to_lowercase()), "expected {phrase:?} in refusal, got: {msg}");
+            assert!(
+                msg.contains(&phrase.to_lowercase()),
+                "expected {phrase:?} in refusal, got: {msg}"
+            );
         }
     }
 }
 
 pub fn assert_accepted(data: Value) -> config::Instance {
-    config::load_from_mapping(data).unwrap_or_else(|e| panic!("expected ACCEPT, got a refusal: {e}"))
+    config::load_from_mapping(data)
+        .unwrap_or_else(|e| panic!("expected ACCEPT, got a refusal: {e}"))
 }
 
 pub fn demo_data() -> Value {
-    config::load_from_path(&demo_path()).expect("demo-incident should load").data
+    config::load_from_path(&demo_path())
+        .expect("demo-incident should load")
+        .data
 }

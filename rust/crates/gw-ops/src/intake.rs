@@ -84,7 +84,7 @@ pub struct Expert {
     pub name: String,
     pub summary: String,
     pub file: PathBuf,
-    text: String,
+    pub text: String,
 }
 
 #[derive(Debug, Default)]

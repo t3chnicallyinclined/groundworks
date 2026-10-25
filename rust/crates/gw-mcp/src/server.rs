@@ -75,6 +75,52 @@ pub struct NoteArgs {
     pub quote: Option<Quote>,
     /// What the owner said, with the date, when the owner is the evidence.
     pub owner_statement: Option<String>,
+    /// The lens (expert) this finding was made through, e.g. gw-security.
+    pub lens: Option<String>,
+    /// A fact this one disputes or supports (`fact:...`); needs stance.
+    pub attacks: Option<String>,
+    /// `disputes` or `supports`, with attacks.
+    pub stance: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct LensArgs {
+    /// The lens (any expert's name). Without it, every lens is listed.
+    pub lens: Option<String>,
+    /// The project to read through the lens.
+    pub project: Option<String>,
+    /// Newest N findings and attacks (default 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PanelOpenArgs {
+    pub project: String,
+    /// The panel: {panel_id, target, question, options: [..], objection_categories: [..],
+    /// seats: [{id, lens, aliases}], weighted_seat?}. At least 3 seats, 2 options. Thresholds and
+    /// confidence weights are the owner's (registry/panel.toml); leave them out.
+    pub panel: serde_json::Value,
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PanelSubmitArgs {
+    pub project: String,
+    /// The panel id (panel:...).
+    pub panel: String,
+    /// 1, 2 or counterfactual.
+    pub round: String,
+    pub seat: String,
+    /// The seat's full answer, verbatim, ending with its STANCE line.
+    pub text: String,
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PanelArgs {
+    pub project: String,
+    /// The panel id (panel:...).
+    pub panel: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -159,8 +205,10 @@ pub struct SearchArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct AskArgs {
-    /// The question, in plain words.
-    pub question: String,
+    /// The question, in plain words. With a lens it may be left out: the lens's checks are asked.
+    pub question: Option<String>,
+    /// Ask through a lens (any expert's name): the packet is tagged with it and the lens's findings follow.
+    pub lens: Option<String>,
     /// One project; without it, every shared project.
     pub project: Option<String>,
     /// Only units in this expert's area.
@@ -267,6 +315,9 @@ impl Groundworks {
                     receipt: a.receipt.as_deref(),
                     owner_statement: a.owner_statement.as_deref(),
                     quote: a.quote,
+                    lens: a.lens.as_deref(),
+                    attacks: a.attacks.as_deref(),
+                    stance: a.stance.as_deref(),
                     owner_pass: None,
                 },
             )
@@ -430,18 +481,17 @@ impl Groundworks {
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
         store::blocking(move || {
             let kinds = a.kinds.unwrap_or_default();
-            gw_ops::ask::open(
-                &home,
-                &store,
-                gw_ops::ask::Query {
-                    text: &a.question,
-                    project: a.project.as_deref(),
-                    expert: a.expert.as_deref(),
-                    kinds: &kinds,
-                    limit: a.k.unwrap_or(gw_ops::ask::DEFAULT_K),
-                },
-                a.by.as_deref().unwrap_or("agent"),
-            )
+            let q = gw_ops::ask::Query {
+                text: a.question.as_deref().unwrap_or_default(),
+                project: a.project.as_deref(),
+                expert: a.expert.as_deref(),
+                kinds: &kinds,
+                limit: a.k.unwrap_or(gw_ops::ask::DEFAULT_K),
+            };
+            match a.lens.as_deref() {
+                Some(lens) => gw_ops::lens::ask(&home, &store, lens, a.question.as_deref(), q),
+                None => gw_ops::ask::open(&home, &store, q, a.by.as_deref().unwrap_or("agent")),
+            }
         })
         .await
         .map_err(fail)
@@ -457,6 +507,89 @@ impl Groundworks {
             .await
             .map_err(fail)
             .and_then(passed)
+    }
+
+    #[tool(
+        description = "Lenses: every expert is one. Without a lens, list them with their checks and standard. With a lens and a project, read the project through it: findings that pass its standard, those that no longer do, and every attack (disputes/supports) on them, kept side by side."
+    )]
+    async fn lens(&self, args: Parameters<LensArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || match (a.lens.as_deref(), a.project.as_deref()) {
+            (Some(lens), Some(project)) => gw_ops::lens::view(&home, &store, project, lens, a.limit.unwrap_or(100)),
+            (None, None) => gw_ops::lens::list(),
+            _ => Err(anyhow::anyhow!(
+                "give both lens and project to read through a lens, or neither to list lenses"
+            )),
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Open a deliberation panel on a project question: seats (lenses) answer blind in round 1, then cross-examine anonymized answers in round 2; a program checks the protocol before it tallies. The panel is locked when opened. Returns the panel id and the round-1 brief."
+    )]
+    async fn panel_open(&self, args: Parameters<PanelOpenArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            let project = gw_ops::registry::Registry::load(&home)?
+                .project(&a.project)?
+                .name
+                .clone();
+            let settings = gw_ops::panel::owner_settings(&home)?;
+            gw_ops::panel::open(
+                &store,
+                &project,
+                &a.panel,
+                settings.as_ref(),
+                a.by.as_deref().unwrap_or("agent"),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Save one seat's answer to a panel, verbatim: round 1 (blind; closed once anonymized), round 2 (after the anonymized bundle), or counterfactual (when the agreement check asks for one)."
+    )]
+    async fn panel_submit(&self, args: Parameters<PanelSubmitArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            let project = gw_ops::registry::Registry::load(&home)?
+                .project(&a.project)?
+                .name
+                .clone();
+            gw_ops::panel::submit(
+                &store,
+                &project,
+                &a.panel,
+                &a.round,
+                &a.seat,
+                &a.text,
+                a.by.as_deref().unwrap_or("agent"),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Where a panel stands, and its next step: lists every re-prompt owed (by seat, with the exact prompt to send), anonymizes round 1 once complete (returning the bundle for round 2), and tallies once nothing is owed (CONSENSUS, or SPLIT returned to the owner, with any dealbreaker minority kept)."
+    )]
+    async fn panel(&self, args: Parameters<PanelArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            let project = gw_ops::registry::Registry::load(&home)?
+                .project(&a.project)?
+                .name
+                .clone();
+            gw_ops::panel::status(&store, &project, &a.panel).map(|(text, _)| text)
+        })
+        .await
+        .map_err(fail)
     }
 
     #[tool(description = "The expert directory: every expert agent with a summary of what it is expert in.")]

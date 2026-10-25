@@ -356,6 +356,9 @@ async fn dispatch(command: Command) -> Result<bool> {
                         receipt: receipt.as_deref(),
                         owner_statement: owner_statement.as_deref(),
                         quote,
+                        lens: None,
+                        attacks: None,
+                        stance: None,
                         owner_pass: owner.as_deref(),
                     },
                 )

@@ -48,7 +48,9 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
         None => {
-            println!("gw: try --oracle, --split-statements, config spec/check, or corpus extract/freeze");
+            println!(
+                "gw: try --oracle, --split-statements, config spec/check, or corpus extract/freeze"
+            );
             ExitCode::SUCCESS
         }
     }
@@ -145,7 +147,10 @@ fn config_command(rest: Vec<String>) -> ExitCode {
             match gw_core::config::load_from_path(Path::new(path)) {
                 Ok(inst) => {
                     let spec = gw_core::config::spec(&inst);
-                    println!("{}", gw_core::config::json_sorted::dumps_sorted_indent2(&spec));
+                    println!(
+                        "{}",
+                        gw_core::config::json_sorted::dumps_sorted_indent2(&spec)
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(e) => {

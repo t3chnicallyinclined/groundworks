@@ -11,7 +11,13 @@ pub const CRITIQUE_VERDICTS: &[&str] = &["fatal", "damaging", "survivable"];
 
 /// `groundworks/gates.py:33`.
 pub const FACT_STATUSES: &[&str] = &[
-    "proposed", "inferred", "open", "confirmed", "ruled_out", "stale", "superseded",
+    "proposed",
+    "inferred",
+    "open",
+    "confirmed",
+    "ruled_out",
+    "stale",
+    "superseded",
 ];
 
 /// `groundworks/gates.py:309 _value_literal`.
@@ -26,7 +32,13 @@ pub fn value_literal(value: &serde_json::Value) -> String {
 fn py_str(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "None".to_string(),
-        serde_json::Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        }
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -44,7 +56,8 @@ fn field_eq_re() -> &'static Regex {
 fn literal_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"(?is)^(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|true|false|-?\d+(?:\.\d+)?)$"#).unwrap()
+        Regex::new(r#"(?is)^(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|true|false|-?\d+(?:\.\d+)?)$"#)
+            .unwrap()
     })
 }
 
@@ -126,7 +139,9 @@ pub fn where_terms(where_clause: &str) -> Result<Vec<(String, Vec<String>)>, Str
     let mut terms = Vec::new();
     for part in split_top_level(where_clause, false) {
         if part.is_empty() {
-            return Err(format!("cannot build a row for '{where_clause}': it has an empty term"));
+            return Err(format!(
+                "cannot build a row for '{where_clause}': it has an empty term"
+            ));
         }
         if let Some(caps) = field_in_re().captures(&part) {
             let field = caps[1].to_string();
@@ -141,7 +156,10 @@ pub fn where_terms(where_clause: &str) -> Result<Vec<(String, Vec<String>)>, Str
             continue;
         }
         let eq = field_eq_re().captures(&part);
-        let value_ok = eq.as_ref().map(|c| literal_re().is_match(c[2].trim())).unwrap_or(false);
+        let value_ok = eq
+            .as_ref()
+            .map(|c| literal_re().is_match(c[2].trim()))
+            .unwrap_or(false);
         if eq.is_none() || !value_ok {
             return Err(format!(
                 "cannot build a row for '{}': only `field = literal` and `field IN [literals]` joined by AND \

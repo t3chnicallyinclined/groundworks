@@ -129,6 +129,9 @@ pub struct Note<'a> {
     pub receipt: Option<&'a str>,
     pub owner_statement: Option<&'a str>,
     pub quote: Option<Quote>,
+    pub lens: Option<&'a str>,
+    pub attacks: Option<&'a str>,
+    pub stance: Option<&'a str>,
     /// Write as the owner, signed by the owner's login (CLI only; never from the MCP server).
     pub owner_pass: Option<&'a str>,
 }
@@ -146,6 +149,9 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
         receipt: note.receipt.map(str::to_owned),
         owner_statement: note.owner_statement.map(str::to_owned),
         quote: note.quote,
+        lens: note.lens.map(str::to_owned),
+        attacks: note.attacks.map(str::to_owned),
+        stance: note.stance.map(str::to_owned),
     };
     let dir = project.path(&home.workspace);
     let id = match note.owner_pass {
@@ -201,6 +207,9 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
                 receipt: None,
                 owner_statement: owner.then(|| entry.source.clone()),
                 quote: None,
+                lens: None,
+                attacks: None,
+                stance: None,
             };
             match store.import_fact(
                 &project.path(&home.workspace),
