@@ -1,5 +1,10 @@
 # Groundworks plugin for Claude Code
 
+Every session, the VS Code extension included, works as **the Groundworks agent**: the plugin forces its
+output style (`output-styles/groundworks.md`) whenever the plugin is enabled. It adds to Claude Code's own
+instructions rather than replacing them, and it is guidance; the hard rules are enforced by the store.
+Disable the plugin to switch it off.
+
 One MCP server (`groundworks serve`) and two skills that run only when you invoke them.
 
 | Skill | What it does |
