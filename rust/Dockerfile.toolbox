@@ -1,0 +1,39 @@
+# Groundworks toolbox: the groundworks MCP server plus the tools agents run through it.
+#
+#   docker build -f Dockerfile.toolbox -t groundworks-toolbox:0.1 .        (from rust/)
+#   docker run -i --rm \
+#     -v /path/to/.groundworks:/groundworks -v /path/to/projects:/work \
+#     -e BW_SESSION groundworks-toolbox:0.1
+#
+# The home (registry, journal, knowledge) is mounted, never baked in. Local stdio only: the
+# server runs commands with secrets in their environment, so never expose it over a network.
+
+FROM rust:1.93-slim-bookworm AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo ./.cargo
+COPY crates ./crates
+RUN cargo build --release --locked -p gw-mcp
+
+FROM rust:1.93-slim-bookworm
+ARG NODE_MAJOR=22
+ARG KUBECTL_VERSION=v1.34.1
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git gnupg jq openssh-client ripgrep pkg-config libssl-dev \
+ && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g @bitwarden/cli \
+ && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+ && chmod +x /usr/local/bin/kubectl \
+ && rustup component add clippy rustfmt \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
+
+COPY --from=build /src/target/release/groundworks /usr/local/bin/groundworks
+ENV GROUNDWORKS_HOME=/groundworks \
+    GROUNDWORKS_WORKSPACE=/work \
+    GROUNDWORKS_SHELL=/bin/bash \
+    GROUNDWORKS_MACHINE=groundworks-container
+WORKDIR /work
+ENTRYPOINT ["groundworks"]
+CMD ["serve"]
