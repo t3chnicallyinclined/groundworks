@@ -1,0 +1,8 @@
+{
+ "doc": "HUMAN-OWNED. Every entry id in known_errors.json. An id here that is gone from that file fails the evaluator: removing a known error takes a human. A new entry is added here in the same change.",
+ "ids": [
+  "KE001",
+  "KE002",
+  "KE003"
+ ]
+}

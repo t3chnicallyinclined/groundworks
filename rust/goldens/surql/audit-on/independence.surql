@@ -1,0 +1,4 @@
+-- list of 3
+-- independent promotion: the datastore records who wrote each row; the caller cannot
+DEFINE FIELD OVERWRITE written_by ON conclusion TYPE array<record> VALUE array::union($before ?? [], IF $auth = NONE { [] } ELSE { [$auth] });
+DEFINE EVENT OVERWRITE root_cause_needs_support_and_attack_independent ON TABLE conclusion WHEN $after.ready = true AND ($before.ready ?? NONE) != true THEN { IF $auth = NONE OR array::len($before.written_by ?? []) = 0 OR $auth IN ($before.written_by ?? []) { THROW 'independent promotion refused by rule root_cause_needs_support_and_attack: conclusion.ready may become True only by a signed-in credential that has not written the row; refused ' + <string> $after.id + ' by ' + <string> ($auth ?? 'root (no identity)') + '; written by ' + <string> ($before.written_by ?? []); }; };  -- root_cause_needs_support_and_attack

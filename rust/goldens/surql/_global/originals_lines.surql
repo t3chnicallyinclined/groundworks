@@ -1,0 +1,14 @@
+DEFINE TABLE IF NOT EXISTS document TYPE NORMAL SCHEMAFULL;
+ALTER TABLE document TYPE NORMAL SCHEMAFULL;
+DEFINE FIELD OVERWRITE sha256 ON document TYPE option<string> ASSERT $value = NONE OR (string::matches($value, '^[0-9a-f]{64}$') AND $value = record::id($this.id));
+DEFINE FIELD OVERWRITE media_type ON document TYPE string;
+DEFINE FIELD OVERWRITE bytes ON document TYPE option<int> ASSERT $value = NONE OR $value >= 0;
+DEFINE FIELD OVERWRITE capture ON document TYPE string ASSERT $value IN ['raw', 'rendered_text', 'none'];
+DEFINE FIELD OVERWRITE source_uri ON document TYPE option<string>;
+DEFINE FIELD OVERWRITE retrieved_at ON document TYPE option<datetime>;
+DEFINE FIELD OVERWRITE original_name ON document TYPE option<string>;
+DEFINE FIELD OVERWRITE integrity ON document TYPE string ASSERT $value IN ['ok', 'missing', 'corrupt', 'not_captured'] AND (($this.capture = 'none') = ($this.sha256 = NONE)) AND ($this.capture != 'none' OR $value = 'not_captured');
+DEFINE FIELD OVERWRITE verified_at ON document TYPE option<datetime>;
+DEFINE INDEX OVERWRITE document_sha256_unique ON document FIELDS sha256 UNIQUE;
+DEFINE FIELD OVERWRITE document ON unit TYPE option<record<document>> REFERENCE ON DELETE REJECT ASSERT $value = NONE OR record::exists($value);
+DEFINE INDEX OVERWRITE unit_document ON unit FIELDS document;
