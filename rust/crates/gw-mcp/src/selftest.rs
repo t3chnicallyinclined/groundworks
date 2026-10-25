@@ -14,12 +14,14 @@ use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 use serde_json::{Value, json};
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 17] = [
+pub const TOOLS: [&str; 20] = [
     "bootstrap",
     "doctor",
     "env_show",
     "estate_scan",
+    "expert_list",
     "gate",
+    "intake",
     "journal_add",
     "journal_read",
     "knowledge_get",
@@ -30,6 +32,7 @@ pub const TOOLS: [&str; 17] = [
     "project_register",
     "project_show",
     "run",
+    "search",
     "stack_list",
     "stack_show",
 ];
@@ -159,6 +162,38 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
         workspace.join("demo/notes.txt"),
         "first line\nthe parser rejects empty input\n",
     )?;
+    std::fs::write(
+        workspace.join("demo/README.md"),
+        "# Demo\n\nA demo project for the selftest.\n",
+    )?;
+    std::fs::create_dir_all(workspace.join("demo/docs"))?;
+    std::fs::write(
+        workspace.join("demo/docs/GUIDE.md"),
+        "# Guide\n\nRollback netcode resimulates confirmed frames.\n",
+    )?;
+    std::fs::write(workspace.join("demo/.env"), "TOKEN=never-ingested\n")?;
+    let git = |args: &[&str]| -> Result<()> {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=selftest", "-c", "user.email=selftest@localhost", "-C"])
+            .arg(workspace.join("demo"))
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?
+            .success();
+        if !ok {
+            bail!("git {} failed in the selftest's demo project", args.join(" "));
+        }
+        Ok(())
+    };
+    git(&["init", "-q"])?;
+    git(&["add", "-A", "-f"])?;
+    git(&["commit", "-q", "-m", "initial import of the demo"])?;
+    std::fs::create_dir_all(base.join("experts"))?;
+    std::fs::write(
+        base.join("experts/selftest-expert.md"),
+        "---\nname: selftest-expert\ndescription: Owns the demo notes and guide.\n---\n\nSee `notes.txt` and `docs/GUIDE.md`.\n",
+    )?;
     let toml_path = |p: &Path| p.display().to_string().replace('\\', "/");
     std::fs::write(
         home.join("groundworks.toml"),
@@ -223,14 +258,19 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     owner.set_level(OWNER_PASS, "proj_secret", "isolated", None)?;
 
     let home_env = home.display().to_string();
+    let experts_env = base.join("experts").display().to_string();
     let mut s = Client::start(
         exe,
-        &[("GROUNDWORKS_HOME", &home_env), ("GROUNDWORKS_MACHINE", "SELFTEST")],
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+        ],
         &["GROUNDWORKS_START"],
     )?;
     let tools = s.tools()?;
     c.check(
-        "the tool list is exactly the 17 tools",
+        "the tool list is exactly the 20 tools",
         tools == TOOLS,
         &format!("{tools:?}"),
     );
@@ -320,6 +360,60 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     c.check(
         "project_show reads the journal back, with its evidence",
         !err && text.contains("[quote notes.txt#L2-2]") && text.contains("[receipt:"),
+        &text,
+    );
+
+    let (err, text) = s.call("intake", json!({"project": "demo"}))?;
+    c.check(
+        "intake reads the project, names the expert whose definition cites it, and skips the secret",
+        !err && text.contains("selftest-expert (2)") && text.contains("looks like a secret"),
+        &text,
+    );
+    let (err, text) = s.call("search", json!({"query": "rejects empty", "project": "demo"}))?;
+    c.check(
+        "search finds a file's text with its locator and expert",
+        !err && text.contains("demo:notes.txt#L1-2") && text.contains("selftest-expert"),
+        &text,
+    );
+    let (err, text) = s.call("search", json!({"query": "rollbacks", "expert": "selftest-expert"}))?;
+    c.check(
+        "search by expert, stemmed, across shared projects, naming what it skipped",
+        !err && text.contains("docs/GUIDE.md") && text.contains("secret (isolated)"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "search",
+        json!({"query": "initial import", "project": "demo", "kinds": ["commit"]}),
+    )?;
+    c.check(
+        "commits are searchable units",
+        !err && text.contains("demo:commit:"),
+        &text,
+    );
+    let (err, text) = s.call("search", json!({"query": "never-ingested", "project": "demo"}))?;
+    c.check(
+        "a secret file's contents are never ingested",
+        !err && text.contains("no units match"),
+        &text,
+    );
+
+    // The code changes under a confirmed quote: re-ingesting marks the fact citing it stale.
+    std::fs::write(
+        base.join("work/demo/notes.txt"),
+        "first line
+the parser now accepts empty input
+",
+    )?;
+    let (err, text) = s.call("intake", json!({"project": "demo"}))?;
+    c.check(
+        "re-intake re-checks quoted spans against the changed file",
+        !err && text.contains("1 quoted span(s) no longer match"),
+        &text,
+    );
+    let (err, text) = s.call("project_show", json!({"project": "demo"}))?;
+    c.check(
+        "the fact whose quote no longer matches shows as stale",
+        !err && text.contains("CONFIRMED (STALE) the parser rejects empty input"),
         &text,
     );
 

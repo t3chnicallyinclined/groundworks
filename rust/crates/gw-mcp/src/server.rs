@@ -137,6 +137,27 @@ pub struct ScanArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct IntakeArgs {
+    pub project: String,
+    /// How many recent commits to read as units (default 300).
+    pub max_commits: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SearchArgs {
+    /// Words to find (full text, stemmed: "rollbacks" finds "rollback").
+    pub query: String,
+    /// One project; without it, every shared project (private and isolated ones are skipped and named).
+    pub project: Option<String>,
+    /// Only units in this expert's area (see expert_list).
+    pub expert: Option<String>,
+    /// Only these kinds: context, doc, code, config, commit, quote.
+    pub kinds: Option<Vec<String>>,
+    /// Most results (default 10, at most 50).
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct TopicArg {
     pub topic: String,
 }
@@ -337,6 +358,43 @@ impl Groundworks {
         store::blocking(move || ops::estate_scan(&home, root.as_deref(), None))
             .await
             .map_err(fail)
+    }
+
+    #[tool(
+        description = "Ingest a project into the store: its tracked files and recent commits become citable units, by kind (context first) and by the experts whose definitions cite its paths. Safe to re-run: unchanged units are skipped and changed ones mark the facts citing them stale."
+    )]
+    async fn intake(&self, args: Parameters<IntakeArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || ops::intake(&home, &store, &a.project, a.max_commits.unwrap_or(300)))
+            .await
+            .map_err(fail)
+    }
+
+    #[tool(
+        description = "Search ingested units in full text: returns each hit's project, file and lines (or commit), kind, owning experts and an excerpt with the matched words in « ». Cite hits by locator; quote them word for word to confirm a fact."
+    )]
+    async fn search(&self, args: Parameters<SearchArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            ops::search(
+                &home,
+                &store,
+                &a.query,
+                a.project.as_deref(),
+                a.expert.as_deref(),
+                &a.kinds.unwrap_or_default(),
+                a.limit.unwrap_or(10),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(description = "The expert directory: every expert agent with a summary of what it is expert in.")]
+    async fn expert_list(&self) -> Result<String, String> {
+        ops::experts().map_err(fail)
     }
 
     #[tool(description = "Check the registry, templates, secret references, profile and store from this machine.")]

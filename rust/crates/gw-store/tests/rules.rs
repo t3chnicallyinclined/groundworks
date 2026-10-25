@@ -61,17 +61,17 @@ fn migrations_apply_once_and_a_failed_file_rolls_back() {
         migrate(&root, Scope::Project, SCHEMA, true).unwrap().is_empty(),
         "second run is a no-op"
     );
-    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 6);
+    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 8);
 
     let mut broken: Vec<(&str, &str)> = SCHEMA.to_vec();
     broken.push((
-        "0007_broken.surql",
+        "0009_broken.surql",
         "-- scope: project\nDEFINE TABLE ok_table SCHEMAFULL;\nTHROW 'a broken migration';",
     ));
     assert!(migrate(&root, Scope::Project, &broken, true).is_err());
     assert_eq!(
         current_version(&root).unwrap().unwrap()["applied"],
-        6,
+        8,
         "version did not move"
     );
     let tables = value(&root, "INFO FOR DB;");
@@ -308,4 +308,30 @@ fn loader_facts_still_go_stale_and_can_be_updated() {
     ok(&agent, "UPDATE unit:u1 SET hash = 'h2';");
     assert_eq!(value(&root, "SELECT VALUE status FROM ONLY fact:old;"), "stale");
     ok(&agent, "UPDATE fact:old SET status = 'gone';");
+}
+
+/// Regression (live store, 2026-10-25): upgrading a namespace that already holds units must work. On
+/// rocksdb, building a full-text index over existing rows could not see an analyzer defined earlier in
+/// the same transaction ("The analyzer 'gw_words' does not exist").
+#[test]
+fn an_upgrade_over_existing_units_migrates() {
+    let server = gw_store::testkit::Throwaway::start();
+    let root = server.root("proj_old");
+    gw_store::ensure(&root, "proj_old").unwrap();
+    let before: Vec<(&str, &str)> = SCHEMA.iter().copied().filter(|(f, _)| f < &"0007").collect();
+    migrate(&root, Scope::Project, &before, true).unwrap();
+    root.sql(
+        "CREATE unit:q SET locator = 'a#L1-1', hash = 'h', text = 'the parser rejects empty input', kind = 'quote';",
+        None,
+    )
+    .unwrap();
+    migrate(&root, Scope::Project, SCHEMA, true).unwrap();
+    let hits = root
+        .sql("SELECT VALUE locator FROM unit WHERE text @1@ 'parser';", Some(1))
+        .unwrap();
+    assert_eq!(
+        hits[0],
+        serde_json::json!(["a#L1-1"]),
+        "existing units are indexed for search"
+    );
 }

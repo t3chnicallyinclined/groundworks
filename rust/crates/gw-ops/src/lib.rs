@@ -4,6 +4,7 @@
 
 pub mod exec;
 pub mod home;
+pub mod intake;
 pub mod journal;
 pub mod knowledge;
 pub mod ops;

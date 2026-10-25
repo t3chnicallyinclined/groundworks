@@ -33,6 +33,9 @@ In any Claude Code session opened under a Groundworks home, the agent has the to
 |---|---|
 | Check it works on this machine | `groundworks selftest` (a throwaway home and store; never touches yours) |
 | Check your real setup | `groundworks doctor` |
+| Ingest a project (files, commits, by kind and expert area) | `groundworks intake <project>` or `--all`; or ask the agent |
+| Ask across everything that is shared, with citations | `groundworks search "..." [--project p] [--expert e] [--kind commit]`; or ask the agent |
+| See the experts | `groundworks experts` |
 | Bring a project in | `/groundworks:init` in the project's folder |
 | Start a new project | `/groundworks:bootstrap` |
 | See a project and what was learned | ask the agent, or `groundworks show <project>` |

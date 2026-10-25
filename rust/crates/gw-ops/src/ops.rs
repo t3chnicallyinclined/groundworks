@@ -668,3 +668,189 @@ pub fn estate_scan(home: &Home, root: Option<&Path>, out: Option<&Path>) -> Resu
     )?;
     Ok(text)
 }
+
+/// Where expert definitions are read from: the user's Claude Code agents.
+pub fn expert_dirs() -> Vec<PathBuf> {
+    if let Some(dir) = std::env::var_os("GROUNDWORKS_EXPERTS") {
+        return vec![PathBuf::from(dir)];
+    }
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| vec![PathBuf::from(home).join(".claude").join("agents")])
+        .unwrap_or_default()
+}
+
+/// Ingest one registered project: its files and last `max_commits` commits, organised by kind and
+/// by the experts whose definitions cite its paths. Also refreshes the expert directory.
+pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> Result<String> {
+    let registry = Registry::load(home)?;
+    let project = registry.project(project)?;
+    let dir = project.path(&home.workspace);
+    ensure!(dir.is_dir(), "{} is not on this machine", dir.display());
+    let experts = crate::intake::load_experts(&expert_dirs())?;
+    store.upsert_experts(&experts)?;
+    let started = std::time::Instant::now();
+    let collected = crate::intake::collect(&dir, &experts, max_commits)?;
+    let report = store.intake(&project.name, &collected)?;
+    let stale_quotes = store.recheck_quotes(&dir, &project.name)?;
+    let mut out = format!(
+        "{}: {} files read into {} units ({} written, {} unchanged, {} marked gone) in {:.1}s on {}\n",
+        project.name,
+        collected.files_read,
+        report.units,
+        report.written,
+        report.unchanged,
+        report.gone,
+        started.elapsed().as_secs_f64(),
+        crate::home::machine()
+    );
+    if stale_quotes > 0 {
+        writeln!(
+            out,
+            "  {stale_quotes} quoted span(s) no longer match their file: the facts citing them are now stale"
+        )?;
+    }
+    let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+    for u in &collected.units {
+        *kinds.entry(u.kind).or_default() += 1;
+    }
+    writeln!(
+        out,
+        "  by kind: {}",
+        kinds
+            .iter()
+            .map(|(k, n)| format!("{k} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )?;
+    if !collected.skipped.is_empty() {
+        writeln!(
+            out,
+            "  skipped: {}",
+            collected
+                .skipped
+                .iter()
+                .map(|(k, n)| format!("{n} {k}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )?;
+    }
+    let mut by_expert: std::collections::BTreeMap<&str, usize> = Default::default();
+    for a in &collected.areas {
+        *by_expert.entry(a.expert.as_str()).or_default() += 1;
+    }
+    if by_expert.is_empty() {
+        out.push_str("  experts: none of the expert definitions cite a path in this project\n");
+    } else {
+        writeln!(
+            out,
+            "  experts whose definitions cite paths here: {}",
+            by_expert
+                .iter()
+                .map(|(e, n)| format!("{e} ({n})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )?;
+    }
+    if let Some(head) = &collected.head {
+        writeln!(
+            out,
+            "  at commit {}{}",
+            &head[..head.len().min(12)],
+            if collected.dirty == Some(true) {
+                " (with uncommitted changes)"
+            } else {
+                ""
+            }
+        )?;
+    }
+    Ok(out)
+}
+
+/// Search units. With `project`, that project only (private ones too, never an isolated one).
+/// Without it, every registered project whose level is shared, saying which were skipped and why.
+pub fn search(
+    home: &Home,
+    store: &Store,
+    query: &str,
+    project: Option<&str>,
+    expert: Option<&str>,
+    kinds: &[String],
+    limit: usize,
+) -> Result<String> {
+    let registry = Registry::load(home)?;
+    let limit = limit.clamp(1, 50);
+    let mut hits = Vec::new();
+    let mut searched = Vec::new();
+    let mut skipped = Vec::new();
+    let names: Vec<String> = match project {
+        Some(p) => vec![registry.project(p)?.name.clone()],
+        None => registry.projects.keys().cloned().collect(),
+    };
+    for name in &names {
+        let ns = gw_store::project_ns(&store::slug(name)?)?;
+        if project.is_none() {
+            let level = store.level(&ns)?;
+            if level != "shared" {
+                skipped.push(format!("{name} ({level})"));
+                continue;
+            }
+        }
+        match store.search(name, query, expert, kinds, limit) {
+            Ok(found) => {
+                searched.push(name.clone());
+                hits.extend(found);
+            }
+            Err(e) => skipped.push(format!("{name} ({e:#})")),
+        }
+    }
+    hits.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    hits.truncate(limit);
+    let mut out = String::new();
+    if hits.is_empty() {
+        writeln!(out, "no units match {query:?}")?;
+    }
+    for h in &hits {
+        let experts = if h.experts.is_empty() {
+            String::new()
+        } else {
+            format!(" experts: {}", h.experts.join(", "))
+        };
+        let commit = h
+            .commit
+            .as_deref()
+            .map_or(String::new(), |c| format!(" @ {}", &c[..c.len().min(10)]));
+        writeln!(
+            out,
+            "- [{}] {}:{}{commit}{experts}\n    {}",
+            h.kind.as_deref().unwrap_or("?"),
+            h.project,
+            h.locator,
+            h.text
+        )?;
+    }
+    writeln!(
+        out,
+        "\nsearched: {}{}",
+        if searched.is_empty() {
+            "nothing".to_owned()
+        } else {
+            searched.join(", ")
+        },
+        if skipped.is_empty() {
+            String::new()
+        } else {
+            format!("; skipped: {}", skipped.join(", "))
+        }
+    )?;
+    Ok(out)
+}
+
+/// The expert directory: every expert with its summary.
+pub fn experts() -> Result<String> {
+    let experts = crate::intake::load_experts(&expert_dirs())?;
+    Ok(experts
+        .iter()
+        .map(|e| format!("{}: {}\n", e.name, e.summary.chars().take(160).collect::<String>()))
+        .collect())
+}

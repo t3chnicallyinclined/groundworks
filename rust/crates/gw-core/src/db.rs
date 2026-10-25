@@ -602,6 +602,25 @@ impl Db {
                 )));
             }
         }
+        // In a transaction every statement after the failing one reports only "not executed due to a
+        // failed transaction". Name the statement that actually failed (query path only; the /sql path
+        // keeps the oracle's wording).
+        const CASCADE: &str = "failed transaction";
+        let failed: Vec<(usize, String)> = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.get("status").and_then(Value::as_str) != Some("OK"))
+            .map(|(i, b)| (i + 1, python_str_value(&b.get("result").cloned().unwrap_or(Value::Null))))
+            .collect();
+        if let Some((index, message)) = failed.iter().find(|(_, m)| !m.contains(CASCADE)).or(failed.first()) {
+            return Err(DbError::db(format!(
+                "statement {} failed: {}
+  statement: {}",
+                index,
+                message,
+                truncate(statement, 300)
+            )));
+        }
         self.finish(statement, blocks)
     }
 

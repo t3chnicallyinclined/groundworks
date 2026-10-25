@@ -160,7 +160,7 @@ impl Store {
     }
 
     /// The scope's isolation level from the owner's policy (`shared` when none is set).
-    fn level(&self, ns: &str) -> Result<String> {
+    pub fn level(&self, ns: &str) -> Result<String> {
         let global = self.agent(GLOBAL_NS)?;
         let vars = Vars::default().set("scope", ns);
         let rows = self.retrying(|| {
@@ -402,6 +402,181 @@ impl Store {
         Ok(())
     }
 
+    /// Write an intake: new and changed units in batches (unchanged ones are skipped by hash; a
+    /// changed one marks the facts citing it stale), units of vanished files marked not present, and
+    /// one intake_run row.
+    pub fn intake(&self, project: &str, c: &crate::intake::Collected) -> Result<IntakeReport> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let existing = self.retrying(|| {
+            Ok(db.query(
+                "SELECT VALUE [record::id(id), hash] FROM unit WHERE kind != 'quote';",
+                &serde_json::Map::new(),
+                Some(1),
+            )?)
+        })?;
+        let known: HashMap<String, String> = existing[0]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|pair| Some((pair[0].as_str()?.to_owned(), pair[1].as_str()?.to_owned())))
+            .collect();
+        let changed: Vec<&crate::intake::Unit> =
+            c.units.iter().filter(|u| known.get(&u.key) != Some(&u.hash)).collect();
+        for batch in changed.chunks(200) {
+            let rows: Vec<Value> = batch
+                .iter()
+                .map(|u| {
+                    let mut v = serde_json::to_value(u).expect("a unit serializes");
+                    v["present"] = Value::Bool(true);
+                    v["read_at"] = Value::Null;
+                    if let Some(map) = v.as_object_mut() {
+                        map.retain(|_, value| !value.is_null());
+                    }
+                    serde_json::json!({"key": u.key, "v": v})
+                })
+                .collect();
+            let vars = Vars::default().set("rows", rows);
+            self.retrying(|| {
+                Ok(db.query(
+                    "FOR $r IN $rows { UPSERT type::record('unit', $r.key) MERGE $r.v; };",
+                    &vars.0,
+                    None,
+                )?)
+            })?;
+        }
+        let vars = Vars::default().set("paths", c.paths.clone());
+        let gone = self.retrying(|| {
+            Ok(db.query(
+                "LET $gone = (SELECT VALUE id FROM unit WHERE kind IN ['context', 'doc', 'code', 'config'] \
+                 AND present = true AND path NOT IN $paths);\n\
+                 IF array::len($gone) > 0 { UPDATE $gone SET present = false RETURN NONE; };\n\
+                 RETURN array::len($gone);",
+                // (The IF matters: an UPDATE of nothing returns empty, which reads as a refused write.)
+                &vars.0,
+                None,
+            )?)
+        })?;
+        let gone = gone.last().and_then(Value::as_u64).unwrap_or(0) as usize;
+        let skipped: usize = c.skipped.values().sum();
+        let mut run = String::from(
+            "CREATE intake_run SET machine = $machine, files = $files, units = $units, written = $written, \
+             gone = $gone, skipped = $skipped",
+        );
+        let mut vars = Vars::default()
+            .set("machine", machine())
+            .set("files", c.files_read)
+            .set("units", c.units.len())
+            .set("written", changed.len())
+            .set("gone", gone)
+            .set("skipped", skipped);
+        if let Some(head) = &c.head {
+            run.push_str(", commit = $commit");
+            vars = vars.set("commit", head.as_str());
+        }
+        if let Some(dirty) = c.dirty {
+            run.push_str(", dirty = $dirty");
+            vars = vars.set("dirty", dirty);
+        }
+        run.push(';');
+        self.retrying(|| Ok(db.query(&run, &vars.0, Some(1))?))?;
+        Ok(IntakeReport {
+            units: c.units.len(),
+            written: changed.len(),
+            unchanged: c.units.len() - changed.len(),
+            gone,
+        })
+    }
+
+    /// Re-check every quoted span against the project's files on disk. A span whose text changed, or
+    /// whose file or lines are gone, gets the new hash, which marks every fact citing it stale (R1).
+    /// Returns how many spans changed.
+    pub fn recheck_quotes(&self, project_dir: &Path, project: &str) -> Result<usize> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "SELECT VALUE [record::id(id), locator, hash] FROM unit WHERE kind = 'quote';",
+                &serde_json::Map::new(),
+                Some(1),
+            )?)
+        })?;
+        let mut changed = Vec::new();
+        for row in rows[0].as_array().into_iter().flatten() {
+            let (Some(key), Some(locator), Some(hash)) = (row[0].as_str(), row[1].as_str(), row[2].as_str()) else {
+                continue;
+            };
+            let now = current_span_hash(project_dir, locator);
+            if now.as_deref() != Some(hash) {
+                changed.push(serde_json::json!({"key": key, "hash": now.unwrap_or_else(|| "gone".to_owned())}));
+            }
+        }
+        if !changed.is_empty() {
+            let n = changed.len();
+            let vars = Vars::default().set("rows", changed);
+            self.retrying(|| {
+                Ok(db.query(
+                    "FOR $r IN $rows { UPDATE type::record('unit', $r.key) SET hash = $r.hash; };",
+                    &vars.0,
+                    None,
+                )?)
+            })?;
+            return Ok(n);
+        }
+        Ok(0)
+    }
+
+    /// Full-text search of one project's units that are still present, best first. `expert` keeps
+    /// only units in that expert's area; `kinds` keeps only those kinds.
+    pub fn search(
+        &self,
+        project: &str,
+        query: &str,
+        expert: Option<&str>,
+        kinds: &[String],
+        limit: usize,
+    ) -> Result<Vec<Hit>> {
+        ensure!(!query.trim().is_empty(), "search for something");
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let mut sql = String::from(
+            "SELECT locator, kind, commit, experts, search::score(1) AS score, \
+             search::highlight('\u{ab}', '\u{bb}', 1) AS text FROM unit WHERE text @1@ $q AND present = true",
+        );
+        let mut vars = Vars::default().set("q", query.trim()).set("limit", limit);
+        if let Some(expert) = expert {
+            sql.push_str(" AND $expert IN experts");
+            vars = vars.set("expert", expert);
+        }
+        if !kinds.is_empty() {
+            sql.push_str(" AND kind IN $kinds");
+            vars = vars.set("kinds", kinds.to_vec());
+        }
+        sql.push_str(" ORDER BY score DESC LIMIT $limit;");
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
+        let mut hits: Vec<Hit> = serde_json::from_value(rows[0].clone()).context("reading search hits")?;
+        for hit in &mut hits {
+            hit.project = project.to_owned();
+            hit.text = excerpt(&hit.text);
+        }
+        Ok(hits)
+    }
+
+    /// Record the expert directory in `global`: each expert's name, summary and definition file.
+    pub fn upsert_experts(&self, experts: &[crate::intake::Expert]) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let rows: Vec<Value> = experts
+            .iter()
+            .map(|e| serde_json::json!({"name": e.name, "summary": e.summary, "file": e.file.display().to_string()}))
+            .collect();
+        let vars = Vars::default().set("rows", rows);
+        self.retrying(|| {
+            Ok(global.query(
+                "FOR $e IN $rows { UPSERT type::record('expert', $e.name) MERGE $e; };",
+                &vars.0,
+                None,
+            )?)
+        })?;
+        Ok(())
+    }
+
     /// Wall two scopes off from each other, as the owner.
     pub fn add_wall(&self, owner_pass: &str, a: &str, b: &str, why: &str) -> Result<()> {
         gw_store::scope_of(a)?;
@@ -431,6 +606,57 @@ struct Origin {
     at: String,
     machine: Option<String>,
     key: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IntakeReport {
+    pub units: usize,
+    pub written: usize,
+    pub unchanged: usize,
+    pub gone: usize,
+}
+
+/// One search result: where it is, what kind, which experts own it, and an excerpt around the match
+/// (matched words between « »).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Hit {
+    #[serde(default)]
+    pub project: String,
+    pub locator: String,
+    pub kind: Option<String>,
+    pub commit: Option<String>,
+    #[serde(default)]
+    pub experts: Vec<String>,
+    pub score: Option<f64>,
+    pub text: String,
+}
+
+/// The hash a quote's span (`path#Lstart-end`) has on disk now, or None if the file or lines are gone.
+fn current_span_hash(project_dir: &Path, locator: &str) -> Option<String> {
+    let (path, lines) = locator.rsplit_once("#L")?;
+    let (start, end) = lines.split_once('-')?;
+    let (start, end): (usize, usize) = (start.parse().ok()?, end.parse().ok()?);
+    let content = std::fs::read_to_string(project_dir.join(path)).ok()?.replace('\r', "");
+    let all: Vec<&str> = content.lines().collect();
+    if start == 0 || end > all.len() || start > end {
+        return None;
+    }
+    Some(sha256_hex(&[all[start - 1..end].join("\n").as_bytes()]))
+}
+
+/// About 300 characters around the first highlighted match (the whole text if there is none).
+fn excerpt(text: &str) -> String {
+    let at = text.find('\u{ab}').unwrap_or(0);
+    let start = text[..at].char_indices().rev().nth(120).map_or(0, |(i, _)| i);
+    let end = text[at..].char_indices().nth(240).map_or(text.len(), |(i, _)| at + i);
+    let mut out = text[start..end].replace('\n', " / ");
+    if start > 0 {
+        out.insert(0, '\u{2026}');
+    }
+    if end < text.len() {
+        out.push('\u{2026}');
+    }
+    out
 }
 
 #[derive(Debug, Clone)]

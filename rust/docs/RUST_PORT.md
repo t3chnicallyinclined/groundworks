@@ -483,3 +483,16 @@ to these, each with a test that failed first or was probed live:
 `groundworks selftest` (and `cargo e2e-test`) builds a throwaway home and store, starts this binary as the MCP
 server, and checks 15 behaviours end to end. `crates/gw-store/tests/mutations.rs` loosens each of 10 rules and
 checks its protection really disappears. `scripts/license_check.py` now also checks every Cargo dependency.
+
+## Ingestion and search (2026-10-25)
+
+`crates/gw-ops/src/intake.rs` reads a project's tracked files and recent commits into citable units,
+organised by kind (context first: CLAUDE.md, CONTEXT.md, AGENTS.md, READMEs, docs, handoffs; then doc,
+config, code, commit) and by the experts whose definitions cite the project's paths (each mapping keeps
+the agent file and line it came from; a bare name owns nothing when it matches more than three files).
+Secret-looking files, binaries, lockfiles and files over 200 KB are skipped and counted. Re-runs skip
+unchanged units by hash, mark vanished files, and re-check every quoted span against its file, so a
+changed file marks the facts citing it stale. `search` is full text (BM25, stemmed) with expert and kind
+filters, across shared projects, naming what it skipped. Measured on the live store: an index built over
+existing rows on rocksdb cannot see an analyzer defined in the same transaction, so the index is its own
+migration (0008); the testkit now runs rocksdb, like the real store.

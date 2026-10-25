@@ -14,9 +14,13 @@ pub const ROOT_PASS: &str = "testkit-root-password-0123456789";
 pub const AGENT_PASS: &str = "testkit-agent-password-0123456789";
 pub const OWNER_PASS: &str = "testkit-owner-password-0123456789";
 
+/// Backed by rocksdb in a temporary folder, like the real store: the in-memory engine differs (measured
+/// 2026-10-25: an analyzer defined earlier in the same transaction is visible to an index on memory, not
+/// on rocksdb).
 pub struct Throwaway {
     child: Child,
     port: u16,
+    data: std::path::PathBuf,
 }
 
 impl Throwaway {
@@ -28,6 +32,8 @@ impl Throwaway {
             )
         });
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let data = std::env::temp_dir().join(format!("gw-throwaway-{}-{port}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
         let child = Command::new(binary)
             .args([
                 "start",
@@ -37,13 +43,13 @@ impl Throwaway {
                 "root",
                 "--pass",
                 ROOT_PASS,
-                "memory",
             ])
+            .arg(format!("rocksdb:{}", data.display()))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("failed to spawn surreal");
-        let mut me = Throwaway { child, port };
+        let mut me = Throwaway { child, port, data };
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if let Ok(Some(status)) = me.child.try_wait() {
@@ -99,5 +105,6 @@ impl Drop for Throwaway {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.data);
     }
 }

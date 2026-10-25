@@ -120,6 +120,29 @@ enum Command {
     Doctor,
     /// Install team/gw-*.md into ~/.claude/agents.
     InstallTeam,
+    /// Ingest a project (or --all) into the store, by kind and by expert area.
+    Intake {
+        project: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 300)]
+        max_commits: usize,
+    },
+    /// Search ingested units across shared projects, or one project.
+    Search {
+        query: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        expert: Option<String>,
+        /// Only these kinds (repeatable): context, doc, code, config, commit, quote.
+        #[arg(long = "kind")]
+        kinds: Vec<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// The expert directory.
+    Experts,
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
@@ -359,6 +382,59 @@ async fn dispatch(command: Command) -> Result<bool> {
             ops::doctor(&home, store).await?
         }
         Command::InstallTeam => (ops::install_team(&home)?, true),
+        Command::Intake {
+            project,
+            all,
+            max_commits,
+        } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let text = store::blocking(move || {
+                let names: Vec<String> = match (project, all) {
+                    (Some(p), false) => vec![p],
+                    (None, true) => gw_ops::registry::Registry::load(&home)?
+                        .projects
+                        .keys()
+                        .cloned()
+                        .collect(),
+                    _ => anyhow::bail!("name one project, or pass --all"),
+                };
+                let mut out = String::new();
+                for name in names {
+                    match ops::intake(&home, &store, &name, max_commits) {
+                        Ok(text) => out.push_str(&text),
+                        Err(e) => out.push_str(&format!("{name}: NOT INGESTED: {e:#}\n")),
+                    }
+                }
+                Ok(out)
+            })
+            .await?;
+            (text, true)
+        }
+        Command::Search {
+            query,
+            project,
+            expert,
+            kinds,
+            limit,
+        } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let text = store::blocking(move || {
+                ops::search(
+                    &home,
+                    &store,
+                    &query,
+                    project.as_deref(),
+                    expert.as_deref(),
+                    &kinds,
+                    limit,
+                )
+            })
+            .await?;
+            (text, true)
+        }
+        Command::Experts => (ops::experts()?, true),
     };
     println!("{}", text.trim_end());
     Ok(ok)
