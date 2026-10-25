@@ -85,6 +85,14 @@ pub struct Row {
     pub tools: BTreeMap<String, u64>,
     #[serde(default)]
     pub denials: u64,
+    /// Did any tool result name a gold file, and at which call first (0-based)?
+    #[serde(default)]
+    pub saw_gold: bool,
+    #[serde(default)]
+    pub first_gold_call: Option<usize>,
+    /// Every tool call: name, input (cut to 300 chars), size of the result, whether it named a gold file.
+    #[serde(default)]
+    pub calls: Vec<Value>,
     pub verdict: String,
     pub confidently_wrong: bool,
     pub grade_reason: String,
@@ -150,20 +158,40 @@ fn session(cwd: &Path, args: &[String], timeout: Duration) -> Result<Value> {
     }
     let out = stdout.join().unwrap_or_default();
     let err = stderr.join().unwrap_or_default();
-    // stream-json: one event per line, the result last; every tool call is counted into `_tools`.
+    // stream-json: one event per line, the result last. Every tool call is counted into `_tools`, and
+    // logged into `_calls` with its input and the full text it returned (matched by tool_use id).
     let mut tools: BTreeMap<String, u64> = BTreeMap::new();
+    let mut calls: Vec<Value> = Vec::new();
+    let mut by_id: BTreeMap<String, usize> = BTreeMap::new();
     let mut result = None;
     for line in out.lines().filter(|l| l.trim_start().starts_with('{')) {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        let blocks = event["message"]["content"].as_array().cloned().unwrap_or_default();
         match event["type"].as_str() {
             Some("assistant") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    if block["type"] == "tool_use"
-                        && let Some(name) = block["name"].as_str()
-                    {
-                        *tools.entry(name.to_owned()).or_default() += 1;
+                for block in blocks.iter().filter(|b| b["type"] == "tool_use") {
+                    let name = block["name"].as_str().unwrap_or("?").to_owned();
+                    *tools.entry(name.clone()).or_default() += 1;
+                    by_id.insert(block["id"].as_str().unwrap_or_default().to_owned(), calls.len());
+                    calls.push(json!({"name": name, "input": block["input"], "result": ""}));
+                }
+            }
+            Some("user") => {
+                for block in blocks.iter().filter(|b| b["type"] == "tool_result") {
+                    let text = match &block["content"] {
+                        Value::String(s) => s.clone(),
+                        Value::Array(parts) => parts
+                            .iter()
+                            .filter_map(|p| p["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        _ => String::new(),
+                    };
+                    if let Some(i) = block["tool_use_id"].as_str().and_then(|id| by_id.get(id)) {
+                        calls[*i]["result"] = json!(text);
+                        calls[*i]["is_error"] = block["is_error"].clone();
                     }
                 }
             }
@@ -173,6 +201,7 @@ fn session(cwd: &Path, args: &[String], timeout: Duration) -> Result<Value> {
     }
     if let Some(mut r) = result {
         r["_tools"] = json!(tools);
+        r["_calls"] = json!(calls);
         return Ok(r);
     }
     serde_json::from_str(out.trim()).with_context(|| {
@@ -429,11 +458,34 @@ fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path) ->
             0.0,
         ),
     };
+    // Exposure: which calls read a gold file or returned text naming one. Calls are kept with their input and the
+    // size of what they returned, not the text itself (it can be large and private).
+    let names: Vec<&str> = q
+        .gold
+        .iter()
+        .map(|g| g.file.rsplit('/').next().unwrap_or(&g.file))
+        .collect();
+    let calls: Vec<Value> = out["_calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let text = c["result"].as_str().unwrap_or_default();
+            let input = c["input"].to_string();
+            json!({"name": c["name"], "input": input.chars().take(300).collect::<String>(),
+                   "result_chars": text.chars().count(), "is_error": c["is_error"],
+                   "gold": !names.is_empty() && names.iter().any(|n| text.contains(n) || input.contains(n))})
+        })
+        .collect();
+    let first_gold_call = calls.iter().position(|c| c["gold"] == true);
     Ok(Row {
         id: q.id.clone(),
         arm: arm.to_owned(),
         category: q.category.clone(),
         project: q.project.clone(),
+        saw_gold: first_gold_call.is_some(),
+        first_gold_call,
+        calls,
         cites_gold: cites_gold(q, &answer),
         tools: serde_json::from_value(out["_tools"].clone()).unwrap_or_default(),
         denials: out["permission_denials"].as_array().map_or(0, |a| a.len() as u64),
@@ -520,6 +572,21 @@ pub fn report(out: &Path) -> Result<String> {
             s,
             "- errors or ungraded: {}",
             count(&|r| r.is_error || r.verdict == "ungraded")
+        )?;
+        writeln!(
+            s,
+            "- a tool returned a gold file (non-trap): {}; saw it but answered wrong or partial: {}; \
+             calls before first sight, median {}",
+            rate(
+                count(&|r| r.category != "trap" && r.saw_gold),
+                count(&|r| r.category != "trap")
+            ),
+            count(&|r| r.saw_gold && r.verdict != "correct"),
+            {
+                let mut f: Vec<usize> = rs.iter().filter_map(|r| r.first_gold_call).collect();
+                f.sort_unstable();
+                f.get(f.len() / 2).map_or("-".to_owned(), |x| x.to_string())
+            }
         )?;
         writeln!(
             s,

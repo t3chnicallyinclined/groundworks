@@ -228,3 +228,69 @@ pub fn check(home: &Home, path: &Path) -> Result<(String, bool)> {
     }
     Ok((out, bad == 0 && good > 0))
 }
+
+/// Retrieval alone, no model: for each question with gold, was every gold line ingested (a present unit
+/// covers it), and at what rank does the store's ranked read put a gold unit when the question itself is
+/// the query? Reports coverage, recall at 1, 5, 20 and 200, and the mean reciprocal rank.
+pub fn retrieval(store: &crate::store::Store, path: &Path) -> Result<String> {
+    const DEPTH: usize = 200;
+    let mut out = String::new();
+    let (mut asked, mut covered, mut mrr) = (0usize, 0usize, 0.0f64);
+    let mut at = [0usize; 4];
+    for (_, q) in load(path)? {
+        let Ok(q) = q else { continue };
+        if q.gold.is_empty() {
+            continue;
+        }
+        asked += 1;
+        let mut gold: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut missing = Vec::new();
+        for g in &q.gold {
+            let repo = g.repo.clone().unwrap_or_else(|| q.project.clone());
+            let keys = store.units_at(&repo, &g.file.replace('\\', "/"), g.line)?;
+            if keys.is_empty() {
+                missing.push(format!("{repo}:{}:{}", g.file, g.line));
+            }
+            gold.entry(repo).or_default().extend(keys);
+        }
+        if missing.is_empty() {
+            covered += 1;
+        }
+        let mut best: Option<usize> = None;
+        for (repo, keys) in &gold {
+            let hits = store.retrieve(repo, &q.question, None, &[], DEPTH)?;
+            if let Some(i) = hits.iter().position(|h| keys.contains(&h.key)) {
+                best = Some(best.map_or(i + 1, |b| b.min(i + 1)));
+            }
+        }
+        if let Some(rank) = best {
+            mrr += 1.0 / rank as f64;
+            for (slot, k) in [1, 5, 20, DEPTH].iter().enumerate() {
+                at[slot] += usize::from(rank <= *k);
+            }
+        }
+        writeln!(
+            out,
+            "{:<8} rank {:>5}  {}",
+            q.id,
+            best.map_or("miss".to_owned(), |r| r.to_string()),
+            if missing.is_empty() {
+                String::new()
+            } else {
+                format!("NOT INGESTED: {}", missing.join(", "))
+            }
+        )?;
+    }
+    let pct = |k: usize| format!("{k}/{asked} ({:.0}%)", 100.0 * k as f64 / asked.max(1) as f64);
+    writeln!(
+        out,
+        "\ngold lines ingested: {}\nquestion as query, gold unit at rank 1: {}; top 5: {}; top 20: {}; top {DEPTH}: {}\nmean reciprocal rank: {:.3}",
+        pct(covered),
+        pct(at[0]),
+        pct(at[1]),
+        pct(at[2]),
+        pct(at[3]),
+        mrr / asked.max(1) as f64
+    )?;
+    Ok(out)
+}

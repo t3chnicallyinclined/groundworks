@@ -177,6 +177,8 @@ enum Command {
         #[arg(long, default_value_t = 5.0)]
         budget_usd: f64,
     },
+    /// Retrieval alone, no model: is every gold line ingested, and where does the ranked read put it?
+    EvalRetrieval { file: std::path::PathBuf },
     /// Summarise an eval run folder: rates with 95% intervals per arm, and the paired comparison.
     EvalReport { dir: std::path::PathBuf },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
@@ -512,6 +514,13 @@ async fn dispatch(command: Command) -> Result<bool> {
             )
         }
         Command::EvalReport { dir } => (gw_ops::eval_run::report(&dir)?, true),
+        Command::EvalRetrieval { file } => {
+            let store = open_store(&home).await?;
+            (
+                store::blocking(move || gw_ops::eval::retrieval(&store, &file)).await?,
+                true,
+            )
+        }
         Command::Ask {
             question,
             project,

@@ -610,6 +610,26 @@ impl Store {
         Ok(hits)
     }
 
+    /// The keys of present units whose span covers `line` of `path`: where a cited line was ingested.
+    pub fn units_at(&self, project: &str, path: &str, line: usize) -> Result<Vec<String>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default().set("path", path).set("line", line);
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "SELECT VALUE record::id(id) FROM unit WHERE path = $path AND present = true \
+                 AND line_start <= $line AND line_end >= $line;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect())
+    }
+
     /// How many units of the project are present: the corpus an answer is measured against.
     pub fn corpus_size(&self, project: &str) -> Result<usize> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
