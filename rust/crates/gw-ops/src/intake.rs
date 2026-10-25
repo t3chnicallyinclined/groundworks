@@ -1,5 +1,7 @@
 //! Ingestion, mechanical and model-free: a project's tracked files and recent commits become
 //! citable units, each labelled with its kind and with the experts whose area covers it.
+//! Untracked docs that git does not ignore (notes and handoffs nobody committed) are read too, with no
+//! commit, so a quote of one says it was never committed; untracked code and config are not.
 //!
 //! - **Kinds**, so answers can prefer the project's own context: `context` (CLAUDE.md, CONTEXT.md,
 //!   AGENTS.md, READMEs, docs/, handoffs and workstream notes), `doc`, `config`, `code`, `commit`.
@@ -92,6 +94,8 @@ pub struct Collected {
     pub head: Option<String>,
     pub dirty: Option<bool>,
     pub files_read: usize,
+    /// Of `files_read`, docs git does not track (read from the working tree, no commit).
+    pub untracked_read: usize,
     pub units: Vec<Unit>,
     /// Why files were skipped, with counts.
     pub skipped: BTreeMap<&'static str, usize>,
@@ -315,14 +319,18 @@ fn unit(
     }
 }
 
-/// Read a project: tracked files into units, the last `max_commits` commits into commit units, and
-/// the experts' areas inside it.
+/// Read a project: tracked files and untracked docs into units, the last `max_commits` commits into
+/// commit units, and the experts' areas inside it.
 pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Result<Collected> {
-    let tracked: Vec<String> = git(project_dir, &["ls-files", "-z"])?
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let list = |args: &[&str]| -> Result<Vec<String>> {
+        Ok(git(project_dir, args)?
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect())
+    };
+    let tracked = list(&["ls-files", "-z"])?;
+    let untracked = list(&["ls-files", "-z", "--others", "--exclude-standard"])?;
     let mut c = Collected {
         head: git(project_dir, &["rev-parse", "HEAD"])
             .ok()
@@ -334,7 +342,11 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
         ..Collected::default()
     };
     let secrets: Vec<Glob> = SECRET_NAMES.iter().map(|g| Glob::new(g)).collect();
-    for path in &tracked {
+    let files = tracked
+        .iter()
+        .map(|p| (p, true))
+        .chain(untracked.iter().map(|p| (p, false)));
+    for (path, is_tracked) in files {
         let name = path.rsplit('/').next().unwrap_or(path);
         let skip = |c: &mut Collected, why: &'static str| *c.skipped.entry(why).or_default() += 1;
         if secrets.iter().any(|g| g.matches(name)) {
@@ -349,6 +361,10 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
             skip(&mut c, "not a kind we read");
             continue;
         };
+        if !is_tracked && !matches!(kind, "context" | "doc") {
+            skip(&mut c, "untracked, and not a doc");
+            continue;
+        }
         let full = project_dir.join(path);
         let Ok(meta) = std::fs::metadata(&full) else {
             skip(&mut c, "tracked but missing on disk");
@@ -368,6 +384,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
         let experts_here = experts_for(&c.areas, path);
         c.paths.push(path.clone());
         c.files_read += 1;
+        c.untracked_read += usize::from(!is_tracked);
         for (start, end) in spans(&lines, kind) {
             let body = lines[start - 1..end].join("\n");
             if body.trim().is_empty() {
@@ -379,7 +396,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
                 body,
                 Some(path.clone()),
                 Some((start, end)),
-                c.head.clone(),
+                c.head.clone().filter(|_| is_tracked),
                 experts_here.clone(),
             ));
         }

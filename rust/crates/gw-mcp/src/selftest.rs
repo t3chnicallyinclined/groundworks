@@ -195,6 +195,12 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
     git(&["init", "-q"])?;
     git(&["add", "-A", "-f"])?;
     git(&["commit", "-q", "-m", "initial import of the demo"])?;
+    // Never committed: the doc is read, the code is not.
+    std::fs::write(
+        workspace.join("demo/docs/LATE-NOTE.md"),
+        "# Late note\n\nThe zephyr flag is unsafe; nobody committed this.\n",
+    )?;
+    std::fs::write(workspace.join("demo/scratch.rs"), "fn zephyr_scratch() {}\n")?;
     std::fs::create_dir_all(base.join("experts"))?;
     std::fs::write(
         base.join("experts/selftest-expert.md"),
@@ -404,6 +410,16 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     c.check(
         "a secret file's contents are never ingested",
         !err && text.contains("no units match"),
+        &text,
+    );
+    let (err, text) = s.call("search", json!({"query": "zephyr", "project": "demo"}))?;
+    c.check(
+        "an untracked doc is ingested, with no commit; untracked code is not",
+        !err && text
+            .lines()
+            .find(|l| l.contains("demo:docs/LATE-NOTE.md"))
+            .is_some_and(|l| !l.contains(" @ "))
+            && !text.contains("scratch.rs"),
         &text,
     );
 

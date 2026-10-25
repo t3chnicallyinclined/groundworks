@@ -703,9 +703,10 @@ pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> 
     let report = store.intake(&project.name, &collected)?;
     let stale_quotes = store.recheck_quotes(&dir, &project.name)?;
     let mut out = format!(
-        "{}: {} files read into {} units ({} written, {} unchanged, {} marked gone) in {:.1}s on {}\n",
+        "{}: {} files read ({} untracked docs) into {} units ({} written, {} unchanged, {} marked gone) in {:.1}s on {}\n",
         project.name,
         collected.files_read,
+        collected.untracked_read,
         report.units,
         report.written,
         report.unchanged,
