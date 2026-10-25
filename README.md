@@ -191,7 +191,8 @@ To get there faster, copy [`instances/demo-incident/`](instances/demo-incident/)
 - **The graph's shape belongs to the instance:** declare node tables and edge types in `instance.yaml` and they get schema, gate traversals, probes, cleanup, per-role permissions and a write path with no engine change.
 - **Used for real, privately:** the first instance is an appellate case record, 9,101 units read by 77 agents, 77 of 77 chunks passing the verbatim validator. Its code and data are not here and never will be.
 - **Known gaps, plainly:** the only bundled corpus is synthetic; the MCP server has been driven by Claude Code sessions but not by any other client; `ask` retrieves with BM25 only (recall@20 measured at 0.54 on the first instance, which is why K is in the hundreds). Two presentation ideas were measured and **not adopted**; see `notes/`.
-- **A Rust port** exists in a separate workspace and is checked byte for byte against this Python v0.2.0 as its reference. It is not public yet.
+- **Rust is the successor.** The Rust port lives in [`rust/`](rust/) (crates `gw-core` and `gw`, run with `cargo gw-test` from `rust/`) and is checked byte for byte against this Python v0.2.0 as its reference (`rust/harness/differential.py`). Python stays as that reference until each piece is ported; new work lands in Rust.
+- **Where it is going:** one harness that makes coding agents experts on a software project as well as a document corpus: a project's code, docs, commits and issues become units; claims about it need evidence (a quote found word for word, a command receipt, a commit); dead ends are kept; work items stay in GitHub issues. There is no ticket board.
 
 ## Running it, in detail
 
