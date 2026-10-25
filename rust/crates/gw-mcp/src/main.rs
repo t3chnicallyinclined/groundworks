@@ -155,6 +155,9 @@ enum Command {
         #[arg(long, default_value_t = gw_ops::ask::DEFAULT_K)]
         k: usize,
     },
+    /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
+    /// file of its project, every trap's premise absent.
+    EvalCheck { file: std::path::PathBuf },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
@@ -452,6 +455,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             (text, true)
         }
         Command::Experts => (ops::experts()?, true),
+        Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
         Command::Ask {
             question,
             project,

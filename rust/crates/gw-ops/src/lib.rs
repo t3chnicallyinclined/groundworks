@@ -3,6 +3,7 @@
 //! Absorbed from an earlier standalone prototype, 2026-10-24.
 
 pub mod ask;
+pub mod eval;
 pub mod exec;
 pub mod home;
 pub mod intake;
