@@ -433,3 +433,46 @@ pub fn install_team(home: &Home) -> Result<String> {
     writeln!(out, "{count} agent(s) installed")?;
     Ok(out)
 }
+
+/// The read-only estate scan (bootstrap stage 1): one record per project under `root` (default:
+/// the workspace), written to `out` (default: `<home>/estate.json`). Returns a summary of counts;
+/// the records themselves stay in the file.
+pub fn estate_scan(home: &Home, root: Option<&Path>, out: Option<&Path>) -> Result<String> {
+    let root = root.map_or_else(|| home.workspace.clone(), Path::to_path_buf);
+    ensure!(root.is_dir(), "{} is not a directory", root.display());
+    let out = out.map_or_else(|| home.path("estate.json"), Path::to_path_buf);
+    let started = std::time::Instant::now();
+    let records = crate::scan::scan_root(&root, &home.config.scan.local_only)
+        .with_context(|| format!("scanning {}", root.display()))?;
+    std::fs::write(&out, serde_json::to_string_pretty(&records)?)?;
+    let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+    let (mut local_only, mut with_secret_flags, mut with_gates) = (0usize, 0usize, 0usize);
+    for r in &records {
+        if r["local_only"] == serde_json::json!(true) {
+            local_only += 1;
+        }
+        if r["secret_flags"].as_array().is_some_and(|a| !a.is_empty()) {
+            with_secret_flags += 1;
+        }
+        if r["candidate_gates"].as_array().is_some_and(|a| !a.is_empty()) {
+            with_gates += 1;
+        }
+        *kinds.entry(r["kind"].as_str().unwrap_or("?")).or_default() += 1;
+    }
+    let mut text = format!(
+        "scanned {} on {} in {:.1}s: {} record(s) -> {}\n",
+        root.display(),
+        crate::home::machine(),
+        started.elapsed().as_secs_f64(),
+        records.len(),
+        out.display()
+    );
+    for (kind, n) in &kinds {
+        writeln!(text, "  {kind}: {n}")?;
+    }
+    writeln!(
+        text,
+        "  local-only (not walked): {local_only}; with candidate gates: {with_gates}; with secret-looking file names: {with_secret_flags}"
+    )?;
+    Ok(text)
+}

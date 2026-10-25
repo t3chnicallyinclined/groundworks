@@ -4,3 +4,5 @@ gw-test = "test -p gw-core -p gw"
 # The MCP server and operations (absorbed 2026-10-24). Kept out of gw-test so gw-core's
 # serde_json preserve_order feature never merges into them, and theirs never into gw-core.
 mcp-test = "test -p gw-ops -p gw-mcp"
+# The SurrealDB data model and its rules (each test starts its own throwaway server).
+store-test = "test -p gw-store"

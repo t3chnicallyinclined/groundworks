@@ -122,6 +122,12 @@ pub struct BootstrapArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct ScanArgs {
+    /// Folder to scan (default: the workspace).
+    pub root: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct TopicArg {
     pub topic: String,
 }
@@ -262,6 +268,18 @@ impl Groundworks {
     #[tool(description = "The owner's authoritative work history. Never state experience beyond it.")]
     async fn profile(&self) -> Result<String, String> {
         ops::profile(&self.home).map_err(fail)
+    }
+
+    #[tool(
+        description = "Read-only estate scan: one record per project under a folder (git facts, build files, candidate gates never run, docs, secret-looking file names; local-only projects are not walked). Writes estate.json in the home and returns counts."
+    )]
+    async fn estate_scan(&self, args: Parameters<ScanArgs>) -> Result<String, String> {
+        let home = self.home.clone();
+        let root = args.0.root.map(PathBuf::from);
+        tokio::task::spawn_blocking(move || ops::estate_scan(&home, root.as_deref(), None))
+            .await
+            .map_err(|e| format!("scan task failed: {e}"))?
+            .map_err(fail)
     }
 
     #[tool(description = "Check the registry, templates, secret references and profile from this machine.")]

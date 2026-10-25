@@ -411,3 +411,25 @@ rather than "byte-identical". Every departure is named in the patch, and this fi
   arm. Note it now needs the PATH pin lifted for that second recording too, since an UNKNOWN `on_disk_now`
   refuses writes regardless of branch.
 * `--mcp --candidate` is wired to the same call script but exits NOT EXECUTED until the Rust front door exists.
+
+## gw-ops scan (2026-10-24)
+
+`crates/gw-ops/src/scan.rs` ports the 2026-09-17 Python estate scan (`xscholar/scan.py`, branch
+`product/estate-scan`, a4136eb). Checked record for record against it on a real projects folder of
+~300 projects on Windows: every record both produced was identical, in the same order. The only
+differences are the one deliberate deviation stated in the module header: Python's `os.walk` descends
+into directory junctions and lists what it finds there a second time under the junction's path; the
+port does not (telling a junction from a symlink needs `unsafe` Windows calls, which this workspace
+forbids). Each junction target is still scanned once, where it really lives. Local-only globs come from
+the home's `groundworks.toml`, never from code.
+
+## gw-store (2026-10-24)
+
+`crates/gw-store` holds the SurrealDB data model: the schema (`schema/0001-0004*.surql`, compiled in),
+migrations with a recorded schema version, and member credentials (`owner`, `agent`). Harvested from the
+2026-09-17 product data model with tickets and reviews removed, receipts added, and scope policy and walls
+added. `cargo store-test` proves each rule both ways against a throwaway in-memory server it starts and
+stops itself; with no SurrealDB binary the tests fail as NOT EXECUTED. Measured on 3.1.6 while building it:
+in a top-level field ASSERT `$parent` is NONE and `$this` is the record; inside a subquery `$this` is
+rebound to the subquery's row (use a graph traversal such as `count($this.id->evidence)`); and a line like
+`THIS IS NOT SURREALQL` is a valid expression (it returns `false`), not a syntax error.

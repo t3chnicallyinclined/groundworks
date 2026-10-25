@@ -78,6 +78,12 @@ enum Command {
         #[arg(long, default_value = "owner")]
         by: String,
     },
+    /// Read-only estate scan of a folder (default: the workspace) into estate.json.
+    Scan {
+        root: Option<PathBuf>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Check registry, templates, secrets and profile.
     Doctor,
     /// Install team/gw-*.md into ~/.claude/agents.
@@ -140,6 +146,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             confidence,
             by,
         } => (ops::note(&home, &project, kind, &text, &source, confidence, &by)?, true),
+        Command::Scan { root, out } => (ops::estate_scan(&home, root.as_deref(), out.as_deref())?, true),
         Command::Doctor => ops::doctor(&home).await?,
         Command::InstallTeam => (ops::install_team(&home)?, true),
     };

@@ -18,6 +18,16 @@ pub struct Config {
     pub templates: Option<PathBuf>,
     #[serde(default)]
     pub profile: ProfileConfig,
+    #[serde(default)]
+    pub scan: ScanConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanConfig {
+    /// Globs (fnmatch) for paths the estate scan must record as local-only and never walk.
+    #[serde(default)]
+    pub local_only: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
