@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gw-core",
+    "crates/gw",
+]
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+serde_json = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Release keeps the default, IEEE-conformant codegen; no fast-math (docs/RUST_PORT.md).
+[profile.release]
+debug = 0
+
+[profile.dev]
+debug = 0
