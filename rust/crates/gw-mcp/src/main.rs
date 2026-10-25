@@ -2,14 +2,16 @@ mod server;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use rmcp::ServiceExt;
 
 use gw_ops::home::Home;
 use gw_ops::journal::{Confidence, Kind};
 use gw_ops::ops;
+use gw_ops::store::{self, Quote, Store};
 
 /// Groundworks: the registry, journal, knowledge and tools agents use to work on every project.
 #[derive(Parser)]
@@ -65,7 +67,7 @@ enum Command {
         #[arg(long)]
         no_register: bool,
     },
-    /// Append to a project's journal.
+    /// Record a fact in a project's journal (the store refuses CONFIRMED without evidence).
     Note {
         project: String,
         #[arg(value_enum)]
@@ -77,6 +79,30 @@ enum Command {
         confidence: Confidence,
         #[arg(long, default_value = "owner")]
         by: String,
+        /// A receipt id from run or gate.
+        #[arg(long)]
+        receipt: Option<String>,
+        /// What the owner said, with the date.
+        #[arg(long)]
+        owner_statement: Option<String>,
+        /// A file (relative to the project) holding the quote.
+        #[arg(long, requires_all = ["quote_line", "quote_text"])]
+        quote_file: Option<String>,
+        #[arg(long)]
+        quote_line: Option<usize>,
+        /// The exact text; may start with `-` (e.g. a SQL or shell comment).
+        #[arg(long, allow_hyphen_values = true)]
+        quote_text: Option<String>,
+    },
+    /// The store: create credentials and start it, report on it, import old journals.
+    Store {
+        #[command(subcommand)]
+        action: StoreAction,
+    },
+    /// Owner-only changes. The owner password comes from GROUNDWORKS_OWNER_PASS and is never stored.
+    Owner {
+        #[command(subcommand)]
+        action: OwnerAction,
     },
     /// Read-only estate scan of a folder (default: the workspace) into estate.json.
     Scan {
@@ -88,6 +114,65 @@ enum Command {
     Doctor,
     /// Install team/gw-*.md into ~/.claude/agents.
     InstallTeam,
+}
+
+#[derive(Subcommand)]
+enum StoreAction {
+    /// Create the store credentials if missing, start the store, create the owner login from
+    /// GROUNDWORKS_OWNER_PASS, and import the old file journals.
+    Init {
+        /// Skip creating the owner login (owner commands will not work until it exists).
+        #[arg(long)]
+        no_owner: bool,
+    },
+    /// Is the store up, which version, which namespaces.
+    Status,
+    /// Import any remaining file journals.
+    Import,
+}
+
+#[derive(Subcommand)]
+enum OwnerAction {
+    /// Set a scope's isolation level (global, ws_<name> or proj_<slug>).
+    Level {
+        scope: String,
+        #[arg(value_enum)]
+        level: Level,
+        /// The workspace a project belongs to (ws_<name>).
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Wall two scopes off from each other.
+    Wall {
+        a: String,
+        b: String,
+        #[arg(long)]
+        why: String,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Level {
+    Shared,
+    Private,
+    Isolated,
+}
+
+impl Level {
+    fn as_str(self) -> &'static str {
+        match self {
+            Level::Shared => "shared",
+            Level::Private => "private",
+            Level::Isolated => "isolated",
+        }
+    }
+}
+
+fn owner_pass() -> Result<String> {
+    let pass = std::env::var("GROUNDWORKS_OWNER_PASS")
+        .map_err(|_| anyhow::anyhow!("set GROUNDWORKS_OWNER_PASS (the owner password; it is never stored)"))?;
+    anyhow::ensure!(pass.len() >= 12, "the owner password must be at least 12 characters");
+    Ok(pass)
 }
 
 #[tokio::main]
@@ -109,17 +194,28 @@ async fn main() -> ExitCode {
 }
 
 /// Ok(false) means the operation ran and reported a failure (a red gate, a non-zero exit).
+async fn open_store(home: &Arc<Home>) -> Result<Arc<Store>> {
+    let home = Arc::clone(home);
+    Ok(Arc::new(store::blocking(move || Store::open(&home)).await?))
+}
+
 async fn dispatch(command: Command) -> Result<bool> {
-    let home = Home::discover()?;
+    let home = Arc::new(Home::discover()?);
     let (text, ok) = match command {
         Command::Serve => {
             tracing::info!(home = %home.root.display(), "serving MCP over stdio");
+            let home = Arc::try_unwrap(home).map_err(|_| anyhow::anyhow!("home is shared"))?;
             let service = server::Groundworks::new(home).serve(rmcp::transport::stdio()).await?;
             service.waiting().await?;
             return Ok(true);
         }
         Command::Projects => (ops::projects(&home)?, true),
-        Command::Show { project, limit } => (ops::show(&home, &project, limit)?, true),
+        Command::Show { project, limit } => {
+            let store = open_store(&home).await.ok();
+            let home = Arc::clone(&home);
+            let text = store::blocking(move || ops::show(&home, store.as_deref(), &project, limit)).await?;
+            (text, true)
+        }
         Command::Env { project, env } => (ops::env_show(&home, &project, &env).await?, true),
         Command::Run {
             project,
@@ -127,8 +223,23 @@ async fn dispatch(command: Command) -> Result<bool> {
             timeout,
             confirm,
             command,
-        } => ops::run(&home, &project, &env, &command.join(" "), timeout, confirm.as_deref()).await?,
-        Command::Gate { project, env, timeout } => ops::gate(&home, &project, &env, timeout).await?,
+        } => {
+            let store = open_store(&home).await.ok();
+            ops::run(
+                &home,
+                store,
+                &project,
+                &env,
+                &command.join(" "),
+                timeout,
+                confirm.as_deref(),
+            )
+            .await?
+        }
+        Command::Gate { project, env, timeout } => {
+            let store = open_store(&home).await.ok();
+            ops::gate(&home, store, &project, &env, timeout).await?
+        }
         Command::Bootstrap {
             stack,
             name,
@@ -145,11 +256,106 @@ async fn dispatch(command: Command) -> Result<bool> {
             source,
             confidence,
             by,
-        } => (ops::note(&home, &project, kind, &text, &source, confidence, &by)?, true),
-        Command::Scan { root, out } => (ops::estate_scan(&home, root.as_deref(), out.as_deref())?, true),
-        Command::Doctor => ops::doctor(&home).await?,
+            receipt,
+            owner_statement,
+            quote_file,
+            quote_line,
+            quote_text,
+        } => {
+            let quote = match (quote_file, quote_line, quote_text) {
+                (Some(file), Some(line), Some(text)) => Some(Quote { file, line, text }),
+                _ => None,
+            };
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let text = store::blocking(move || {
+                ops::note(
+                    &home,
+                    &store,
+                    ops::Note {
+                        project: &project,
+                        kind,
+                        text: &text,
+                        source: &source,
+                        confidence,
+                        by: &by,
+                        receipt: receipt.as_deref(),
+                        owner_statement: owner_statement.as_deref(),
+                        quote,
+                    },
+                )
+            })
+            .await?;
+            (text, true)
+        }
+        Command::Store { action } => (store_action(&home, action).await?, true),
+        Command::Owner { action } => {
+            let pass = owner_pass()?;
+            let store = open_store(&home).await?;
+            let text = store::blocking(move || match action {
+                OwnerAction::Level {
+                    scope,
+                    level,
+                    workspace,
+                } => {
+                    store.set_level(&pass, &scope, level.as_str(), workspace.as_deref())?;
+                    Ok(format!("{scope} is now {}", level.as_str()))
+                }
+                OwnerAction::Wall { a, b, why } => {
+                    store.add_wall(&pass, &a, &b, &why)?;
+                    Ok(format!("wall between {a} and {b} recorded"))
+                }
+            })
+            .await?;
+            (text, true)
+        }
+        Command::Scan { root, out } => {
+            let home = Arc::clone(&home);
+            let text = store::blocking(move || ops::estate_scan(&home, root.as_deref(), out.as_deref())).await?;
+            (text, true)
+        }
+        Command::Doctor => {
+            let store = open_store(&home).await.map_err(|e| format!("{e:#}"));
+            ops::doctor(&home, store).await?
+        }
         Command::InstallTeam => (ops::install_team(&home)?, true),
     };
     println!("{}", text.trim_end());
     Ok(ok)
+}
+
+async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
+    match action {
+        StoreAction::Init { no_owner } => {
+            let owner = if no_owner { None } else { Some(owner_pass()?) };
+            let created = store::create_secrets(home)?;
+            let store = open_store(home).await?;
+            let home = Arc::clone(home);
+            store::blocking(move || {
+                let mut out = String::new();
+                for path in &created {
+                    out.push_str(&format!("created {}\n", path.display()));
+                }
+                store.agent(gw_store::GLOBAL_NS)?;
+                if let Some(pass) = &owner {
+                    store.provision_owner(gw_store::GLOBAL_NS, pass)?;
+                    out.push_str("owner login created in global\n");
+                }
+                out.push_str(&store.status()?);
+                out.push('\n');
+                out.push_str(&ops::import_journals(&home, &store)?);
+                Ok(out)
+            })
+            .await
+        }
+        StoreAction::Status => {
+            let store = open_store(home).await?;
+            store::blocking(move || store.status()).await
+        }
+        StoreAction::Import => {
+            let store = open_store(home).await?;
+            let home = Arc::clone(home);
+            store::blocking(move || ops::import_journals(&home, &store)).await
+        }
+    }
 }

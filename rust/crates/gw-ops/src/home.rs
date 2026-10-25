@@ -20,6 +20,22 @@ pub struct Config {
     pub profile: ProfileConfig,
     #[serde(default)]
     pub scan: ScanConfig,
+    #[serde(default)]
+    pub store: StoreConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreConfig {
+    /// The SurrealDB endpoint; loopback only. Default `http://127.0.0.1:8004/sql`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Data directory, relative to the home. Default `db`.
+    #[serde(default)]
+    pub data: Option<PathBuf>,
+    /// The `surreal` binary. Default: `GROUNDWORKS_SURREAL`, `PATH`, then the installer's location.
+    #[serde(default)]
+    pub surreal: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]

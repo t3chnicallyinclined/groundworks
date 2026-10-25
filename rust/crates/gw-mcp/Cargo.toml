@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 gw-ops = { path = "../gw-ops" }
+gw-store = { path = "../gw-store" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rmcp = { version = "3.7", features = ["server", "transport-io"] }

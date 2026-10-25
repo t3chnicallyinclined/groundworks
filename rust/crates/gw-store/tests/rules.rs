@@ -2,103 +2,9 @@
 //! refused without its evidence or role, accepted with it. If no SurrealDB binary is found the
 //! tests FAIL ("NOT EXECUTED"), never pass, so a gate that did not run cannot read green.
 
-use std::net::TcpListener;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-
 use gw_core::db::{Db, DbError};
-use gw_store::{
-    GLOBAL_NS, SCHEMA, Scope, connect_member, connect_root, current_version, migrate, open_namespace, provision,
-};
-
-fn find_surreal() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("GROUNDWORKS_SURREAL") {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    let exe = if cfg!(windows) { "surreal.exe" } else { "surreal" };
-    if let Some(path_var) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            if dir.join(exe).is_file() {
-                return Some(dir.join(exe));
-            }
-        }
-    }
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    let candidate = PathBuf::from(home)
-        .join("AppData")
-        .join("Local")
-        .join("SurrealDB")
-        .join("surreal.exe");
-    candidate.is_file().then_some(candidate)
-}
-
-/// A throwaway `surreal start ... memory`, stopped by its own handle in `Drop`, never by name.
-struct Throwaway {
-    child: Child,
-    port: u16,
-}
-
-impl Throwaway {
-    fn start() -> Self {
-        let binary = find_surreal().unwrap_or_else(|| {
-            panic!(
-                "NOT EXECUTED (fails this test, not a pass): SurrealDB binary not found. Install it or set \
-                 GROUNDWORKS_SURREAL; these rules cannot be proven without a real server."
-            )
-        });
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let child = Command::new(binary)
-            .args([
-                "start",
-                "--bind",
-                &format!("127.0.0.1:{port}"),
-                "--user",
-                "root",
-                "--pass",
-                "root",
-                "memory",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("failed to spawn surreal");
-        let mut me = Throwaway { child, port };
-        let deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            if let Ok(Some(status)) = me.child.try_wait() {
-                panic!("surreal on port {port} exited early: {status:?}");
-            }
-            let health = format!("http://127.0.0.1:{port}/health");
-            if ureq::get(&health).timeout(Duration::from_millis(500)).call().is_ok() {
-                std::thread::sleep(Duration::from_millis(300));
-                if matches!(me.child.try_wait(), Ok(None)) {
-                    return me;
-                }
-            }
-            assert!(
-                Instant::now() < deadline,
-                "NOT EXECUTED: surreal did not become healthy on port {port}"
-            );
-            std::thread::sleep(Duration::from_millis(150));
-            let _ = &mut me;
-        }
-    }
-
-    fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/sql", self.port)
-    }
-}
-
-impl Drop for Throwaway {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use gw_store::testkit::Throwaway;
+use gw_store::{GLOBAL_NS, SCHEMA, Scope, connect_member, current_version, migrate};
 
 /// One server with `global`, `proj_a` and `proj_b` migrated, and `owner1`/`agent1` in each.
 struct Estate {
@@ -108,25 +14,20 @@ struct Estate {
 impl Estate {
     fn new() -> Self {
         let server = Throwaway::start();
-        for ns in [GLOBAL_NS, "proj_a", "proj_b"] {
-            let root = connect_root(&server.url(), ns, "root", "root").unwrap();
-            open_namespace(&root, ns).unwrap();
-            provision(&root, "owner1", "owner", "owner-pass").unwrap();
-            provision(&root, "agent1", "agent", "agent-pass").unwrap();
-        }
+        server.estate();
         Estate { server }
     }
 
     fn root(&self, ns: &str) -> Db {
-        connect_root(&self.server.url(), ns, "root", "root").unwrap()
+        self.server.root(ns)
     }
 
     fn agent(&self, ns: &str) -> Db {
-        connect_member(&self.server.url(), ns, "agent1", "agent-pass").unwrap()
+        self.server.agent(ns)
     }
 
     fn owner(&self, ns: &str) -> Db {
-        connect_member(&self.server.url(), ns, "owner1", "owner-pass").unwrap()
+        self.server.owner(ns)
     }
 }
 
@@ -157,20 +58,20 @@ fn migrations_apply_once_and_a_failed_file_rolls_back() {
     let estate = Estate::new();
     let root = estate.root("proj_a");
     assert!(
-        migrate(&root, Scope::Project, &SCHEMA, true).unwrap().is_empty(),
+        migrate(&root, Scope::Project, SCHEMA, true).unwrap().is_empty(),
         "second run is a no-op"
     );
-    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 4);
+    assert_eq!(current_version(&root).unwrap().unwrap()["applied"], 5);
 
     let mut broken: Vec<(&str, &str)> = SCHEMA.to_vec();
     broken.push((
-        "0005_broken.surql",
+        "0006_broken.surql",
         "-- scope: project\nDEFINE TABLE ok_table SCHEMAFULL;\nTHROW 'a broken migration';",
     ));
     assert!(migrate(&root, Scope::Project, &broken, true).is_err());
     assert_eq!(
         current_version(&root).unwrap().unwrap()["applied"],
-        4,
+        5,
         "version did not move"
     );
     let tables = value(&root, "INFO FOR DB;");

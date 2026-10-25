@@ -1,0 +1,643 @@
+//! The Groundworks store: one SurrealDB server for every session on this machine, reached over
+//! loopback only. Agents work under the `agent` member credential, never root; root is used only
+//! to create and migrate a namespace the first time this process touches it. The owner's
+//! credential is never stored: owner commands read it from `GROUNDWORKS_OWNER_PASS` at the moment
+//! they run.
+//!
+//! All of this is blocking (the client is `ureq`). Async callers go through [`blocking`].
+//!
+//! Every agent session runs as the same OS user that can read `<home>/secrets/`, so the
+//! root/agent split guards against mistakes, not against a hostile agent; the owner/agent split
+//! holds because the owner's password is never on disk.
+
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail, ensure};
+use gw_core::db::Db;
+use gw_store::{GLOBAL_NS, connect_member, connect_root, lit, open_namespace, project_ns, provision};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::home::{Home, machine};
+use crate::journal::{Confidence, Kind};
+
+pub const DEFAULT_URL: &str = "http://127.0.0.1:8004/sql";
+const AGENT: &str = "agent";
+const OWNER: &str = "owner";
+const START_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Run blocking store work off the async runtime's worker threads.
+pub async fn blocking<T, F>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.context("store task panicked")?
+}
+
+/// Lowercase; runs of anything outside `[a-z0-9]` become one `_`; at most 40 characters.
+pub fn slug(name: &str) -> Result<String> {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_').to_owned();
+    ensure!(
+        (1..=40).contains(&out.len()),
+        "project name {name:?} does not make a 1-40 character slug"
+    );
+    Ok(out)
+}
+
+pub struct Store {
+    url: String,
+    root_pass: String,
+    agent_pass: String,
+    /// One signed-in agent client per namespace; its token is reused across calls.
+    agents: Mutex<HashMap<String, Arc<Db>>>,
+}
+
+impl Store {
+    /// A store whose server is already running and whose passwords are known.
+    pub fn connect(url: &str, root_pass: &str, agent_pass: &str) -> Self {
+        Self {
+            url: url.to_owned(),
+            root_pass: root_pass.to_owned(),
+            agent_pass: agent_pass.to_owned(),
+            agents: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The home's store: passwords from `<home>/secrets/`, server started if it is not answering.
+    pub fn open(home: &Home) -> Result<Self> {
+        let url = store_url(home);
+        let root_pass = read_secret(home, "root")?;
+        let agent_pass = read_secret(home, "agent")?;
+        ensure_running(home, &url, &root_pass)?;
+        Ok(Self::connect(&url, &root_pass, &agent_pass))
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn root(&self, ns: &str) -> Result<Db> {
+        Ok(connect_root(&self.url, ns, "root", &self.root_pass)?)
+    }
+
+    /// The agent client for `ns`, creating and migrating the namespace the first time.
+    pub fn agent(&self, ns: &str) -> Result<Arc<Db>> {
+        let mut agents = self.agents.lock().expect("agent cache poisoned");
+        if let Some(db) = agents.get(ns) {
+            return Ok(Arc::clone(db));
+        }
+        let root = self.root(ns)?;
+        open_namespace(&root, ns).with_context(|| format!("migrating {ns}"))?;
+        provision(&root, AGENT, "agent", &self.agent_pass)?;
+        let db = Arc::new(connect_member(&self.url, ns, AGENT, &self.agent_pass)?);
+        agents.insert(ns.to_owned(), Arc::clone(&db));
+        Ok(db)
+    }
+
+    /// The owner client for `ns`, signed in with the password the owner gives now.
+    pub fn owner(&self, ns: &str, owner_pass: &str) -> Result<Db> {
+        self.agent(ns)?; // makes sure the namespace exists and is migrated
+        Ok(connect_member(&self.url, ns, OWNER, owner_pass)?)
+    }
+
+    /// Create or reset the owner credential in `ns` (root; run by the owner at init).
+    pub fn provision_owner(&self, ns: &str, owner_pass: &str) -> Result<()> {
+        self.agent(ns)?;
+        provision(&self.root(ns)?, OWNER, "owner", owner_pass)?;
+        Ok(())
+    }
+
+    /// Record proof that a command ran. Returns the receipt id (`receipt:...`).
+    pub fn record_receipt(&self, project: &str, receipt: &ReceiptIn) -> Result<String> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let exit = receipt.exit_code.map_or_else(|| "NONE".to_owned(), |c| c.to_string());
+        let commit = receipt.commit.as_deref().map_or_else(|| "NONE".to_owned(), lit);
+        let rows = db.sql(
+            &format!(
+                "CREATE receipt SET command = {}, machine = {}, location = {}, exit_code = {exit}, ok = {}, output_hash = {}, commit = {commit} RETURN VALUE id;",
+                lit(&receipt.command),
+                lit(&receipt.machine),
+                lit(&receipt.location),
+                receipt.ok,
+                lit(&receipt.output_hash),
+            ),
+            Some(1),
+        )?;
+        record_id(&rows[0][0]).context("CREATE receipt returned no id")
+    }
+
+    /// Record a fact. The store decides whether it may be CONFIRMED: it needs a receipt, an
+    /// owner statement, or a quote that was found word for word (checked here first, so the
+    /// refusal can say what the file really contains).
+    pub fn add_fact(&self, project_dir: &Path, project: &str, fact: &FactIn) -> Result<String> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        self.write_fact(&db, project_dir, fact, None)
+    }
+
+    /// Import a historical fact with its original timestamp. Runs as the loader (root): an agent
+    /// can never backdate a fact. The evidence rules apply to root exactly as to an agent.
+    pub fn import_fact(&self, project_dir: &Path, project: &str, fact: &FactIn, at: &str) -> Result<String> {
+        let ns = project_ns(&slug(project)?)?;
+        self.agent(&ns)?; // creates and migrates the namespace if needed
+        let at = chrono_like(at)?;
+        self.write_fact(&self.root(&ns)?, project_dir, fact, Some(&at))
+    }
+
+    fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, at: Option<&str>) -> Result<String> {
+        ensure!(!fact.text.trim().is_empty(), "a fact needs text");
+        let at = at.map_or_else(String::new, |at| format!(", at = d{}", lit(at)));
+        let receipt = match &fact.receipt {
+            Some(id) => parse_receipt(id)?,
+            None => "NONE".to_owned(),
+        };
+        let owner_statement = fact.owner_statement.as_deref().map_or_else(|| "NONE".to_owned(), lit);
+        let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
+        if fact.confidence == Confidence::Confirmed
+            && fact.receipt.is_none()
+            && fact.owner_statement.is_none()
+            && quote.is_none()
+        {
+            bail!(
+                "CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word in a file, or an \
+                 owner statement. Record it as INFERRED otherwise."
+            );
+        }
+        let grade = grade(fact.confidence);
+        let first_grade = if quote.is_some() { "INFERRED" } else { grade };
+        let mut sql = format!(
+            "BEGIN TRANSACTION;\nLET $f = (CREATE fact SET text = {}, kind = {}, grade = {}, source = {}, by = {}, machine = {}, receipt = {receipt}, owner_statement = {owner_statement}{at} RETURN VALUE id)[0];\n",
+            lit(fact.text.trim()),
+            lit(kind(fact.kind)),
+            lit(first_grade),
+            lit(fact.source.trim()),
+            lit(fact.by.trim()),
+            lit(&machine()),
+        );
+        if let Some(q) = &quote {
+            // RELATE takes a variable or a literal record, not a function call.
+            writeln!(
+                sql,
+                "LET $u = type::record('unit', {});\n\
+                 UPSERT $u SET locator = {}, hash = {}, text = {}, kind = 'quote', read_at = time::now();\n\
+                 RELATE $f->evidence->$u SET hash_at_cite = {};\nUPDATE $f SET grade = {}, verified_at = time::now();",
+                lit(&q.unit_key),
+                lit(&q.locator),
+                lit(&q.hash),
+                lit(&q.text),
+                lit(&q.hash),
+                lit(grade),
+            )?;
+        }
+        sql.push_str("RETURN $f;\nCOMMIT TRANSACTION;");
+        let rows = db.sql(&sql, None)?;
+        rows.iter()
+            .rev()
+            .find_map(record_id)
+            .context("the fact transaction returned no id")
+    }
+
+    /// The newest `limit` facts, oldest first, optionally of one kind.
+    pub fn facts(&self, project: &str, kind_filter: Option<Kind>, limit: usize) -> Result<Vec<FactRow>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let filter = kind_filter.map_or_else(String::new, |k| format!("WHERE kind = {} ", lit(kind(k))));
+        let rows = db.sql(
+            &format!(
+                "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
+                 <string> receipt AS receipt, ->evidence->unit.locator AS quotes FROM fact {filter}ORDER BY at DESC LIMIT {limit};"
+            ),
+            Some(1),
+        )?;
+        let mut facts: Vec<FactRow> = serde_json::from_value(rows[0].clone()).context("reading facts")?;
+        facts.reverse();
+        Ok(facts)
+    }
+
+    /// A one-line health and size report.
+    pub fn status(&self) -> Result<String> {
+        let root = self.root(GLOBAL_NS)?;
+        let version = root.version()?;
+        let info = root.sql("INFO FOR ROOT;", Some(1))?;
+        let namespaces: Vec<String> = info[0]["namespaces"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        Ok(format!(
+            "store {} ({version}): namespaces {}",
+            self.url,
+            namespaces.join(", ")
+        ))
+    }
+
+    /// Set a scope's isolation level, as the owner.
+    pub fn set_level(&self, owner_pass: &str, scope: &str, level: &str, workspace: Option<&str>) -> Result<()> {
+        let kind = gw_store::scope_of(scope)?.as_str();
+        let owner = self.owner(GLOBAL_NS, owner_pass)?;
+        let ws = workspace.map_or_else(|| "NONE".to_owned(), lit);
+        owner.sql(
+            &format!(
+                "UPSERT type::record('scope_policy', {s}) SET name = {s}, kind = {}, level = {}, workspace = {ws};",
+                lit(kind),
+                lit(level),
+                s = lit(scope)
+            ),
+            Some(1),
+        )?;
+        Ok(())
+    }
+
+    /// Wall two scopes off from each other, as the owner.
+    pub fn add_wall(&self, owner_pass: &str, a: &str, b: &str, why: &str) -> Result<()> {
+        gw_store::scope_of(a)?;
+        gw_store::scope_of(b)?;
+        ensure!(a != b, "a wall needs two different scopes");
+        let (a, b) = if a < b { (a, b) } else { (b, a) };
+        self.owner(GLOBAL_NS, owner_pass)?.sql(
+            &format!("CREATE wall SET a = {}, b = {}, why = {};", lit(a), lit(b), lit(why)),
+            Some(1),
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceiptIn {
+    pub command: String,
+    pub machine: String,
+    pub location: String,
+    pub exit_code: Option<i32>,
+    pub ok: bool,
+    pub output_hash: String,
+    pub commit: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactIn {
+    pub kind: Kind,
+    pub text: String,
+    pub confidence: Confidence,
+    pub source: String,
+    pub by: String,
+    pub receipt: Option<String>,
+    pub owner_statement: Option<String>,
+    pub quote: Option<Quote>,
+}
+
+/// Text that must appear word for word at `line` (1-based) of `file` (relative to the project).
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct Quote {
+    pub file: String,
+    pub line: usize,
+    pub text: String,
+}
+
+struct VerifiedQuote {
+    locator: String,
+    hash: String,
+    text: String,
+    unit_key: String,
+}
+
+impl Quote {
+    fn verify(&self, project_dir: &Path) -> Result<VerifiedQuote> {
+        let rel = Path::new(&self.file);
+        ensure!(
+            rel.is_relative() && !rel.components().any(|c| matches!(c, std::path::Component::ParentDir)),
+            "quote file {:?} must be a path inside the project",
+            self.file
+        );
+        ensure!(self.line >= 1, "quote line numbers start at 1");
+        let wanted = self.text.replace("\r\n", "\n");
+        let wanted = wanted.trim_end_matches('\n');
+        ensure!(!wanted.trim().is_empty(), "a quote needs text");
+        let path = project_dir.join(rel);
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?
+            .replace("\r\n", "\n");
+        let count = wanted.lines().count();
+        let found: Vec<&str> = content.lines().skip(self.line - 1).take(count).collect();
+        let found = found.join("\n");
+        if found != wanted {
+            let first = found.lines().next().unwrap_or("(past the end of the file)");
+            bail!(
+                "quote not found word for word at {}:{}; the file says: {first:?}",
+                self.file,
+                self.line
+            );
+        }
+        let locator = format!(
+            "{}#L{}-{}",
+            self.file.replace('\\', "/"),
+            self.line,
+            self.line + count - 1
+        );
+        Ok(VerifiedQuote {
+            hash: hex(&Sha256::digest(wanted.as_bytes())),
+            unit_key: hex(&Sha256::digest(locator.as_bytes()))[..32].to_owned(),
+            locator,
+            text: wanted.to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct FactRow {
+    pub id: String,
+    pub at: String,
+    pub kind: String,
+    pub text: String,
+    pub grade: String,
+    pub status: String,
+    pub source: Option<String>,
+    pub by: Option<String>,
+    pub machine: Option<String>,
+    pub receipt: Option<String>,
+    #[serde(default)]
+    pub quotes: Vec<String>,
+}
+
+impl FactRow {
+    pub fn render(&self) -> String {
+        let mut line = format!(
+            "{} [{}] {}{} {}",
+            seconds(&self.at),
+            self.kind,
+            self.grade,
+            if self.status == "live" {
+                String::new()
+            } else {
+                format!(" ({})", self.status.to_uppercase())
+            },
+            self.text
+        );
+        let source = self.source.as_deref().filter(|s| !s.is_empty()).unwrap_or("no source");
+        let _ = write!(
+            line,
+            " ({source}; by {} on {})",
+            self.by.as_deref().unwrap_or("?"),
+            self.machine.as_deref().unwrap_or("?")
+        );
+        for q in &self.quotes {
+            let _ = write!(line, " [quote {q}]");
+        }
+        if let Some(r) = self.receipt.as_deref().filter(|r| *r != "NONE") {
+            let _ = write!(line, " [{r}]");
+        }
+        line
+    }
+}
+
+/// `2026-10-25T04:19:34.853088800Z` -> `2026-10-25T04:19:34Z`.
+fn seconds(at: &str) -> String {
+    let at = at.trim_matches(|c| c == 'd' || c == '\'');
+    match (at.get(..19), at.len() > 19) {
+        (Some(head), true) => format!("{head}Z"),
+        _ => at.to_owned(),
+    }
+}
+
+/// An RFC 3339 timestamp (`2026-10-24T05:47:08Z`), checked by shape so it can be a literal.
+fn chrono_like(at: &str) -> Result<String> {
+    let ok = at.len() >= 20
+        && at
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'-' | b':' | b'T' | b'Z' | b'.' | b'+'))
+        && at.as_bytes()[4] == b'-'
+        && at.as_bytes()[10] == b'T';
+    ensure!(ok, "{at:?} is not an RFC 3339 timestamp");
+    Ok(at.to_owned())
+}
+
+fn grade(c: Confidence) -> &'static str {
+    match c {
+        Confidence::Confirmed => "CONFIRMED",
+        Confidence::Inferred => "INFERRED",
+        Confidence::Unknown => "UNKNOWN",
+    }
+}
+
+fn kind(k: Kind) -> &'static str {
+    match k {
+        Kind::Decision => "decision",
+        Kind::Gotcha => "gotcha",
+        Kind::Status => "status",
+        Kind::Fact => "fact",
+        Kind::Eliminated => "eliminated",
+    }
+}
+
+/// `receipt:<id>` with an id of letters and digits only, emitted as a record literal.
+fn parse_receipt(id: &str) -> Result<String> {
+    let key = id.strip_prefix("receipt:").unwrap_or(id);
+    ensure!(
+        !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric()),
+        "{id:?} is not a receipt id (receipt:<letters and digits>)"
+    );
+    Ok(format!("receipt:{key}"))
+}
+
+fn record_id(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) if s.contains(':') => Some(s.clone()),
+        Value::Array(a) => a.iter().find_map(record_id),
+        Value::Object(o) => o.get("id").and_then(record_id),
+        _ => None,
+    }
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+pub fn store_url(home: &Home) -> String {
+    home.config.store.url.clone().unwrap_or_else(|| DEFAULT_URL.to_owned())
+}
+
+fn secrets_dir(home: &Home) -> PathBuf {
+    home.path("secrets")
+}
+
+fn read_secret(home: &Home, name: &str) -> Result<String> {
+    let path = secrets_dir(home).join(format!("{name}.pass"));
+    let text = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "no store credentials at {} (run `groundworks store init`)",
+            path.display()
+        )
+    })?;
+    let text = text.trim().to_owned();
+    ensure!(text.len() >= 24, "{} is shorter than 24 characters", path.display());
+    Ok(text)
+}
+
+/// Create `root.pass` and `agent.pass` if missing. Never overwrites: a root password only takes
+/// effect the first time a data directory is created.
+pub fn create_secrets(home: &Home) -> Result<Vec<PathBuf>> {
+    let dir = secrets_dir(home);
+    std::fs::create_dir_all(&dir)?;
+    let mut created = Vec::new();
+    for name in ["root", "agent"] {
+        let path = dir.join(format!("{name}.pass"));
+        if !path.exists() {
+            std::fs::write(&path, random_password()?)?;
+            created.push(path);
+        }
+    }
+    Ok(created)
+}
+
+fn random_password() -> Result<String> {
+    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
+    Ok(bytes
+        .iter()
+        .map(|b| ALPHABET[usize::from(*b) % ALPHABET.len()] as char)
+        .collect())
+}
+
+/// Start the home's SurrealDB if nothing answers at `url`: loopback only, rocksdb under the home,
+/// no console window, root login from the environment (never the command line).
+pub fn ensure_running(home: &Home, url: &str, root_pass: &str) -> Result<()> {
+    if gw_store::healthy(url) {
+        return Ok(());
+    }
+    let bind = loopback_bind(url)?;
+    let binary = home
+        .config
+        .store
+        .surreal
+        .clone()
+        .or_else(gw_store::find_surreal)
+        .context("SurrealDB not found (set [store] surreal in groundworks.toml or GROUNDWORKS_SURREAL)")?;
+    let data = home
+        .root
+        .join(home.config.store.data.as_deref().unwrap_or(Path::new("db")));
+    std::fs::create_dir_all(&data)?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data.join("surreal.log"))?;
+    let mut cmd = Command::new(&binary);
+    cmd.args(["start", "--bind", &bind, "--log", "warn"])
+        .arg(format!("rocksdb:{}", data.join("store").display()))
+        .env("SURREAL_USER", "root")
+        .env("SURREAL_PASS", root_pass)
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    let mut child = cmd.spawn().with_context(|| format!("starting {}", binary.display()))?;
+    let deadline = Instant::now() + START_TIMEOUT;
+    while Instant::now() < deadline {
+        if gw_store::healthy(url) {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            // Another session may have won the race to start it.
+            if gw_store::healthy(url) {
+                return Ok(());
+            }
+            bail!(
+                "SurrealDB exited ({status}) before answering; see {}",
+                data.join("surreal.log").display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    bail!("SurrealDB did not answer at {url} within {}s", START_TIMEOUT.as_secs())
+}
+
+/// `host:port` from the store URL, refusing anything that is not loopback.
+fn loopback_bind(url: &str) -> Result<String> {
+    let rest = url
+        .strip_prefix("http://")
+        .context("the store URL must be http:// on loopback")?;
+    let hostport = rest.split('/').next().unwrap_or_default();
+    let host = hostport.rsplit_once(':').map_or(hostport, |(h, _)| h);
+    ensure!(
+        matches!(host, "127.0.0.1" | "localhost" | "[::1]"),
+        "the store must listen on loopback only, not {host:?}"
+    );
+    Ok(hostport.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugs_match_the_09_17_rule() {
+        assert_eq!(slug("RetroReceipts-server").unwrap(), "retroreceipts_server");
+        assert_eq!(slug("GP2040-CE").unwrap(), "gp2040_ce");
+        assert_eq!(slug("--a--b--").unwrap(), "a_b");
+        assert!(slug("---").is_err());
+    }
+
+    #[test]
+    fn the_store_listens_on_loopback_only() {
+        assert_eq!(loopback_bind("http://127.0.0.1:8004/sql").unwrap(), "127.0.0.1:8004");
+        assert!(loopback_bind("http://0.0.0.0:8004/sql").is_err());
+        assert!(loopback_bind("http://10.0.0.5:8004/sql").is_err());
+        assert!(loopback_bind("https://127.0.0.1:8004/sql").is_err());
+    }
+
+    #[test]
+    fn receipt_ids_cannot_inject() {
+        assert_eq!(parse_receipt("receipt:abc123").unwrap(), "receipt:abc123");
+        assert!(parse_receipt("receipt:a; DELETE fact").is_err());
+        assert!(parse_receipt("").is_err());
+    }
+
+    #[test]
+    fn quotes_must_match_word_for_word() {
+        let dir = std::env::temp_dir().join(format!("gw-quote-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "fn one() {}\r\nfn two() {}\r\nfn three() {}\r\n").unwrap();
+        let q = |line, text: &str| Quote {
+            file: "a.rs".into(),
+            line,
+            text: text.into(),
+        };
+        let ok = q(2, "fn two() {}\nfn three() {}").verify(&dir).unwrap();
+        assert_eq!(ok.locator, "a.rs#L2-3");
+        assert!(q(2, "fn two() { }").verify(&dir).is_err());
+        assert!(q(9, "fn two() {}").verify(&dir).is_err());
+        let outside = Quote {
+            file: "../x.rs".into(),
+            line: 1,
+            text: "x".into(),
+        };
+        assert!(outside.verify(&dir).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn passwords_are_long_and_differ() {
+        let (a, b) = (random_password().unwrap(), random_password().unwrap());
+        assert_eq!(a.len(), 32);
+        assert_ne!(a, b);
+    }
+}

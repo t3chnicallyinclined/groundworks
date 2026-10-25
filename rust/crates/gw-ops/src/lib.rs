@@ -11,3 +11,4 @@ pub mod registry;
 pub mod scaffold;
 pub mod scan;
 pub mod secrets;
+pub mod store;

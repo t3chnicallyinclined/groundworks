@@ -16,6 +16,7 @@
 //!
 //! Roles are `owner` (the human) and `agent`. Root is the migration and loader identity only.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gw_core::db::{Db, DbError};
@@ -32,7 +33,7 @@ pub const ACCESS: &str = "member";
 pub const ROLES: [&str; 2] = ["owner", "agent"];
 
 /// The schema files, compiled in.
-pub const SCHEMA: [(&str, &str); 4] = [
+pub const SCHEMA: &[(&str, &str)] = &[
     ("0001_global.surql", include_str!("../schema/0001_global.surql")),
     ("0002_workspace.surql", include_str!("../schema/0002_workspace.surql")),
     (
@@ -42,6 +43,10 @@ pub const SCHEMA: [(&str, &str); 4] = [
     (
         "0004_project_rules.surql",
         include_str!("../schema/0004_project_rules.surql"),
+    ),
+    (
+        "0005_project_journal.surql",
+        include_str!("../schema/0005_project_journal.surql"),
     ),
 ];
 
@@ -54,6 +59,9 @@ DEFINE FIELD IF NOT EXISTS major ON schema_version TYPE int;\
 DEFINE FIELD IF NOT EXISTS applied ON schema_version TYPE int;\
 DEFINE FIELD IF NOT EXISTS files ON schema_version TYPE array<string>;\
 DEFINE FIELD IF NOT EXISTS updated_at ON schema_version TYPE datetime;";
+
+#[cfg(feature = "testkit")]
+pub mod testkit;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -288,7 +296,7 @@ pub fn migrate(root: &Db, scope: Scope, files: &[(&str, &str)], check_server_ver
 /// Create the namespace and database if needed and migrate it to the compiled-in schema (root only).
 pub fn open_namespace(root: &Db, ns: &str) -> Result<Vec<i64>> {
     ensure(root, ns)?;
-    migrate(root, scope_of(ns)?, &SCHEMA, true)
+    migrate(root, scope_of(ns)?, SCHEMA, true)
 }
 
 /// Create or reset one member credential in root's namespace (root only).
@@ -319,6 +327,41 @@ pub fn provision(root: &Db, member: &str, role: &str, password: &str) -> Result<
     Ok(())
 }
 
+/// The SurrealDB binary: `GROUNDWORKS_SURREAL`, then `PATH`, then the Windows installer's location.
+pub fn find_surreal() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("GROUNDWORKS_SURREAL")
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+    {
+        return Some(path);
+    }
+    let exe = if cfg!(windows) { "surreal.exe" } else { "surreal" };
+    if let Some(found) = std::env::var_os("PATH")
+        .iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join(exe))
+        .find(|p| p.is_file())
+    {
+        return Some(found);
+    }
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+    let installed = PathBuf::from(home)
+        .join("AppData")
+        .join("Local")
+        .join("SurrealDB")
+        .join("surreal.exe");
+    installed.is_file().then_some(installed)
+}
+
+/// Whether a SurrealDB answers `/health` at the base of `url` (`.../sql` or the bare origin).
+pub fn healthy(url: &str) -> bool {
+    let base = url.strip_suffix("/sql").unwrap_or(url.trim_end_matches('/'));
+    ureq::get(&format!("{base}/health"))
+        .timeout(Duration::from_millis(800))
+        .call()
+        .is_ok()
+}
+
 /// A SurrealQL string literal.
 pub fn lit(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -343,7 +386,7 @@ mod tests {
     fn every_compiled_file_has_a_scope() {
         let total: usize = [Scope::Global, Scope::Workspace, Scope::Project]
             .iter()
-            .map(|s| migrations(*s, &SCHEMA).unwrap().len())
+            .map(|s| migrations(*s, SCHEMA).unwrap().len())
             .sum();
         assert_eq!(total, SCHEMA.len());
         assert!(migrations(Scope::Project, &[("0009_x.surql", "DEFINE TABLE x;")]).is_err());

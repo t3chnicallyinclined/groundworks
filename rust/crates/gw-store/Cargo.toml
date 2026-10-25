@@ -14,6 +14,11 @@ workspace = true
 gw-core = { path = "../gw-core" }
 serde_json = { workspace = true }
 thiserror = "1"
+ureq = { version = "2", default-features = false }
+
+[features]
+# Throwaway servers for tests in this and other crates.
+testkit = []
 
 [dev-dependencies]
-ureq = { version = "2", default-features = false }
+gw-store = { path = ".", features = ["testkit"] }

@@ -3,14 +3,16 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 
 use crate::home::{Home, validate_name};
-use crate::journal::{self, Confidence, Entry, Kind};
+use crate::journal::{self, Confidence, Kind};
 use crate::registry::{Project, Registry};
 use crate::secrets::SecretRef;
+use crate::store::{self, FactIn, Quote, ReceiptIn, Store};
 use crate::{exec, knowledge, scaffold};
 
 pub const MAX_TIMEOUT_SECS: u64 = 3600;
@@ -37,7 +39,7 @@ pub fn projects(home: &Home) -> Result<String> {
     Ok(out)
 }
 
-pub fn show(home: &Home, name: &str, journal_limit: usize) -> Result<String> {
+pub fn show(home: &Home, store: Option<&Store>, name: &str, journal_limit: usize) -> Result<String> {
     let registry = Registry::load(home)?;
     let project = registry.project(name)?;
     let path = project.path(&home.workspace);
@@ -62,13 +64,16 @@ pub fn show(home: &Home, name: &str, journal_limit: usize) -> Result<String> {
         let exists = path.join(doc).is_file();
         writeln!(out, "doc: {doc}{}", if exists { "" } else { " (MISSING)" })?;
     }
-    let entries = journal::read(home, name, None, journal_limit)?;
-    writeln!(out, "\n## Journal (newest {} of the project)", entries.len())?;
-    if entries.is_empty() {
-        out.push_str("(empty: record what you learn with journal_add)\n");
-    }
-    for entry in &entries {
-        writeln!(out, "- {}", entry.render())?;
+    out.push_str("\n## Journal\n");
+    match store.map(|s| s.facts(name, None, journal_limit)) {
+        None => out.push_str("(store unavailable: the journal could not be read)\n"),
+        Some(Err(e)) => writeln!(out, "(store unavailable: {e:#})")?,
+        Some(Ok(facts)) if facts.is_empty() => out.push_str("(empty: record what you learn with journal_add)\n"),
+        Some(Ok(facts)) => {
+            for fact in &facts {
+                writeln!(out, "- {}", fact.render())?;
+            }
+        }
     }
     Ok(out)
 }
@@ -111,28 +116,98 @@ pub fn register(home: &Home, name: &str, dir: Option<&str>, summary: &str, stack
     ))
 }
 
-pub fn note(
-    home: &Home,
-    project: &str,
-    kind: Kind,
-    text: &str,
-    source: &str,
-    confidence: Confidence,
-    by: &str,
-) -> Result<String> {
-    Registry::load(home)?.project(project)?;
-    let entry = Entry::new(project, kind, text, source, confidence, by)?;
-    journal::append(home, &entry)?;
-    Ok(format!("recorded: {}", entry.render()))
+pub struct Note<'a> {
+    pub project: &'a str,
+    pub kind: Kind,
+    pub text: &'a str,
+    pub source: &'a str,
+    pub confidence: Confidence,
+    pub by: &'a str,
+    pub receipt: Option<&'a str>,
+    pub owner_statement: Option<&'a str>,
+    pub quote: Option<Quote>,
 }
 
-pub fn journal(home: &Home, project: &str, kind: Option<Kind>, limit: usize) -> Result<String> {
+/// Record a fact in the project's store. The store refuses CONFIRMED without evidence.
+pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
+    let registry = Registry::load(home)?;
+    let project = registry.project(note.project)?;
+    let fact = FactIn {
+        kind: note.kind,
+        text: note.text.to_owned(),
+        confidence: note.confidence,
+        source: note.source.to_owned(),
+        by: note.by.to_owned(),
+        receipt: note.receipt.map(str::to_owned),
+        owner_statement: note.owner_statement.map(str::to_owned),
+        quote: note.quote,
+    };
+    let id = store.add_fact(&project.path(&home.workspace), &project.name, &fact)?;
+    let recorded = store
+        .facts(&project.name, None, 1)?
+        .pop()
+        .map_or_else(|| id.clone(), |f| f.render());
+    Ok(format!("recorded {id}: {recorded}"))
+}
+
+pub fn journal(home: &Home, store: &Store, project: &str, kind: Option<Kind>, limit: usize) -> Result<String> {
     Registry::load(home)?.project(project)?;
-    let entries = journal::read(home, project, kind, limit)?;
-    if entries.is_empty() {
+    let facts = store.facts(project, kind, limit)?;
+    if facts.is_empty() {
         return Ok(format!("{project} has no matching journal entries"));
     }
-    Ok(entries.iter().map(|e| format!("- {}\n", e.render())).collect())
+    Ok(facts.iter().map(|f| format!("- {}\n", f.render())).collect())
+}
+
+/// Move every old file journal into the store, once. An entry that was CONFIRMED with a source the
+/// store cannot verify is imported as INFERRED and says so; the file is renamed `.imported`.
+pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
+    let registry = Registry::load(home)?;
+    let mut out = String::new();
+    for project in registry.projects.values() {
+        let path = journal::legacy_path(&home.root, &project.name);
+        let entries = journal::read_legacy(&path)?;
+        if entries.is_empty() {
+            continue;
+        }
+        for entry in &entries {
+            let (kind, mut text) = entry.kind_and_text();
+            let owner = entry.source.trim_start().to_lowercase().starts_with("owner");
+            let confidence = match entry.confidence.as_str() {
+                "CONFIRMED" if owner => Confidence::Confirmed,
+                "CONFIRMED" => {
+                    text.push_str(" [was CONFIRMED in the old file journal; the store cannot verify that source]");
+                    Confidence::Inferred
+                }
+                "UNKNOWN" => Confidence::Unknown,
+                _ => Confidence::Inferred,
+            };
+            let fact = FactIn {
+                kind,
+                text,
+                confidence,
+                source: format!("{} (imported)", entry.source),
+                by: entry.by.clone(),
+                receipt: None,
+                owner_statement: owner.then(|| entry.source.clone()),
+                quote: None,
+            };
+            store.import_fact(&project.path(&home.workspace), &project.name, &fact, &entry.ts)?;
+        }
+        let done = path.with_extension("jsonl.imported");
+        std::fs::rename(&path, &done)?;
+        writeln!(
+            out,
+            "{}: {} entries imported; {} renamed",
+            project.name,
+            entries.len(),
+            done.display()
+        )?;
+    }
+    if out.is_empty() {
+        out.push_str("no file journals to import\n");
+    }
+    Ok(out)
 }
 
 pub fn stacks(home: &Home) -> Result<String> {
@@ -191,6 +266,7 @@ pub async fn env_show(home: &Home, project: &str, env_name: &str) -> Result<Stri
 
 pub async fn run(
     home: &Home,
+    store: Option<Arc<Store>>,
     project: &str,
     env_name: &str,
     command: &str,
@@ -210,12 +286,79 @@ pub async fn run(
         bail!("{target} is protected: pass confirm = \"{target}\" once the owner has said go");
     }
     let outcome = exec::run(home, project, &env, command, Duration::from_secs(timeout_secs)).await?;
-    Ok((outcome.render(), outcome.ok()))
+    let receipt = ReceiptIn {
+        command: command.to_owned(),
+        machine: outcome.machine.clone(),
+        location: outcome.location.clone(),
+        exit_code: outcome.code,
+        ok: outcome.ok(),
+        output_hash: output_hash(&outcome.stdout, &outcome.stderr),
+        commit: None,
+    };
+    let line = record_receipt(
+        store,
+        &project.name,
+        env.ssh.is_none().then(|| outcome.location.clone()),
+        receipt,
+    )
+    .await;
+    Ok((format!("{}\n{line}", outcome.render()), outcome.ok()))
+}
+
+fn output_hash(stdout: &str, stderr: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(stdout.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(stderr.as_bytes());
+    store::hex(&hasher.finalize())
+}
+
+/// Record a receipt and say so in one line, or say plainly that it was not recorded.
+async fn record_receipt(
+    store: Option<Arc<Store>>,
+    project: &str,
+    local_dir: Option<String>,
+    mut receipt: ReceiptIn,
+) -> String {
+    let Some(store) = store else {
+        return "receipt: NOT RECORDED (store unavailable)".to_owned();
+    };
+    let project = project.to_owned();
+    let result = store::blocking(move || {
+        receipt.commit = local_dir.as_deref().and_then(head_commit);
+        store.record_receipt(&project, &receipt)
+    })
+    .await;
+    match result {
+        Ok(id) => format!("receipt: {id} (cite it with journal_add receipt = \"{id}\")"),
+        Err(e) => format!("receipt: NOT RECORDED ({e:#})"),
+    }
+}
+
+/// `git rev-parse HEAD` in `dir`, if it is a repository.
+fn head_commit(dir: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["--no-optional-locks", "-C", dir, "rev-parse", "HEAD"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 /// The project's gate if it declares one, else its stack's; step by step. A gate with no
 /// steps is an error, not a pass.
-pub async fn gate(home: &Home, project: &str, env_name: &str, timeout_secs: u64) -> Result<(String, bool)> {
+pub async fn gate(
+    home: &Home,
+    store: Option<Arc<Store>>,
+    project: &str,
+    env_name: &str,
+    timeout_secs: u64,
+) -> Result<(String, bool)> {
     let registry = Registry::load(home)?;
     let project = registry.project(project)?;
     let (source, steps) = if project.gate.is_empty() {
@@ -240,6 +383,8 @@ pub async fn gate(home: &Home, project: &str, env_name: &str, timeout_secs: u64)
     }
     let total = steps.len();
     let mut out = format!("gate from {source}\n");
+    let mut green = true;
+    let mut last: Option<exec::Outcome> = None;
     for (i, step) in steps.iter().enumerate() {
         let outcome = exec::run(home, project, &env, step, Duration::from_secs(timeout_secs)).await?;
         let state = if outcome.ok() { "pass" } else { "FAIL" };
@@ -251,17 +396,38 @@ pub async fn gate(home: &Home, project: &str, env_name: &str, timeout_secs: u64)
         )?;
         if !outcome.ok() {
             writeln!(out, "\nGATE RED at step {}/{total}\n\n{}", i + 1, outcome.render())?;
-            return Ok((out, false));
+            green = false;
+            last = Some(outcome);
+            break;
         }
-        if i + 1 == total {
-            writeln!(
-                out,
-                "\nGATE GREEN {total}/{total} on {} in {}",
-                outcome.machine, outcome.location
-            )?;
-        }
+        last = Some(outcome);
     }
-    Ok((out, true))
+    let last = last.expect("a gate with steps ran at least one");
+    if green {
+        writeln!(
+            out,
+            "\nGATE GREEN {total}/{total} on {} in {}",
+            last.machine, last.location
+        )?;
+    }
+    let receipt = ReceiptIn {
+        command: format!("gate: {}", steps.join(" && ")),
+        machine: last.machine.clone(),
+        location: last.location.clone(),
+        exit_code: last.code,
+        ok: green,
+        output_hash: output_hash(&out, ""),
+        commit: None,
+    };
+    let line = record_receipt(
+        store,
+        &project.name,
+        env.ssh.is_none().then(|| last.location.clone()),
+        receipt,
+    )
+    .await;
+    writeln!(out, "{line}")?;
+    Ok((out, green))
 }
 
 pub fn bootstrap(home: &Home, stack: &str, name: &str, dir: Option<&Path>, register: bool) -> Result<String> {
@@ -332,7 +498,7 @@ pub fn profile(home: &Home) -> Result<String> {
 
 /// Checks everything that can be checked from here. Missing project
 /// directories are warnings (the registry spans machines); anything else is a failure.
-pub async fn doctor(home: &Home) -> Result<(String, bool)> {
+pub async fn doctor(home: &Home, store: Result<Arc<Store>, String>) -> Result<(String, bool)> {
     let mut out = format!(
         "home: {}\nworkspace: {}\n",
         home.root.display(),
@@ -400,6 +566,19 @@ pub async fn doctor(home: &Home) -> Result<(String, bool)> {
         Err(e) => {
             fails += 1;
             writeln!(out, "FAIL knowledge: {e:#}")?;
+        }
+    }
+    match store {
+        Ok(store) => match store::blocking(move || store.status()).await {
+            Ok(status) => writeln!(out, "ok   {status}")?,
+            Err(e) => {
+                fails += 1;
+                writeln!(out, "FAIL store: {e:#}")?;
+            }
+        },
+        Err(e) => {
+            fails += 1;
+            writeln!(out, "FAIL store: {e}")?;
         }
     }
     writeln!(

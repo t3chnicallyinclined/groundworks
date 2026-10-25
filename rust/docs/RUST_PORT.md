@@ -433,3 +433,15 @@ stops itself; with no SurrealDB binary the tests fail as NOT EXECUTED. Measured 
 in a top-level field ASSERT `$parent` is NONE and `$this` is the record; inside a subquery `$this` is
 rebound to the subquery's row (use a graph traversal such as `count($this.id->evidence)`); and a line like
 `THIS IS NOT SURREALQL` is a valid expression (it returns `false`), not a syntax error.
+
+## gw-ops store (2026-10-25)
+
+`crates/gw-ops/src/store.rs` connects the MCP server to the gw-store data model. One SurrealDB server
+for every session, started on demand (loopback only, rocksdb under the home, no console window, root
+login passed through the environment, never the command line). Agents work under the `agent` member;
+root is used only to create and migrate a namespace the first time, and to import history with its
+original timestamps (an agent can never backdate a fact). Every store call is blocking and runs through
+`store::blocking` (`spawn_blocking`), off the async runtime. One signed-in client per namespace is cached.
+`cargo mcp-test` covers it against throwaway servers from the `gw-store` `testkit` feature: a receipt
+confirms, nothing else does; a quote confirms only word for word; changing the quoted file and quoting it
+again marks the old fact stale; scope levels and walls need the owner password; imports keep their time.

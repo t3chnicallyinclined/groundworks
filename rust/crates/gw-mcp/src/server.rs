@@ -12,6 +12,7 @@ use serde::Deserialize;
 use gw_ops::home::Home;
 use gw_ops::journal::{Confidence, Kind};
 use gw_ops::ops;
+use gw_ops::store::{self, Quote, Store};
 
 const INSTRUCTIONS: &str = "\
 Groundworks: the registry, journal, knowledge and tools for every project the owner runs.
@@ -22,7 +23,9 @@ the repo with run. Never answer project facts from memory.
 2. Evidence on every claim: a file:line, a command and its output, or a journal entry; tag it \
 CONFIRMED, INFERRED or UNKNOWN.
 3. Secrets are references, never values. Use run to use them. Never print, echo, write down or ask for one.
-4. Write it down. A decision, gotcha, status change or todo goes into journal_add the moment you learn it.
+4. Write it down. A decision, gotcha, status change or ruled-out approach goes into journal_add the moment you
+learn it; work items go in GitHub issues. CONFIRMED needs a receipt (from run or gate), a quote found word for
+word, or an owner statement: the store refuses it otherwise.
 5. Gates must be able to fail. Prove changes with gate; 'it compiles' is not green.
 6. Protected envs (prod) need the owner's explicit go for each action; confirm repeats it, it does not replace it.
 Read knowledge_get('principles') once per session.";
@@ -59,13 +62,19 @@ pub struct RegisterArgs {
 pub struct NoteArgs {
     pub project: String,
     pub kind: Kind,
-    /// The fact, decision, gotcha, status or todo, in one or two sentences.
+    /// The fact, decision, gotcha, status or ruled-out approach, in one or two sentences.
     pub text: String,
-    /// file:line, the command and what it printed, or a URL. Required for CONFIRMED.
+    /// Where it comes from: file:line, the command and what it printed, or a URL.
     pub source: String,
     pub confidence: Confidence,
     /// Which team member is writing (e.g. gw-sre).
     pub by: String,
+    /// A receipt id from run or gate (`receipt:...`) that proves this.
+    pub receipt: Option<String>,
+    /// Text that must appear word for word in a project file; checked before recording.
+    pub quote: Option<Quote>,
+    /// What the owner said, with the date, when the owner is the evidence.
+    pub owner_statement: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -140,7 +149,22 @@ pub struct QueryArg {
 #[derive(Clone)]
 pub struct Groundworks {
     home: Arc<Home>,
+    /// Opened on first use and kept; a failed open is retried on the next call.
+    store: Arc<tokio::sync::Mutex<Option<Arc<Store>>>>,
     tool_router: ToolRouter<Self>,
+}
+
+impl Groundworks {
+    async fn store(&self) -> Result<Arc<Store>, String> {
+        let mut slot = self.store.lock().await;
+        if let Some(store) = slot.as_ref() {
+            return Ok(Arc::clone(store));
+        }
+        let home = Arc::clone(&self.home);
+        let store = Arc::new(store::blocking(move || Store::open(&home)).await.map_err(fail)?);
+        *slot = Some(Arc::clone(&store));
+        Ok(store)
+    }
 }
 
 #[tool_router]
@@ -148,6 +172,7 @@ impl Groundworks {
     pub fn new(home: Home) -> Self {
         Self {
             home: Arc::new(home),
+            store: Arc::default(),
             tool_router: Self::tool_router(),
         }
     }
@@ -162,7 +187,10 @@ impl Groundworks {
     )]
     async fn project_show(&self, args: Parameters<ShowArgs>) -> Result<String, String> {
         let a = args.0;
-        ops::show(&self.home, &a.project, a.journal_limit.unwrap_or(20)).map_err(fail)
+        let (home, store) = (Arc::clone(&self.home), self.store().await.ok());
+        store::blocking(move || ops::show(&home, store.as_deref(), &a.project, a.journal_limit.unwrap_or(20)))
+            .await
+            .map_err(fail)
     }
 
     #[tool(description = "Register a project that already exists in the workspace. Refuses a name that is taken.")]
@@ -172,17 +200,39 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Append a decision, gotcha, status, todo or fact to a project's journal. CONFIRMED needs a source."
+        description = "Record a decision, gotcha, status, fact or ruled-out approach in a project's journal. CONFIRMED needs a receipt, a quote found word for word, or an owner statement; the store refuses it otherwise."
     )]
     async fn journal_add(&self, args: Parameters<NoteArgs>) -> Result<String, String> {
         let a = args.0;
-        ops::note(&self.home, &a.project, a.kind, &a.text, &a.source, a.confidence, &a.by).map_err(fail)
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            ops::note(
+                &home,
+                &store,
+                ops::Note {
+                    project: &a.project,
+                    kind: a.kind,
+                    text: &a.text,
+                    source: &a.source,
+                    confidence: a.confidence,
+                    by: &a.by,
+                    receipt: a.receipt.as_deref(),
+                    owner_statement: a.owner_statement.as_deref(),
+                    quote: a.quote,
+                },
+            )
+        })
+        .await
+        .map_err(fail)
     }
 
     #[tool(description = "Read a project's journal, optionally one kind only.")]
     async fn journal_read(&self, args: Parameters<JournalArgs>) -> Result<String, String> {
         let a = args.0;
-        ops::journal(&self.home, &a.project, a.kind, a.limit.unwrap_or(50)).map_err(fail)
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || ops::journal(&home, &store, &a.project, a.kind, a.limit.unwrap_or(50)))
+            .await
+            .map_err(fail)
     }
 
     #[tool(description = "List the team's standard stacks (crates, packages, gate, template).")]
@@ -204,13 +254,14 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Run a shell command in a project's env, locally (vars and secrets injected) or over ssh (vars only). Output is redacted and names the machine. A non-zero exit is returned as an error."
+        description = "Run a shell command in a project's env, locally (vars and secrets injected) or over ssh (vars only). Output is redacted, names the machine, and leaves a receipt in the store. A non-zero exit is returned as an error."
     )]
     async fn run(&self, args: Parameters<RunArgs>) -> Result<String, String> {
         let a = args.0;
         let timeout = a.timeout_secs.unwrap_or(300);
         ops::run(
             &self.home,
+            self.store().await.ok(),
             &a.project,
             &a.env,
             &a.command,
@@ -223,15 +274,21 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Run the project's stack gate (format, lint, test...) in order, stopping at the first failure. RED is returned as an error."
+        description = "Run the project's gate (format, lint, test...) in order, stopping at the first failure, and leave one receipt in the store. RED is returned as an error."
     )]
     async fn gate(&self, args: Parameters<GateArgs>) -> Result<String, String> {
         let a = args.0;
         let env = a.env.as_deref().unwrap_or("local");
-        ops::gate(&self.home, &a.project, env, a.timeout_secs.unwrap_or(900))
-            .await
-            .map_err(fail)
-            .and_then(passed)
+        ops::gate(
+            &self.home,
+            self.store().await.ok(),
+            &a.project,
+            env,
+            a.timeout_secs.unwrap_or(900),
+        )
+        .await
+        .map_err(fail)
+        .and_then(passed)
     }
 
     #[tool(
@@ -276,15 +333,17 @@ impl Groundworks {
     async fn estate_scan(&self, args: Parameters<ScanArgs>) -> Result<String, String> {
         let home = self.home.clone();
         let root = args.0.root.map(PathBuf::from);
-        tokio::task::spawn_blocking(move || ops::estate_scan(&home, root.as_deref(), None))
+        store::blocking(move || ops::estate_scan(&home, root.as_deref(), None))
             .await
-            .map_err(|e| format!("scan task failed: {e}"))?
             .map_err(fail)
     }
 
-    #[tool(description = "Check the registry, templates, secret references and profile from this machine.")]
+    #[tool(description = "Check the registry, templates, secret references, profile and store from this machine.")]
     async fn doctor(&self) -> Result<String, String> {
-        ops::doctor(&self.home).await.map_err(fail).and_then(passed)
+        ops::doctor(&self.home, self.store().await)
+            .await
+            .map_err(fail)
+            .and_then(passed)
     }
 }
 
