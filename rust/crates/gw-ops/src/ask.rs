@@ -86,6 +86,68 @@ fn span_text(unit_text: &str, locator: &str, a: usize, b: usize) -> Option<Strin
     (a >= start && b >= a && b <= end).then(|| lines[a - start..=b - start].join("\n"))
 }
 
+/// A quote's words must appear, in order, at this share of their count inside a span of the candidate for
+/// the quote to count as that span.
+pub const ALIGN_MIN: f64 = 0.8;
+
+/// Where a typed quote sits in a unit: the smallest run of lines (at most 6) holding, in order, at least
+/// ALIGN_MIN of the quote's words. Punctuation and case do not count; word order does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Aligned {
+    pub first: usize,
+    pub last: usize,
+    pub score: f64,
+}
+
+fn tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// Length of the longest common subsequence of two token lists.
+fn lcs(a: &[String], b: &[String]) -> usize {
+    let mut prev = vec![0usize; b.len() + 1];
+    let mut cur = vec![0usize; b.len() + 1];
+    for x in a {
+        for (j, y) in b.iter().enumerate() {
+            cur[j + 1] = if x == y { prev[j] + 1 } else { prev[j + 1].max(cur[j]) };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+pub fn align(unit_text: &str, wanted: &str) -> Option<Aligned> {
+    let want = tokens(wanted);
+    if want.len() < QUOTE_MIN_WORDS {
+        return None;
+    }
+    let lines: Vec<Vec<String>> = unit_text.lines().map(tokens).collect();
+    let mut best: Option<Aligned> = None;
+    for width in 1..=6usize {
+        for first in 0..lines.len() {
+            let last = first + width - 1;
+            if last >= lines.len() {
+                break;
+            }
+            let window: Vec<String> = lines[first..=last].iter().flatten().cloned().collect();
+            if window.len() > want.len() * 6 + 40 {
+                continue;
+            }
+            let score = lcs(&want, &window) as f64 / want.len() as f64;
+            if score >= ALIGN_MIN && best.is_none_or(|b| score > b.score) {
+                best = Some(Aligned { first, last, score });
+            }
+        }
+        if best.is_some() {
+            break;
+        }
+    }
+    best
+}
+
 /// The line of `unit_text` sharing the most words with `wanted` (normalized), so a refused quote can be
 /// fixed from the refusal instead of a new ask.
 fn nearest_line(unit_text: &str, wanted: &str) -> Option<String> {
@@ -126,6 +188,9 @@ pub struct Report {
     pub quotes: usize,
     pub quotes_checked: usize,
     pub quotes_found: usize,
+    /// Typed quotes that were not word for word but aligned to a span of their candidate (>= ALIGN_MIN of
+    /// their words, in order); the span's own text stands as the quote.
+    pub aligned: Vec<String>,
     pub errors: Vec<String>,
 }
 
@@ -156,6 +221,7 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
         quotes: answer.quotes.len(),
         quotes_checked: 0,
         quotes_found: 0,
+        aligned: Vec::new(),
         errors: Vec::new(),
     };
     if !candidates.is_empty() && read.is_empty() {
@@ -224,9 +290,21 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
             Some((_, unit_text, present)) => {
                 if normalize(unit_text).contains(&text) {
                     report.quotes_found += 1;
+                } else if let Some(a) = align(unit_text, &text) {
+                    // Models find the passage, not the exact span (measured: 40% of typed quotes failed
+                    // word for word). The span's own text stands as the quote.
+                    report.quotes_found += 1;
+                    let start = store::first_line(&c.locator).unwrap_or(1);
+                    report.aligned.push(format!(
+                        "quote {k} aligned to candidate {} lines {}-{} ({:.0}% of its words, in order)",
+                        q.n,
+                        start + a.first,
+                        start + a.last,
+                        a.score * 100.0
+                    ));
                 } else {
                     errors.push(format!(
-                        "quote {k} not found word for word in candidate {} ({}){}",
+                        "quote {k} not found in candidate {} ({}){}",
                         q.n,
                         c.locator,
                         nearest_line(unit_text, &text)
@@ -480,6 +558,9 @@ pub fn answer(
     });
     store.finish_packet(packet_id, report.verdict, &answer_json, &serde_json::to_value(&report)?)?;
     let mut out = format!("{packet_id}: {}\n", report.header());
+    for a in &report.aligned {
+        writeln!(out, "  - {a}")?;
+    }
     for e in &report.errors {
         writeln!(out, "  - {e}")?;
     }
@@ -544,6 +625,7 @@ fn record(
             }
         }
     }
+    let best = best.or_else(|| align(text, &want).map(|a| (a.first, a.last)));
     let (i, j) = best.context("the quote is not inside whole lines of its candidate")?;
     let project = Registry::load(home)?.project(&c.project)?.clone();
     let mut fact_text: String = answer.answer.trim().chars().take(1500).collect();
@@ -646,7 +728,9 @@ mod tests {
             &[1],
             &ans(vec![(1, "parser rejects 3|empty input", "support")]),
         );
-        assert_eq!(r.verdict, "FAIL");
+        // A stray number inside the text is tolerated by alignment (4 of 5 words, in order), and said so.
+        assert_eq!(r.verdict, "PASS", "{:?}", r.errors);
+        assert_eq!(r.aligned.len(), 1);
     }
 
     #[test]
@@ -672,7 +756,7 @@ mod tests {
         assert!(errs(&[1, 2, 2], ans(vec![])).contains("candidate 2 twice"));
         assert!(errs(&[1, 2, 9], ans(vec![])).contains("candidate 9, which is not in this packet"));
         assert!(
-            errs(&[1, 2], ans(vec![(1, "the parser accepts input", "support")])).contains("not found word for word")
+            errs(&[1, 2], ans(vec![(1, "the parser accepts input", "support")])).contains("not found in candidate")
         );
         assert!(errs(&[1, 2], ans(vec![(1, "rejects empty", "support")])).contains("fewer than 3 words"));
         assert!(errs(&[1, 2], ans(vec![(7, "parser rejects empty", "support")])).contains("outside this packet"));
@@ -741,6 +825,38 @@ mod tests {
         assert!(r.errors.join(" ").contains("not inside candidate"), "{:?}", r.errors);
         assert_eq!(span_text("a\nb\nc", "f.md#L10-12", 11, 12).as_deref(), Some("b\nc"));
         assert_eq!(span_text("a\nb\nc", "f.md#L10-12", 9, 10), None);
+    }
+
+    #[test]
+    fn a_near_miss_quote_is_aligned_to_its_span_and_a_paraphrase_is_not() {
+        let c = [cand(1, "b")];
+        // Punctuation, case and one dropped word: aligned.
+        let r = check(
+            &c,
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "rollback resimulates CONFIRMED frames!", "support")]),
+        );
+        assert_eq!(r.verdict, "PASS", "{:?}", r.errors);
+        assert_eq!(r.quotes_found, 1);
+        assert!(
+            r.aligned[0].contains("aligned to candidate 1 lines 1-1"),
+            "{:?}",
+            r.aligned
+        );
+        // A paraphrase sharing only some words in a different order: refused.
+        let r = check(
+            &c,
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "frames that were confirmed get resimulated by it", "support")]),
+        );
+        assert_eq!(r.verdict, "FAIL", "{:?}", r.aligned);
+        let a = align("one two three\nfour five six seven\neight", "four FIVE six, seven").unwrap();
+        assert_eq!((a.first, a.last), (1, 1));
+        assert!(align("one two three", "nine ten eleven").is_none());
     }
 
     #[test]

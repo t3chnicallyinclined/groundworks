@@ -523,7 +523,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     )?;
     c.check(
         "a made-up quote fails the check and the refusal names the nearest line",
-        err && text.contains("not found word for word")
+        err && text.contains("not found in candidate")
             && text.contains("nearest line reads: \"Rollback netcode resimulates confirmed frames.\""),
         &text,
     );

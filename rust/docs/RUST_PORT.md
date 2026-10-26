@@ -546,3 +546,10 @@ text; the Python check only accepted typed text. Reason: measured 40% of typed q
 (last commit touching its file, or mtime for an untracked doc), shown on every candidate; the agent text asks
 for an explicit "which is current and why" step when candidates disagree (Re3, ACL 2026), and says a date
 alone is not the reason.
+
+### aligned quotes (2026-10-26)
+A typed quote that is not word for word is aligned to the smallest span (<= 6 lines) of its candidate holding
+at least 80% of its words in order (LCS over alphanumeric tokens); the span's own text stands as the quote, and
+the report says so. Reason: in r4/r4h/v2 the agents typed quotes on 117 of 118 and 77 of 78 answer calls
+despite the tool asking for line ranges, and 14-23% of those failed word for word (FullCite 2026: models find
+the passage, not the span). A paraphrase below the bar is still refused, with the nearest line named.
