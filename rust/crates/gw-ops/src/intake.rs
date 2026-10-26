@@ -335,6 +335,21 @@ fn last_changed(project_dir: &Path) -> BTreeMap<String, String> {
     out
 }
 
+/// `modified:`, `date:` or `updated:` from a file's YAML frontmatter, when the value starts like a date.
+fn frontmatter_date(text: &str) -> Option<String> {
+    let front = text.strip_prefix("---")?.split_once("
+---")?.0;
+    for key in ["modified:", "date:", "updated:"] {
+        if let Some(v) = front.lines().find_map(|l| l.trim().strip_prefix(key)) {
+            let v = v.trim().trim_matches(['"', ''']);
+            if v.len() >= 10 && v.as_bytes()[4] == b'-' && v.as_bytes()[7] == b'-' {
+                return Some(v.to_owned());
+            }
+        }
+    }
+    None
+}
+
 /// A file's modification time as ISO 8601 (seconds), for files git does not track.
 fn mtime_iso(meta: &std::fs::Metadata) -> Option<String> {
     let secs = meta
@@ -427,11 +442,15 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
         let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
         let lines: Vec<&str> = text.lines().collect();
         let experts_here = experts_for(&c.areas, path);
-        let changed_at = if is_tracked {
-            changed.get(path).cloned()
-        } else {
-            mtime_iso(&meta)
-        };
+        // A note that dates itself (frontmatter `modified:` or `date:`) knows better than git: a folder of
+        // notes committed in one snapshot would otherwise all carry the snapshot's date.
+        let changed_at = frontmatter_date(&text).or_else(|| {
+            if is_tracked {
+                changed.get(path).cloned()
+            } else {
+                mtime_iso(&meta)
+            }
+        });
         c.paths.push(path.clone());
         c.files_read += 1;
         c.untracked_read += usize::from(!is_tracked);
