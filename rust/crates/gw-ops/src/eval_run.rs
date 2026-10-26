@@ -7,6 +7,8 @@
 //! - `plain`: Read, Grep, Glob, read-only git, over the projects folder.
 //! - `groundworks`: the same, plus the Groundworks MCP server's read tools (ask, answer, search, lens,
 //!   journal, knowledge) and its output style as the appended system prompt.
+//! - `plain-memory`: plain, plus the owner's memory index (MEMORY.md) appended to the system prompt and
+//!   the memory folder readable: the owner's everyday setup, without Groundworks.
 //! - `agent`: the same tools, with the plugin's `groundworks` agent as the session's main agent
 //!   (`--agent`), so its rules are the system prompt rather than an addition to it.
 //!
@@ -33,7 +35,7 @@ use crate::eval::{Question, load};
 use crate::home::Home;
 use crate::store::sha256_hex;
 
-pub const ARMS: [&str; 3] = ["plain", "groundworks", "agent"];
+pub const ARMS: [&str; 4] = ["plain", "plain-memory", "groundworks", "agent"];
 const AGENT: &str = include_str!("../../../../plugin/agents/groundworks.md");
 const STYLE: &str = include_str!("../../../../plugin/output-styles/groundworks.md");
 const BASE_TOOLS: &str = "Read,Grep,Glob,Bash,ToolSearch";
@@ -245,7 +247,7 @@ fn tokens(usage: &Value) -> (u64, u64) {
     )
 }
 
-fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path) -> Result<Vec<String>> {
+fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path, memory: Option<&Path>) -> Result<Vec<String>> {
     let mut args: Vec<String> = [
         "--output-format",
         "stream-json",
@@ -278,9 +280,22 @@ fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path) -> Resul
         .collect();
     allowed.extend(GIT_READS.iter().map(|s| s.to_string()));
     match arm {
-        "plain" => {
+        "plain" | "plain-memory" => {
             args.push("--mcp-config".into());
             args.push(r#"{"mcpServers":{}}"#.into());
+            if arm == "plain-memory" {
+                let dir = memory.context("the plain-memory arm needs a registered `memory` project")?;
+                let index = std::fs::read_to_string(dir.join("MEMORY.md")).context("reading MEMORY.md")?;
+                args.push("--add-dir".into());
+                args.push(dir.display().to_string());
+                args.push("--append-system-prompt".into());
+                args.push(format!(
+                    "Your notes from earlier sessions (the index; each entry names a file in {}):
+
+{index}",
+                    dir.display()
+                ));
+            }
         }
         "groundworks" | "agent" => {
             let config = run.join("mcp-groundworks.json");
@@ -438,6 +453,10 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
     let results = plan.out.join("results.jsonl");
     let finished = done(&results)?;
     let projects = home.workspace.clone();
+    let memory = crate::registry::Registry::load(home)?
+        .project("memory")
+        .ok()
+        .map(|p| p.path(&home.workspace));
     let mut log = String::new();
     for q in questions
         .iter()
@@ -452,7 +471,7 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
             if finished.contains(&(q.id.clone(), arm.clone())) {
                 continue;
             }
-            let row = one(q, arm, plan, &projects, &cwd)?;
+            let row = one(q, arm, plan, &projects, &cwd, memory.as_deref())?;
             writeln!(
                 log,
                 "{} {:<11} {:<9} cw={} cites={} {:>7} tok ${:.2} {} turns {:?}",
@@ -474,8 +493,8 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
     Ok(log)
 }
 
-fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path) -> Result<Row> {
-    let args = answer_args(arm, plan, projects, plan.out)?;
+fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path, memory: Option<&Path>) -> Result<Row> {
+    let args = answer_args(arm, plan, projects, plan.out, memory)?;
     let mut text = prompt(q, projects);
     if plan.record {
         text.push_str(
