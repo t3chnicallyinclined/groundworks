@@ -553,3 +553,14 @@ at least 80% of its words in order (LCS over alphanumeric tokens); the span's ow
 the report says so. Reason: in r4/r4h/v2 the agents typed quotes on 117 of 118 and 77 of 78 answer calls
 despite the tool asking for line ranges, and 14-23% of those failed word for word (FullCite 2026: models find
 the passage, not the span). A paraphrase below the bar is still refused, with the nearest line named.
+
+### the check after eval v2 r1-r7 (2026-10-26)
+Measured over seven runs of 67 owner-approved questions: the agent's answers reached the set's ceiling
+(42-44/47 reworded, 17-19/20 memory-only, no answer wrong by r6) and every remaining refusal was reader input.
+The check now: aligns a near-miss typed quote to its span (>= 80% of words in order); accepts a quote under
+three words only word for word; ignores a quote object with neither lines nor text (noted); cuts a line range
+that overruns its candidate to the candidate (noted); takes lines on a commit unit as the unit's own; quotes a
+recorded-fact candidate by the fact's text as well as its evidence; repeats the verdict when a passed packet is
+answered again. A recorded fact's text is kept in the packet (migration 0013). Every project an ask reads keeps
+three places in the packet (a small notes project is otherwise crowded out). None of this is in the Python
+check; each item is a measured deviation.
