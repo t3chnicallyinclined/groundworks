@@ -431,20 +431,22 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
             Err(e) => found.skipped.push(format!("{name} ({e:#})")),
         }
     }
-    found
-        .hits
-        .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-    found.hits = with_slots(std::mem::take(&mut found.hits), q.limit);
+    // Facts first (they take the first places of the packet), then the hits that fill the rest, each
+    // project read keeping a few places. A fact's evidence is shown once, as the fact.
     found
         .facts
         .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
     let mut seen = std::collections::BTreeSet::new();
     found.facts.retain(|h| seen.insert((h.project.clone(), h.key.clone())));
     found.facts.truncate(FACTS_K);
-    // A fact's evidence is shown once, as the fact; the same unit is not repeated among the hits.
     found
         .hits
         .retain(|h| !seen.contains(&(h.project.clone(), h.key.clone())));
+    found
+        .hits
+        .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    let places = q.limit.saturating_sub(found.facts.len()).max(1);
+    found.hits = with_slots(std::mem::take(&mut found.hits), places);
     Ok(found)
 }
 
