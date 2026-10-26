@@ -431,19 +431,32 @@ impl Store {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         let existing = self.retrying(|| {
             Ok(db.query(
-                "SELECT VALUE [record::id(id), hash] FROM unit WHERE kind != 'quote';",
+                "SELECT VALUE [record::id(id), hash, changed_at] FROM unit WHERE kind != 'quote';",
                 &serde_json::Map::new(),
                 Some(1),
             )?)
         })?;
-        let known: HashMap<String, String> = existing[0]
+        // A unit is rewritten when its text or its file's last-change date differs from what is stored.
+        let known: HashMap<String, (String, Option<String>)> = existing[0]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|pair| Some((pair[0].as_str()?.to_owned(), pair[1].as_str()?.to_owned())))
+            .filter_map(|row| {
+                Some((
+                    row[0].as_str()?.to_owned(),
+                    (row[1].as_str()?.to_owned(), row[2].as_str().map(str::to_owned)),
+                ))
+            })
             .collect();
-        let changed: Vec<&crate::intake::Unit> =
-            c.units.iter().filter(|u| known.get(&u.key) != Some(&u.hash)).collect();
+        let changed: Vec<&crate::intake::Unit> = c
+            .units
+            .iter()
+            .filter(|u| {
+                known
+                    .get(&u.key)
+                    .is_none_or(|(h, d)| *h != u.hash || *d != u.changed_at)
+            })
+            .collect();
         for batch in changed.chunks(200) {
             let rows: Vec<Value> = batch
                 .iter()
