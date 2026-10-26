@@ -87,3 +87,8 @@ they restart.
 
 The server calls no model and holds no API key. Secrets are references (`env:`, `file:`,
 `bw:ITEM#FIELD`), resolved only to inject into a command and redacted from its output.
+
+## Related projects
+
+A project's registry file may list `related = ["tickets"]`: `ask` and `search` on it then read those projects
+too (private ones included, because you named them), and the result says which were searched.

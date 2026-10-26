@@ -529,3 +529,12 @@ expert definition is a lens; its checks are the bold lead words under `## What y
 or supports another (`attacks`, `stance`), and the store refuses an attack on a fact that does not exist.
 Not ported: datastore views over labels and the framework crosswalk, because the Rust store has no labels
 yet. Migration 0010; four rules each proven able to go red in `tests/mutations.rs`.
+
+### ask, after eval ask-v1 (2026-10-26)
+Measured on 47 owner-approved questions (r2): 40% of `answer` calls failed the word-for-word quote check and,
+because a checked packet was final, each failure cost a new `ask` (20 full candidates). Deviations from the
+Python engine, stated: a packet that FAILED or was NOT_EXECUTED may be answered again (PASS stays final); a
+refused quote names the candidate line sharing the most words with it; `ask`/`search` on a project also read
+the projects its registry entry lists as `related` (the owner's explicit choice, so a private notes project
+can be read with the project it documents). Live recorded facts rank above the files, and candidates carry
+file line numbers (a quote copied with them still matches).

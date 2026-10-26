@@ -72,6 +72,21 @@ pub struct AnswerIn {
     pub record: bool,
 }
 
+/// The line of `unit_text` sharing the most words with `wanted` (normalized), so a refused quote can be
+/// fixed from the refusal instead of a new ask.
+fn nearest_line(unit_text: &str, wanted: &str) -> Option<String> {
+    let want: std::collections::BTreeSet<String> = wanted.split(' ').map(str::to_lowercase).collect();
+    unit_text
+        .lines()
+        .map(|l| {
+            let have: std::collections::BTreeSet<String> = normalize(l).split(' ').map(str::to_lowercase).collect();
+            (want.intersection(&have).count(), l)
+        })
+        .filter(|(n, _)| *n > 0)
+        .max_by_key(|(n, _)| *n)
+        .map(|(_, l)| normalize(l))
+}
+
 /// A quote as a reader copies it from a numbered candidate: line numbers (`120| `) are not the text.
 fn strip_numbers(quote: &str) -> String {
     static NUM: std::sync::LazyLock<regex::Regex> =
@@ -185,8 +200,11 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
                     report.quotes_found += 1;
                 } else {
                     errors.push(format!(
-                        "quote {k} not found word for word in candidate {} ({})",
-                        q.n, c.locator
+                        "quote {k} not found word for word in candidate {} ({}){}",
+                        q.n,
+                        c.locator,
+                        nearest_line(unit_text, &text)
+                            .map_or(String::new(), |l| format!("; its nearest line reads: {l:?}"))
                     ));
                 }
                 if use_ == "support" && !present {
@@ -210,7 +228,8 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
 #[derive(Debug, Clone, Copy)]
 pub struct Query<'a> {
     pub text: &'a str,
-    /// One project (private ones too, never an isolated one); None = every shared project.
+    /// One project and the projects its registry entry names as related (private ones too, never an
+    /// isolated one); None = every shared project.
     pub project: Option<&'a str>,
     pub expert: Option<&'a str>,
     pub kinds: &'a [String],
@@ -233,7 +252,17 @@ pub struct Found {
 pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
     let registry = Registry::load(home)?;
     let names: Vec<String> = match q.project {
-        Some(p) => vec![registry.project(p)?.name.clone()],
+        Some(p) => {
+            let project = registry.project(p)?;
+            let mut names = vec![project.name.clone()];
+            for r in &project.related {
+                let name = registry.project(r)?.name.clone();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+            names
+        }
         None => registry.projects.keys().cloned().collect(),
     };
     let mut found = Found {

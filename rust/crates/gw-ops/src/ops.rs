@@ -103,6 +103,7 @@ pub fn register(home: &Home, name: &str, dir: Option<&str>, summary: &str, stack
         repo: None,
         docs: Vec::new(),
         gate: Vec::new(),
+        related: Vec::new(),
         envs: Default::default(),
     };
     std::fs::create_dir_all(home.path("registry/projects"))?;

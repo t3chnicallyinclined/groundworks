@@ -29,6 +29,10 @@ pub struct Project {
     /// The project's own gate, overriding its stack's (e.g. lane aliases in a shared workspace).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gate: Vec<String>,
+    /// Projects read together with this one by ask and search (e.g. the private notes project that
+    /// holds its handoffs). Naming a private project here is the owner's explicit choice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub envs: BTreeMap<String, Env>,
 }

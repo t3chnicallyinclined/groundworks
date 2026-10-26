@@ -223,7 +223,7 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
     std::fs::write(home.join("knowledge/principles.md"), "# Principles\n\nTools first.\n")?;
     std::fs::write(
         home.join("registry/projects/demo.toml"),
-        "name = \"demo\"\ndir = \"demo\"\nsummary = \"green\"\ngate = [\"echo green\"]\n\n[envs.prod]\nprotected = true\n",
+        "name = \"demo\"\ndir = \"demo\"\nsummary = \"green\"\ngate = [\"echo green\"]\nrelated = [\"red\"]\n\n[envs.prod]\nprotected = true\n",
     )?;
     std::fs::write(
         home.join("registry/projects/red.toml"),
@@ -435,6 +435,13 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         !err && packet.starts_with("ask_packet:") && n >= 1 && text.contains("Rollback netcode resimulates"),
         &text,
     );
+    c.check(
+        "an ask on a project also reaches the projects its entry names as related, and says so",
+        text.lines()
+            .next()
+            .is_some_and(|l| l.contains("demo") && l.contains("red")),
+        &text,
+    );
     let all: Vec<usize> = (1..=n).collect();
     let (err, text) = s.call(
         "answer",
@@ -459,8 +466,8 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     );
     let (err, text) = s.call("answer", json!({"packet": packet, "read": all, "answer": "again"}))?;
     c.check(
-        "a packet is checked once",
-        err && text.contains("already checked"),
+        "a passed packet is final",
+        err && text.contains("already passed"),
         &text,
     );
     let (_, text) = s.call(
@@ -483,14 +490,33 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         json!({"question": "what does rollback resimulate", "project": "demo"}),
     )?;
     let packet = text.split(' ').next().unwrap_or_default().to_owned();
+    // The recorded fact now sits at [1]; the guide is [2].
+    let all: Vec<usize> = (1..=text
+        .matches(
+            "
+[",
+        )
+        .count())
+        .collect();
     let (err, text) = s.call(
         "answer",
         json!({"packet": packet, "read": all, "answer": "made up",
-               "quotes": [{"n": 1, "quote": "rollback predicts the future perfectly", "use": "support"}]}),
+               "quotes": [{"n": 2, "quote": "rollback predicts the future perfectly", "use": "support"}]}),
     )?;
     c.check(
-        "a made-up quote fails the check",
-        err && text.contains("not found word for word"),
+        "a made-up quote fails the check and the refusal names the nearest line",
+        err && text.contains("not found word for word")
+            && text.contains("nearest line reads: \"Rollback netcode resimulates confirmed frames.\""),
+        &text,
+    );
+    let (err, text) = s.call(
+        "answer",
+        json!({"packet": packet, "read": all, "answer": "fixed",
+               "quotes": [{"n": 2, "quote": "resimulates confirmed frames", "use": "support"}]}),
+    )?;
+    c.check(
+        "a failed packet may be answered again on the same candidates",
+        !err && text.contains("check PASS"),
         &text,
     );
 

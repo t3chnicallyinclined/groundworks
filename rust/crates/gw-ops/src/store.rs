@@ -708,7 +708,9 @@ impl Store {
         Ok(rows[0].clone())
     }
 
-    /// Record a packet's verdict, answer and report. A packet is checked once; later checks are refused.
+    /// Record a packet's verdict, answer and report. A packet that passed is final; one that failed or
+    /// was not executed may be answered again (the candidates have not changed), so a slipped quote does
+    /// not cost a new ask.
     pub fn finish_packet(&self, id: &str, status: &str, answer: &Value, report: &Value) -> Result<()> {
         let key = id.strip_prefix("ask_packet:").unwrap_or(id);
         let global = self.agent(GLOBAL_NS)?;
@@ -720,14 +722,14 @@ impl Store {
         let rows = self.retrying(|| {
             Ok(global.query(
                 "UPDATE type::record('ask_packet', $key) SET status = $status, answer = $answer, report = $report \
-                 WHERE status IN ['OPEN', 'NOT_EXECUTED'] RETURN VALUE id;",
+                 WHERE status IN ['OPEN', 'NOT_EXECUTED', 'FAIL'] RETURN VALUE id;",
                 &vars.0,
                 Some(1),
             ))
         })?;
         match rows {
             Ok(r) if r[0].as_array().is_some_and(|a| !a.is_empty()) => Ok(()),
-            _ => bail!("{id} was already checked; open a new ask to answer again"),
+            _ => bail!("{id} already passed its check; open a new ask to answer again"),
         }
     }
 
