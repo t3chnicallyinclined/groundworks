@@ -69,6 +69,8 @@ pub struct Plan<'a> {
     pub grader_model: &'a str,
     /// Per session, passed to `claude --max-budget-usd`.
     pub budget_usd: f64,
+    /// Passed to `claude --effort` when set (low, medium, high, xhigh, max).
+    pub effort: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -264,6 +266,10 @@ fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path) -> Resul
     .iter()
     .map(|s| s.to_string())
     .collect();
+    if let Some(e) = plan.effort {
+        args.push("--effort".into());
+        args.push(e.to_owned());
+    }
     let mut allowed: Vec<String> = ["Read", "Grep", "Glob", "ToolSearch"]
         .iter()
         .map(|s| s.to_string())
@@ -412,7 +418,7 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
         std::fs::write(
             &meta,
             serde_json::to_string_pretty(&json!({
-                "set": plan.set.display().to_string(), "set_sha256": set_sha, "model": plan.model,
+                "set": plan.set.display().to_string(), "set_sha256": set_sha, "model": plan.model, "effort": plan.effort,
                 "grader_model": plan.grader_model, "arms": plan.arms, "budget_usd": plan.budget_usd,
                 "started_at": now(), "machine": crate::home::machine(),
                 "claude_version": Command::new("claude").arg("--version").output().ok()

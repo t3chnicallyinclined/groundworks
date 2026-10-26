@@ -431,8 +431,11 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     let packet = text.split(' ').next().unwrap_or_default().to_owned();
     let n = text.matches("\n[").count();
     c.check(
-        "ask retrieves numbered candidates in full into a packet",
-        !err && packet.starts_with("ask_packet:") && n >= 1 && text.contains("Rollback netcode resimulates"),
+        "ask retrieves numbered candidates in full into a packet, each dated",
+        !err && packet.starts_with("ask_packet:")
+            && n >= 1
+            && text.contains("3| Rollback netcode resimulates")
+            && text.contains("; changed 20"),
         &text,
     );
     c.check(
@@ -446,10 +449,10 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     let (err, text) = s.call(
         "answer",
         json!({"packet": packet, "read": all, "answer": "Rollback resimulates confirmed frames only.", "record": true,
-               "quotes": [{"n": 1, "quote": "3| Rollback netcode resimulates confirmed frames.", "use": "support"}]}),
+               "quotes": [{"n": 1, "lines": [3, 3], "use": "support"}]}),
     )?;
     c.check(
-        "answer passes with a quote copied with its line number, says what was not read, and records the fact",
+        "answer passes with a quote given as a line range, says what was not read, and records the fact",
         !err && text.contains("check PASS")
             && text.contains("not read")
             && text.contains("CONFIRMED by docs/GUIDE.md#L3-3"),

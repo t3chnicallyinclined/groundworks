@@ -538,3 +538,11 @@ refused quote names the candidate line sharing the most words with it; `ask`/`se
 the projects its registry entry lists as `related` (the owner's explicit choice, so a private notes project
 can be read with the project it documents). Live recorded facts rank above the files, and candidates carry
 file line numbers (a quote copied with them still matches).
+
+### quotes as line ranges, dated candidates (2026-10-26)
+A quote may be given as `lines: [a, b]` (file lines as the candidate shows them) and the program copies the
+text; the Python check only accepted typed text. Reason: measured 40% of typed quotes failed word for word
+(FullCite 2026 reports the same: models find the document, not the span). Each unit carries `changed_at`
+(last commit touching its file, or mtime for an untracked doc), shown on every candidate; the agent text asks
+for an explicit "which is current and why" step when candidates disagree (Re3, ACL 2026), and says a date
+alone is not the reason.

@@ -70,6 +70,8 @@ pub struct Unit {
     pub line_end: Option<usize>,
     pub commit: Option<String>,
     pub experts: Vec<String>,
+    /// When the file last changed (its last commit's date; an untracked file's mtime), ISO 8601.
+    pub changed_at: Option<String>,
 }
 
 /// One expert area: a path inside the project (a file, or a folder ending in `/`), the expert who
@@ -296,27 +298,69 @@ fn spans(lines: &[&str], kind: &str) -> Vec<(usize, usize)> {
     out
 }
 
-fn unit(
-    locator: String,
-    kind: &'static str,
-    text: String,
-    path: Option<String>,
-    lines: Option<(usize, usize)>,
-    commit: Option<String>,
-    experts: Vec<String>,
-) -> Unit {
-    Unit {
-        key: sha256_hex(&[locator.as_bytes()])[..32].to_owned(),
-        hash: sha256_hex(&[text.as_bytes()]),
-        locator,
-        kind,
-        text,
-        path,
-        line_start: lines.map(|l| l.0),
-        line_end: lines.map(|l| l.1),
-        commit,
-        experts,
+impl Unit {
+    /// A unit with its key (from the locator) and hash (from the text); the rest is set by the caller.
+    fn new(locator: String, kind: &'static str, text: String) -> Self {
+        Unit {
+            key: sha256_hex(&[locator.as_bytes()])[..32].to_owned(),
+            hash: sha256_hex(&[text.as_bytes()]),
+            locator,
+            kind,
+            text,
+            path: None,
+            line_start: None,
+            line_end: None,
+            commit: None,
+            experts: Vec::new(),
+            changed_at: None,
+        }
     }
+}
+
+/// Each tracked path and the date of the last commit that touched it: one pass over the log, newest
+/// first, so a path's first appearance is its last change.
+fn last_changed(project_dir: &Path) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Ok(log) = git(project_dir, &["log", "--name-only", "--format=%x01%cI"]) else {
+        return out;
+    };
+    let mut date = String::new();
+    for line in log.lines() {
+        if let Some(d) = line.strip_prefix('\u{1}') {
+            date = d.trim().to_owned();
+        } else if !line.trim().is_empty() && !date.is_empty() {
+            out.entry(line.trim().to_owned()).or_insert_with(|| date.clone());
+        }
+    }
+    out
+}
+
+/// A file's modification time as ISO 8601 (seconds), for files git does not track.
+fn mtime_iso(meta: &std::fs::Metadata) -> Option<String> {
+    let secs = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm), no extra crate.
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    Some(format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    ))
 }
 
 /// Read a project: tracked files and untracked docs into units, the last `max_commits` commits into
@@ -331,6 +375,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
     };
     let tracked = list(&["ls-files", "-z"])?;
     let untracked = list(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+    let changed = last_changed(project_dir);
     let mut c = Collected {
         head: git(project_dir, &["rev-parse", "HEAD"])
             .ok()
@@ -382,6 +427,11 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
         let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
         let lines: Vec<&str> = text.lines().collect();
         let experts_here = experts_for(&c.areas, path);
+        let changed_at = if is_tracked {
+            changed.get(path).cloned()
+        } else {
+            mtime_iso(&meta)
+        };
         c.paths.push(path.clone());
         c.files_read += 1;
         c.untracked_read += usize::from(!is_tracked);
@@ -390,15 +440,15 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
             if body.trim().is_empty() {
                 continue;
             }
-            c.units.push(unit(
-                format!("{path}#L{start}-{end}"),
-                kind,
-                body,
-                Some(path.clone()),
-                Some((start, end)),
-                c.head.clone().filter(|_| is_tracked),
-                experts_here.clone(),
-            ));
+            c.units.push(Unit {
+                path: Some(path.clone()),
+                line_start: Some(start),
+                line_end: Some(end),
+                commit: c.head.clone().filter(|_| is_tracked),
+                experts: experts_here.clone(),
+                changed_at: changed_at.clone(),
+                ..Unit::new(format!("{path}#L{start}-{end}"), kind, body)
+            });
         }
     }
     if max_commits > 0 && c.head.is_some() {
@@ -431,15 +481,12 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
             if more > 0 {
                 text.push_str(&format!("\n(and {more} more)"));
             }
-            c.units.push(unit(
-                format!("commit:{sha}"),
-                "commit",
-                text,
-                None,
-                None,
-                Some(sha.to_owned()),
+            c.units.push(Unit {
+                commit: Some(sha.to_owned()),
                 experts,
-            ));
+                changed_at: Some(date.trim().to_owned()),
+                ..Unit::new(format!("commit:{sha}"), "commit", text)
+            });
         }
     }
     Ok(c)

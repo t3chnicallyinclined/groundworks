@@ -10,11 +10,15 @@ the server offers only a `status` tool, this folder is not under Groundworks: sa
 When the user asks a question about a project (what, why, how many, which is current):
 - Call `ask` first, with the project when you know it. Do not call `project_show`, `knowledge_get` or the
   journal first; `ask` already puts recorded facts above the files.
-- Read every candidate it returns; they are numbered and in full, with line numbers. Answer from them,
-  citing path:line. If two sources disagree, give both and say which is current and why (a later date, a
-  retraction, "superseded", the deploy source of record).
-- Call `answer` with the packet, the numbers you read, and quotes copied from the candidates. If it fails,
-  fix the quotes; never answer past a failed check without saying so.
+- Read every candidate it returns; they are numbered and in full, with line numbers and the date its file
+  last changed. Answer from them, citing path:line.
+- When two candidates give different values for the same thing, do not pick one. Name both with their
+  dates, then look for the line that settles it (a retraction, "superseded", "stale", a source of record,
+  a newer measurement), with `search` if it is not among the candidates, and say which is current and why.
+  A newer date alone is not the reason.
+- Call `answer` with the packet, the numbers you read, and quotes given as line ranges (`n` and
+  `lines: [a, b]`, the file lines the candidate shows; the program copies the text) rather than retyped
+  text. If it fails, fix what the refusal names; never answer past a failed check without saying so.
 - If the candidates do not settle it, say what is missing, then look further with `search`, Grep or Read.
   If nothing records it, or the question's premise is false, say so plainly; do not guess.
 - When the answer passed and it is a decision, a gotcha, or a measured number worth keeping, pass

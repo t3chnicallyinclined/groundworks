@@ -176,6 +176,9 @@ enum Command {
         /// Dollar cap per answering session.
         #[arg(long, default_value_t = 5.0)]
         budget_usd: f64,
+        /// Claude effort level for the answering sessions (low, medium, high, xhigh, max).
+        #[arg(long)]
+        effort: Option<String>,
     },
     /// Retrieval alone, no model: is every gold line ingested, and where does the ranked read put it?
     EvalRetrieval { file: std::path::PathBuf },
@@ -495,6 +498,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             model,
             grader_model,
             budget_usd,
+            effort,
         } => {
             let out = out.unwrap_or_else(|| gw_ops::eval_run::default_out(&set));
             // The sessions run in a folder inside the run folder, so every path they get is absolute.
@@ -510,6 +514,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                     model: &model,
                     grader_model: &grader_model,
                     budget_usd,
+                    effort: effort.as_deref(),
                 },
             )?;
             (

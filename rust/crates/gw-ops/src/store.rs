@@ -566,7 +566,7 @@ impl Store {
             vars,
         } = any_word(query)?;
         let mut sql = format!(
-            "SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, ({score}) AS score, \
+            "SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, changed_at, ({score}) AS score, \
              [{marks}] AS marks FROM unit WHERE ({matches}) AND present = true"
         );
         let mut vars = vars.set("limit", limit);
@@ -602,7 +602,7 @@ impl Store {
         } = any_word(query)?;
         let sql = format!(
             "SELECT text AS fact, grade AS fact_grade, ({score}) AS score, \
-             (SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text FROM $parent->evidence->unit \
+             (SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, changed_at FROM $parent->evidence->unit \
               WHERE present = true) AS units \
              FROM fact WHERE ({matches}) AND status = 'live' ORDER BY score DESC LIMIT $limit;"
         );
@@ -963,6 +963,9 @@ pub struct Hit {
     pub experts: Vec<String>,
     pub score: Option<f64>,
     pub text: String,
+    /// When the unit's file last changed, ISO 8601, if known.
+    #[serde(default)]
+    pub changed_at: Option<String>,
     /// The text with matched words between « » (the first highlight that matched).
     #[serde(default, skip_serializing)]
     pub marked: Option<String>,

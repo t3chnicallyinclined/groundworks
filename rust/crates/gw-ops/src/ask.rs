@@ -49,8 +49,14 @@ pub struct Candidate {
 pub struct QuoteIn {
     /// The candidate number the quote comes from.
     pub n: usize,
-    /// Copied character for character from that candidate (whitespace may differ).
+    /// Copied character for character from that candidate (whitespace may differ). Leave it empty and
+    /// give `lines` instead to have the program copy the text itself.
+    #[serde(default)]
     pub quote: String,
+    /// The file lines of the quote, inclusive, as the candidate numbers them (e.g. [120, 122]); the quote
+    /// text is then taken from the candidate word for word, so nothing can be mistyped.
+    #[serde(default)]
+    pub lines: Option<[usize; 2]>,
     /// `support` (the answer rests on it) or `note` (it says something relevant). Default support.
     #[serde(rename = "use")]
     pub use_: Option<String>,
@@ -70,6 +76,14 @@ pub struct AnswerIn {
     /// When the check passes, keep the answer as a fact, its first support quote as the evidence.
     #[serde(default)]
     pub record: bool,
+}
+
+/// Lines `a..=b` (file numbering) of a unit whose locator starts at some line, or None when outside it.
+fn span_text(unit_text: &str, locator: &str, a: usize, b: usize) -> Option<String> {
+    let start = store::first_line(locator)?;
+    let lines: Vec<&str> = unit_text.lines().collect();
+    let end = start + lines.len().checked_sub(1)?;
+    (a >= start && b >= a && b <= end).then(|| lines[a - start..=b - start].join("\n"))
 }
 
 /// The line of `unit_text` sharing the most words with `wanted` (normalized), so a refused quote can be
@@ -183,7 +197,19 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
         if !times_read.contains_key(&q.n) {
             errors.push(format!("quote {k} cites candidate {}, which was not read", q.n));
         }
-        let text = normalize(&strip_numbers(&q.quote));
+        let text = match (q.lines, now.get(&c.key)) {
+            (Some([a, b]), Some((_, unit_text, _))) => match span_text(unit_text, &c.locator, a, b) {
+                Some(t) => normalize(&t),
+                None => {
+                    errors.push(format!(
+                        "quote {k}: lines {a}-{b} are not inside candidate {} ({})",
+                        q.n, c.locator
+                    ));
+                    continue;
+                }
+            },
+            _ => normalize(&strip_numbers(&q.quote)),
+        };
         if text.split(' ').filter(|w| !w.is_empty()).count() < QUOTE_MIN_WORDS {
             errors.push(format!("quote {k} has fewer than {QUOTE_MIN_WORDS} words"));
             continue;
@@ -371,7 +397,9 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
     }
     out.push_str(
         "Read EVERY candidate below in full, then call `answer` with this packet id, the numbers you read, \
-         your answer, and quotes copied word for word (at least 3 words each) from the candidates you read.\n",
+         your answer, and quotes given as line ranges (n, lines [a, b]; the program copies the text) or copied \
+         word for word (at least 3 words). Each candidate says when its file last changed; when two disagree, \
+         give both and say which is current and why.\n",
     );
     for (c, h) in candidates.iter().zip(&shown) {
         if let Some(fact) = &h.fact {
@@ -395,9 +423,13 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
             .commit
             .as_deref()
             .map_or(String::new(), |c| format!(" @ {}", &c[..c.len().min(10)]));
+        let changed = h
+            .changed_at
+            .as_deref()
+            .map_or(String::new(), |d| format!("; changed {}", &d[..d.len().min(10)]));
         writeln!(
             out,
-            "\n[{}] {}:{}{commit} ({}{experts})\n{}",
+            "\n[{}] {}:{}{commit} ({}{experts}{changed})\n{}",
             c.n,
             c.project,
             c.locator,
@@ -430,7 +462,7 @@ pub fn answer(
     let report = check(&candidates, corpus_total, &now, read, answer);
     let answer_json: Value = json!({
         "answer": answer.answer,
-        "quotes": answer.quotes.iter().map(|q| json!({"n": q.n, "quote": q.quote, "use": q.use_.as_deref().unwrap_or("support"), "why": q.why})).collect::<Vec<_>>(),
+        "quotes": answer.quotes.iter().map(|q| json!({"n": q.n, "quote": q.quote, "lines": q.lines, "use": q.use_.as_deref().unwrap_or("support"), "why": q.why})).collect::<Vec<_>>(),
         "gaps": answer.gaps,
         "not_answerable": answer.not_answerable,
     });
@@ -483,7 +515,10 @@ fn record(
     let start = store::first_line(&c.locator).context("the evidence has no line numbers")?;
     let (_, text, _) = now.get(&c.key).context("the evidence unit is gone")?;
     let lines: Vec<&str> = text.lines().collect();
-    let want = normalize(&strip_numbers(&q.quote));
+    let want = match q.lines {
+        Some([a, b]) => normalize(&span_text(text, &c.locator, a, b).context("the quote's lines")?),
+        None => normalize(&strip_numbers(&q.quote)),
+    };
     // The smallest run of whole lines that holds the quote.
     let mut best: Option<(usize, usize)> = None;
     for i in 0..lines.len() {
@@ -501,7 +536,7 @@ fn record(
     let project = Registry::load(home)?.project(&c.project)?.clone();
     let mut fact_text: String = answer.answer.trim().chars().take(1500).collect();
     if fact_text.is_empty() {
-        fact_text = q.quote.clone();
+        fact_text = want.clone();
     }
     let fact = store::FactIn {
         kind: crate::journal::Kind::Fact,
@@ -567,6 +602,7 @@ mod tests {
                 .map(|(n, q, u)| QuoteIn {
                     n,
                     quote: q.into(),
+                    lines: None,
                     use_: Some(u.into()),
                     why: None,
                 })
@@ -673,6 +709,26 @@ mod tests {
             &ans(vec![(1, "parser rejects empty input", "note")]),
         );
         assert_eq!(r.verdict, "PASS", "a note may cite a unit that left: {:?}", r.errors);
+    }
+
+    #[test]
+    fn a_quote_given_as_lines_is_copied_by_the_program_and_checked_for_range() {
+        let c = [cand(1, "a")];
+        let mut by_lines = ans(vec![]);
+        by_lines.quotes.push(QuoteIn {
+            n: 1,
+            quote: String::new(),
+            lines: Some([1, 2]),
+            use_: None,
+            why: None,
+        });
+        let r = check(&c, 10, &now(), &[1], &by_lines);
+        assert_eq!(r.verdict, "PASS", "{:?}", r.errors);
+        by_lines.quotes[0].lines = Some([2, 5]);
+        let r = check(&c, 10, &now(), &[1], &by_lines);
+        assert!(r.errors.join(" ").contains("not inside candidate"), "{:?}", r.errors);
+        assert_eq!(span_text("a\nb\nc", "f.md#L10-12", 11, 12).as_deref(), Some("b\nc"));
+        assert_eq!(span_text("a\nb\nc", "f.md#L10-12", 9, 10), None);
     }
 
     #[test]
