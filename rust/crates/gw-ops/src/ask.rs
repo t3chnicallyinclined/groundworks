@@ -301,25 +301,47 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
             }
             _ => c,
         };
+        // (b) A quote object with neither lines nor text carries nothing: noted and skipped, not refused.
+        if q.lines.is_none() && q.quote.trim().is_empty() {
+            report
+                .aligned
+                .push(format!("quote {k} had neither lines nor text and was ignored"));
+            continue;
+        }
         let text = match (q.lines, now.get(&c.key)) {
             (Some([a, b]), Some((_, unit_text, _))) => match span_text(unit_text, &c.locator, a, b) {
                 Some(t) => normalize(&t),
                 None => {
-                    errors.push(format!(
-                        "quote {k}: lines {a}-{b} are not inside candidate {} ({})",
-                        q.n, c.locator
-                    ));
-                    continue;
+                    // (c) A range that starts inside the candidate and runs past its end is cut to the
+                    // candidate's lines, and the report says so; one wholly outside is refused.
+                    let end = store::line_range(&c.locator).map_or(unit_text.lines().count(), |r| r.1);
+                    match span_text(unit_text, &c.locator, a, end.min(b)) {
+                        Some(t) if a <= end => {
+                            report.aligned.push(format!(
+                                "quote {k}: lines {}-{b} are past the end of candidate {} ({}); took lines {a}-{end}",
+                                end + 1,
+                                q.n,
+                                c.locator
+                            ));
+                            normalize(&t)
+                        }
+                        _ => {
+                            errors.push(format!(
+                                "quote {k}: lines {a}-{b} are not inside candidate {} ({})",
+                                q.n, c.locator
+                            ));
+                            continue;
+                        }
+                    }
                 }
             },
             _ => normalize(&strip_numbers(&q.quote)),
         };
-        if text.split(' ').filter(|w| !w.is_empty()).count() < QUOTE_MIN_WORDS {
-            errors.push(if q.quote.trim().is_empty() && q.lines.is_none() {
-                format!("quote {k} has neither lines nor text; give lines: [a, b] from the candidate")
-            } else {
-                format!("quote {k} has fewer than {QUOTE_MIN_WORDS} words")
-            });
+        // A quote under QUOTE_MIN_WORDS (a number, an identifier) counts only word for word: too short
+        // to align, not too short to be exact.
+        let short = text.split(' ').filter(|w| !w.is_empty()).count() < QUOTE_MIN_WORDS;
+        if short && text.len() < 4 {
+            errors.push(format!("quote {k} is too short to mean anything ({text:?})"));
             continue;
         }
         report.quotes_checked += 1;
@@ -337,6 +359,11 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
                 };
                 if normalize(&haystack).contains(&text) {
                     report.quotes_found += 1;
+                } else if short {
+                    errors.push(format!(
+                        "quote {k} ({text:?}) is under {QUOTE_MIN_WORDS} words and not in candidate {} word for word",
+                        q.n
+                    ));
                 } else if let Some(a) = align(unit_text, &text) {
                     // Models find the passage, not the exact span (measured: 40% of typed quotes failed
                     // word for word). The span's own text stands as the quote.
@@ -779,7 +806,48 @@ mod tests {
             Some("files:\na.rs")
         );
         let r = check(&[cand(1, "a")], 10, &now(), &[1], &ans(vec![(1, "", "support")]));
-        assert!(r.errors[0].contains("neither lines nor text"), "{:?}", r.errors);
+        assert_eq!(
+            r.verdict, "PASS",
+            "an empty quote object is ignored, not refused: {:?}",
+            r.errors
+        );
+        assert!(r.aligned[0].contains("neither lines nor text"), "{:?}", r.aligned);
+        // A short quote counts word for word, and only word for word.
+        let r = check(
+            &[cand(1, "a")],
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "empty input", "note")]),
+        );
+        assert_eq!((r.verdict, r.quotes_found), ("PASS", 1), "{:?}", r.errors);
+        let r = check(
+            &[cand(1, "a")],
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "empty output", "note")]),
+        );
+        assert_eq!(r.verdict, "FAIL");
+        assert!(
+            r.errors[0].contains("not in candidate 1 word for word"),
+            "{:?}",
+            r.errors
+        );
+        // A range running past the span is cut to it, with a note; one wholly outside is refused.
+        let mut over = ans(vec![]);
+        over.quotes.push(QuoteIn {
+            n: 1,
+            quote: String::new(),
+            lines: Some([1, 3]),
+            use_: None,
+            why: None,
+        });
+        let r = check(&[cand(1, "a")], 10, &now(), &[1], &over);
+        assert_eq!(r.verdict, "PASS", "{:?}", r.errors);
+        assert!(r.aligned.iter().any(|a| a.contains("past the end")), "{:?}", r.aligned);
+        over.quotes[0].lines = Some([5, 6]);
+        assert_eq!(check(&[cand(1, "a")], 10, &now(), &[1], &over).verdict, "FAIL");
     }
 
     fn now() -> Now {
@@ -865,7 +933,11 @@ mod tests {
         assert!(
             errs(&[1, 2], ans(vec![(1, "the parser accepts input", "support")])).contains("not found in candidate")
         );
-        assert!(errs(&[1, 2], ans(vec![(1, "rejects empty", "support")])).contains("fewer than 3 words"));
+        // A short quote is fine when it is word for word; a short one that is not gets a plain refusal.
+        assert!(
+            errs(&[1, 2], ans(vec![(1, "rejects nothing", "support")]))
+                .contains("under 3 words and not in candidate 1")
+        );
         assert!(errs(&[1, 2], ans(vec![(7, "parser rejects empty", "support")])).contains("outside this packet"));
         assert!(errs(&[1, 2], ans(vec![(1, "parser rejects empty", "maybe")])).contains("support or note"));
         assert_eq!(check(&c, 10, &n, &[], &ans(vec![])).verdict, "NOT_EXECUTED");
