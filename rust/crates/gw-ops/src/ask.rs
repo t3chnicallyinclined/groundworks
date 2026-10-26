@@ -43,6 +43,9 @@ pub struct Candidate {
     pub hash: String,
     pub kind: Option<String>,
     pub score: Option<f64>,
+    /// When the candidate is a recorded fact: the fact's text, quotable like the unit's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -80,7 +83,8 @@ pub struct AnswerIn {
 
 /// Lines `a..=b` (file numbering) of a unit whose locator starts at some line, or None when outside it.
 fn span_text(unit_text: &str, locator: &str, a: usize, b: usize) -> Option<String> {
-    let start = store::first_line(locator)?;
+    // A unit without file lines (a commit) counts its own lines from 1, as the reader saw them.
+    let start = store::first_line(locator).unwrap_or(1);
     let lines: Vec<&str> = unit_text.lines().collect();
     let end = start + lines.len().checked_sub(1)?;
     (a >= start && b >= a && b <= end).then(|| lines[a - start..=b - start].join("\n"))
@@ -302,7 +306,11 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
             _ => normalize(&strip_numbers(&q.quote)),
         };
         if text.split(' ').filter(|w| !w.is_empty()).count() < QUOTE_MIN_WORDS {
-            errors.push(format!("quote {k} has fewer than {QUOTE_MIN_WORDS} words"));
+            errors.push(if q.quote.trim().is_empty() && q.lines.is_none() {
+                format!("quote {k} has neither lines nor text; give lines: [a, b] from the candidate")
+            } else {
+                format!("quote {k} has fewer than {QUOTE_MIN_WORDS} words")
+            });
             continue;
         }
         report.quotes_checked += 1;
@@ -313,7 +321,12 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
                 q.n, c.locator
             )),
             Some((_, unit_text, present)) => {
-                if normalize(unit_text).contains(&text) {
+                // A fact candidate is quotable by its fact text as well as by its evidence unit.
+                let haystack = match &c.fact {
+                    Some(f) => format!("{f}\n{unit_text}"),
+                    None => unit_text.clone(),
+                };
+                if normalize(&haystack).contains(&text) {
                     report.quotes_found += 1;
                 } else if let Some(a) = align(unit_text, &text) {
                     // Models find the passage, not the exact span (measured: 40% of typed quotes failed
@@ -515,6 +528,7 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
             hash: h.hash.clone(),
             kind: h.kind.clone(),
             score: h.score,
+            fact: h.fact.clone(),
         })
         .collect();
     let status = if candidates.is_empty() { "NO_HITS" } else { "OPEN" };
@@ -724,7 +738,28 @@ mod tests {
             hash: format!("h{key}"),
             kind: Some("context".into()),
             score: Some(1.0),
+            fact: None,
         }
+    }
+
+    #[test]
+    fn a_fact_candidate_is_quotable_by_its_fact_text_and_a_commit_by_its_own_lines() {
+        let mut c = cand(1, "b");
+        c.fact = Some("Rollback keeps only confirmed frames in the save set.".into());
+        let r = check(
+            &[c],
+            10,
+            &now(),
+            &[1],
+            &ans(vec![(1, "keeps only confirmed frames", "support")]),
+        );
+        assert_eq!(r.verdict, "PASS", "{:?}", r.errors);
+        assert_eq!(
+            span_text("subject\n\n2026-10-01\nfiles:\na.rs", "commit:abc", 4, 5).as_deref(),
+            Some("files:\na.rs")
+        );
+        let r = check(&[cand(1, "a")], 10, &now(), &[1], &ans(vec![(1, "", "support")]));
+        assert!(r.errors[0].contains("neither lines nor text"), "{:?}", r.errors);
     }
 
     fn now() -> Now {
