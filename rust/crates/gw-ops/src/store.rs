@@ -635,6 +635,30 @@ impl Store {
         Ok(hits)
     }
 
+    /// Grep over what was ingested: present units whose text contains `needle` (case-insensitive), or
+    /// matches it as a regex when written `/.../`. Exact, where `retrieve` is by words.
+    pub fn grep(&self, project: &str, needle: &str, limit: usize) -> Result<Vec<Hit>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let (test, vars) = match needle.strip_prefix('/').and_then(|r| r.strip_suffix('/')) {
+            Some(re) if !re.is_empty() => ("string::matches(text, $q)", Vars::default().set("q", re)),
+            _ => (
+                "string::contains(string::lowercase(text), $q)",
+                Vars::default().set("q", needle.to_lowercase()),
+            ),
+        };
+        let sql = format!(
+            "SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, changed_at FROM unit \
+             WHERE present = true AND {test} ORDER BY locator LIMIT $limit;"
+        );
+        let vars = vars.set("limit", limit);
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
+        let mut hits: Vec<Hit> = serde_json::from_value(rows[0].clone()).context("reading grep hits")?;
+        for hit in &mut hits {
+            hit.project = project.to_owned();
+        }
+        Ok(hits)
+    }
+
     /// The keys of present units whose span covers `line` of `path`: where a cited line was ingested.
     pub fn units_at(&self, project: &str, path: &str, line: usize) -> Result<Vec<String>> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;

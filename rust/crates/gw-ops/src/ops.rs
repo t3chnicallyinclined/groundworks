@@ -829,6 +829,90 @@ pub fn search(home: &Home, store: &Store, q: crate::ask::Query<'_>) -> Result<St
     Ok(out)
 }
 
+/// Grep over the ingested files of a project (and its related projects), or of every shared project:
+/// exact, case-insensitive, `/re/` for a regex. Each hit names the file line that matched, dated.
+pub fn grep(home: &Home, store: &Store, project: Option<&str>, needle: &str, limit: usize) -> Result<String> {
+    let needle = needle.trim();
+    ensure!(!needle.is_empty(), "grep for something");
+    let limit = limit.clamp(1, 100);
+    let regex = needle
+        .strip_prefix('/')
+        .and_then(|r| r.strip_suffix('/'))
+        .filter(|r| !r.is_empty())
+        .map(|r| regex::RegexBuilder::new(r).case_insensitive(false).build())
+        .transpose()
+        .context("the regex")?;
+    let lower = needle.to_lowercase();
+    let matches = |line: &str| match &regex {
+        Some(re) => re.is_match(line),
+        None => line.to_lowercase().contains(&lower),
+    };
+    let (names, mut skipped) = crate::ask::reach_names(home, store, project)?;
+    let mut out = String::new();
+    let mut shown = 0;
+    let mut searched = Vec::new();
+    for name in &names {
+        let hits = match store.grep(name, needle, limit) {
+            Ok(h) => h,
+            Err(e) => {
+                skipped.push(format!("{name} ({e:#})"));
+                continue;
+            }
+        };
+        searched.push(name.clone());
+        for h in hits {
+            if shown >= limit {
+                break;
+            }
+            let start = store::first_line(&h.locator);
+            let at = h.text.lines().position(&matches);
+            let (where_, line) = match (start, at) {
+                (Some(s), Some(i)) => (
+                    format!(
+                        "{}:{} (in #L{})",
+                        h.locator.rsplit_once("#L").map_or("", |x| x.0),
+                        s + i,
+                        h.locator.rsplit_once("#L").map_or("", |x| x.1)
+                    ),
+                    h.text.lines().nth(i).unwrap_or_default().trim().to_owned(),
+                ),
+                _ => (h.locator.clone(), store::excerpt(&h.text)),
+            };
+            let changed = h
+                .changed_at
+                .as_deref()
+                .map_or(String::new(), |d| format!("; changed {}", &d[..d.len().min(10)]));
+            writeln!(
+                out,
+                "- [{}] {}:{where_}{changed}\n    {line}",
+                h.kind.as_deref().unwrap_or("?"),
+                h.project
+            )?;
+            shown += 1;
+        }
+    }
+    if shown == 0 {
+        writeln!(out, "no ingested unit contains {needle:?}")?;
+    } else if shown >= limit {
+        writeln!(out, "(cut at {limit}; narrow the pattern or name a project)")?;
+    }
+    writeln!(
+        out,
+        "\nsearched: {}{}",
+        if searched.is_empty() {
+            "nothing".to_owned()
+        } else {
+            searched.join(", ")
+        },
+        if skipped.is_empty() {
+            String::new()
+        } else {
+            format!("; skipped: {}", skipped.join(", "))
+        }
+    )?;
+    Ok(out)
+}
+
 /// The expert directory: every expert with its summary.
 pub fn experts() -> Result<String> {
     let experts = crate::intake::load_experts(&expert_dirs())?;

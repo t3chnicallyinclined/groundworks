@@ -141,6 +141,14 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+    /// Grep over the ingested files: exact, case-insensitive, or /regex/.
+    Grep {
+        pattern: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// The expert directory.
     Experts,
     /// Open an ask packet: the best candidates for a question, in full, numbered.
@@ -179,6 +187,9 @@ enum Command {
         /// Claude effort level for the answering sessions (low, medium, high, xhigh, max).
         #[arg(long)]
         effort: Option<String>,
+        /// Seeding pass: leave recording on and ask for record: true on passed answers.
+        #[arg(long)]
+        record: bool,
     },
     /// Retrieval alone, no model: is every gold line ingested, and where does the ranked read put it?
     EvalRetrieval { file: std::path::PathBuf },
@@ -489,6 +500,18 @@ async fn dispatch(command: Command) -> Result<bool> {
             (text, true)
         }
         Command::Experts => (ops::experts()?, true),
+        Command::Grep {
+            pattern,
+            project,
+            limit,
+        } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            (
+                store::blocking(move || ops::grep(&home, &store, project.as_deref(), &pattern, limit)).await?,
+                true,
+            )
+        }
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
         Command::EvalRun {
             set,
@@ -499,6 +522,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             grader_model,
             budget_usd,
             effort,
+            record,
         } => {
             let out = out.unwrap_or_else(|| gw_ops::eval_run::default_out(&set));
             // The sessions run in a folder inside the run folder, so every path they get is absolute.
@@ -515,6 +539,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                     grader_model: &grader_model,
                     budget_usd,
                     effort: effort.as_deref(),
+                    record,
                 },
             )?;
             (

@@ -204,6 +204,17 @@ pub struct SearchArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct GrepArgs {
+    /// Exact text to find, case-insensitive (an identifier, a number, an error string, a phrase); or a
+    /// regex written /like this/.
+    pub pattern: String,
+    /// One project (and its related projects); without it, every shared project.
+    pub project: Option<String>,
+    /// Most hits (default 20, at most 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct AskArgs {
     /// The question, in plain words. With a lens it may be left out: the lens's checks are asked.
     pub question: Option<String>,
@@ -471,6 +482,17 @@ impl Groundworks {
         })
         .await
         .map_err(fail)
+    }
+
+    #[tool(
+        description = "Grep over the ingested files: exact, case-insensitive match (or /regex/) across a project and its related projects, or every shared project. Each hit gives project, file:line and the matching line, dated. Use it for identifiers, numbers, error strings and exact phrases; use ask for a question in words."
+    )]
+    async fn grep(&self, args: Parameters<GrepArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || ops::grep(&home, &store, a.project.as_deref(), &a.pattern, a.limit.unwrap_or(20)))
+            .await
+            .map_err(fail)
     }
 
     #[tool(

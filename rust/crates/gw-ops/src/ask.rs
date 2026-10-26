@@ -275,9 +275,12 @@ pub struct Found {
 
 /// The one cross-project read: each project the query may read (a named one, or every shared one),
 /// its best `limit` units, merged best first and cut to `limit`.
-pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
+/// The projects a read may reach: a named project and the projects its entry lists as related
+/// (private ones too), or, with none named, every shared project; the rest are skipped with the reason.
+pub fn reach_names(home: &Home, store: &Store, project: Option<&str>) -> Result<(Vec<String>, Vec<String>)> {
     let registry = Registry::load(home)?;
-    let names: Vec<String> = match q.project {
+    let mut skipped = Vec::new();
+    let names = match project {
         Some(p) => {
             let project = registry.project(p)?;
             let mut names = vec![project.name.clone()];
@@ -289,23 +292,32 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
             }
             names
         }
-        None => registry.projects.keys().cloned().collect(),
+        None => {
+            let mut names = Vec::new();
+            for name in registry.projects.keys() {
+                let level = store.level(&gw_store::project_ns(&store::slug(name)?)?)?;
+                if level == "shared" {
+                    names.push(name.clone());
+                } else {
+                    skipped.push(format!("{name} ({level})"));
+                }
+            }
+            names
+        }
     };
+    Ok((names, skipped))
+}
+
+pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
+    let (names, skipped) = reach_names(home, store, q.project)?;
     let mut found = Found {
         facts: Vec::new(),
         hits: Vec::new(),
         searched: Vec::new(),
-        skipped: Vec::new(),
+        skipped,
         corpus_total: 0,
     };
     for name in &names {
-        if q.project.is_none() {
-            let level = store.level(&gw_store::project_ns(&store::slug(name)?)?)?;
-            if level != "shared" {
-                found.skipped.push(format!("{name} ({level})"));
-                continue;
-            }
-        }
         match store.retrieve(name, q.text, q.expert, q.kinds, q.limit) {
             Ok(hits) => {
                 found.corpus_total += store.corpus_size(name)?;

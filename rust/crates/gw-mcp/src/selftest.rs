@@ -14,7 +14,7 @@ use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 use serde_json::{Value, json};
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 26] = [
+pub const TOOLS: [&str; 27] = [
     "answer",
     "ask",
     "bootstrap",
@@ -23,6 +23,7 @@ pub const TOOLS: [&str; 26] = [
     "estate_scan",
     "expert_list",
     "gate",
+    "grep",
     "intake",
     "journal_add",
     "journal_read",
@@ -286,7 +287,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     )?;
     let tools = s.tools()?;
     c.check(
-        "the tool list is exactly the 26 tools",
+        "the tool list is exactly the 27 tools",
         tools == TOOLS,
         &format!("{tools:?}"),
     );
@@ -410,6 +411,20 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     c.check(
         "a secret file's contents are never ingested",
         !err && text.contains("no units match"),
+        &text,
+    );
+    let (err, text) = s.call("grep", json!({"pattern": "ZEPHYR flag", "project": "demo"}))?;
+    c.check(
+        "grep finds an exact phrase case-insensitively and names its file line",
+        !err && text.contains("demo:docs/LATE-NOTE.md:3 (in #L1-3") && text.contains("The zephyr flag is unsafe"),
+        &text,
+    );
+    let (err, text) = s.call("grep", json!({"pattern": "/zeph.r fl[a-z]g/", "project": "demo"}))?;
+    c.check("grep takes a /regex/", !err && text.contains("LATE-NOTE.md:3"), &text);
+    let (err, text) = s.call("grep", json!({"pattern": "never-ingested", "project": "demo"}))?;
+    c.check(
+        "grep sees only what was ingested (not the secret file)",
+        !err && text.contains("no ingested unit contains"),
         &text,
     );
     let (err, text) = s.call("search", json!({"query": "zephyr", "project": "demo"}))?;

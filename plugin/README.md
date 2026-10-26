@@ -37,6 +37,7 @@ In any Claude Code session opened under a Groundworks home, the agent has the to
 | Ask across everything that is shared, with citations | `groundworks search "..." [--project p] [--expert e] [--kind commit]`; or ask the agent |
 | See the experts | `groundworks experts` |
 | Ask a question and get a checked answer | ask the agent (it uses `ask`, reads every candidate, then `answer`); or `groundworks ask "..."` to see the candidates |
+| Find an exact identifier, number or phrase | `grep` (exact, case-insensitive, `/re/`), over the ingested files, scoped and dated |
 | Read a project through an expert's eyes | `lens` (findings, and every dispute of them, side by side); ask with `lens` to look |
 | Have several experts decide one question | `panel_open`, `panel_submit` per seat, `panel` for what is owed and the tally |
 | Bring a project in | `/groundworks:init` in the project's folder |

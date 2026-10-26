@@ -12,6 +12,9 @@ the server offers only a `status` tool, this folder is not under Groundworks: sa
 When the user asks a question about a project (what, why, how many, which is current):
 - Call `ask` first, with the project when you know it. Do not call `project_show`, `knowledge_get` or the
   journal first; `ask` already puts recorded facts above the files.
+- For an identifier, a number, an error string or an exact phrase, use `grep` (exact, case-insensitive,
+  `/re/` for a regex) over the ingested files: it is scoped and dated like `ask`, and finds what a word
+  search misses. Grep, Read and Glob on the working tree are for what was never ingested.
 - Read every candidate it returns; they are numbered and in full, with line numbers and the date its file
   last changed. Answer from them, citing path:line.
 - When two candidates give different values for the same thing, do not pick one. Name both with their

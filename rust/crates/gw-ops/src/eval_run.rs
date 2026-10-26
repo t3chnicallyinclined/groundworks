@@ -71,6 +71,8 @@ pub struct Plan<'a> {
     pub budget_usd: f64,
     /// Passed to `claude --effort` when set (low, medium, high, xhigh, max).
     pub effort: Option<&'a str>,
+    /// A seeding pass: recording stays on, and the prompt asks for `record: true` on a passed answer.
+    pub record: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -410,7 +412,8 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
     std::fs::write(
         plan.out.join("mcp-groundworks.json"),
         serde_json::to_string_pretty(&json!({"mcpServers": {"groundworks": {
-            "command": "groundworks", "args": ["serve"], "env": {"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_RECORD": "1"}}}}))?,
+            "command": "groundworks", "args": ["serve"],
+            "env": if plan.record { json!({"GROUNDWORKS_HOME": home_path}) } else { json!({"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_RECORD": "1"}) }}}}))?,
     )?;
     let set_sha = sha256_hex(&[std::fs::read(plan.set)?.as_slice()]);
     let meta = plan.out.join("run.json");
@@ -418,7 +421,7 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
         std::fs::write(
             &meta,
             serde_json::to_string_pretty(&json!({
-                "set": plan.set.display().to_string(), "set_sha256": set_sha, "model": plan.model, "effort": plan.effort,
+                "set": plan.set.display().to_string(), "set_sha256": set_sha, "model": plan.model, "effort": plan.effort, "record": plan.record,
                 "grader_model": plan.grader_model, "arms": plan.arms, "budget_usd": plan.budget_usd,
                 "started_at": now(), "machine": crate::home::machine(),
                 "claude_version": Command::new("claude").arg("--version").output().ok()
@@ -473,7 +476,13 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
 
 fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path) -> Result<Row> {
     let args = answer_args(arm, plan, projects, plan.out)?;
-    let (out, failed) = match session(cwd, &prompt(q, projects), &args, TIMEOUT) {
+    let mut text = prompt(q, projects);
+    if plan.record {
+        text.push_str(
+            "\n\nWhen your answer passes the check, it should be kept: pass record: true on that answer call.",
+        );
+    }
+    let (out, failed) = match session(cwd, &text, &args, TIMEOUT) {
         Ok(v) => (v, None),
         Err(e) => (Value::Null, Some(format!("{e:#}"))),
     };
