@@ -17,3 +17,6 @@ instances/*/out/
 *.egg-info/
 build/
 dist/
+
+# cargo build folders (any name: target, target-side, ...)
+rust/target*/

@@ -130,16 +130,25 @@ fn body(text: &'static str) -> &'static str {
         .map_or(text, |(_, body)| body.trim_start())
 }
 
-/// One headless session; returns Claude Code's JSON result.
-fn session(cwd: &Path, args: &[String], timeout: Duration) -> Result<Value> {
+/// One headless session; returns Claude Code's JSON result. The prompt goes in on stdin (`-p` with
+/// no text reads it), because a Windows command line holds at most 32 KB and a packet of candidates
+/// does not fit.
+pub(crate) fn session(cwd: &Path, prompt: &str, args: &[String], timeout: Duration) -> Result<Value> {
     let mut child = Command::new("claude")
         .current_dir(cwd)
+        .arg("-p")
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("starting claude")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let text = prompt.to_owned();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(text.as_bytes());
+        });
+    }
     let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
         std::thread::spawn(move || {
             let mut s = String::new();
@@ -232,10 +241,8 @@ fn tokens(usage: &Value) -> (u64, u64) {
     )
 }
 
-fn answer_args(arm: &str, q: &Question, plan: &Plan<'_>, projects: &Path, run: &Path) -> Result<Vec<String>> {
+fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path) -> Result<Vec<String>> {
     let mut args: Vec<String> = [
-        "-p",
-        &prompt(q, projects),
         "--output-format",
         "stream-json",
         "--verbose",
@@ -317,8 +324,6 @@ fn grade_prompt(q: &Question, answer: &str) -> String {
 
 fn grade(cwd: &Path, q: &Question, answer: &str, model: &str) -> Result<(Value, f64)> {
     let args: Vec<String> = [
-        "-p",
-        &grade_prompt(q, answer),
         "--output-format",
         "json",
         "--no-session-persistence",
@@ -335,7 +340,7 @@ fn grade(cwd: &Path, q: &Question, answer: &str, model: &str) -> Result<(Value, 
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let out = session(cwd, &args, Duration::from_secs(300))?;
+    let out = session(cwd, &grade_prompt(q, answer), &args, Duration::from_secs(300))?;
     let cost = out["total_cost_usd"].as_f64().unwrap_or(0.0);
     let text = out["result"].as_str().unwrap_or_default();
     let json_part = text
@@ -461,8 +466,8 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
 }
 
 fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path) -> Result<Row> {
-    let args = answer_args(arm, q, plan, projects, plan.out)?;
-    let (out, failed) = match session(cwd, &args, TIMEOUT) {
+    let args = answer_args(arm, plan, projects, plan.out)?;
+    let (out, failed) = match session(cwd, &prompt(q, projects), &args, TIMEOUT) {
         Ok(v) => (v, None),
         Err(e) => (Value::Null, Some(format!("{e:#}"))),
     };

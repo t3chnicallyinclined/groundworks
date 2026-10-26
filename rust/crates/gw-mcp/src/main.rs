@@ -179,6 +179,14 @@ enum Command {
     },
     /// Retrieval alone, no model: is every gold line ingested, and where does the ranked read put it?
     EvalRetrieval { file: std::path::PathBuf },
+    /// Router test, offline: can a cheap judge tell from the candidates alone that a question is
+    /// answerable? Labels come from the gold; no agent sessions.
+    EvalRouter {
+        set: std::path::PathBuf,
+        /// Also run the small-model (haiku) router, one call per question.
+        #[arg(long)]
+        haiku: bool,
+    },
     /// Summarise an eval run folder: rates with 95% intervals per arm, and the paired comparison.
     EvalReport { dir: std::path::PathBuf },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
@@ -514,6 +522,29 @@ async fn dispatch(command: Command) -> Result<bool> {
             )
         }
         Command::EvalReport { dir } => (gw_ops::eval_run::report(&dir)?, true),
+        Command::EvalRouter { set, haiku } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let out = gw_ops::eval_run::default_out(&set).with_file_name(format!(
+                "router-{}",
+                gw_ops::eval_run::default_out(&set)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ));
+            std::fs::create_dir_all(out.join("empty"))?;
+            let out = std::path::absolute(&out)?;
+            let cwd = out.join("empty");
+            let (text, rows) =
+                store::blocking(move || gw_ops::eval_router::run(&home, &store, &set, haiku, &cwd)).await?;
+            let mut f = String::new();
+            for r in &rows {
+                f.push_str(&serde_json::to_string(r)?);
+                f.push('\n');
+            }
+            std::fs::write(out.join("router.jsonl"), f)?;
+            (format!("{text}\nrows: {}", out.join("router.jsonl").display()), true)
+        }
         Command::EvalRetrieval { file } => {
             let store = open_store(&home).await?;
             (
