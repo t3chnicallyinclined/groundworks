@@ -263,6 +263,31 @@ pub fn check(candidates: &[Candidate], corpus_total: usize, now: &Now, read: &[u
         if !times_read.contains_key(&q.n) {
             errors.push(format!("quote {k} cites candidate {}, which was not read", q.n));
         }
+        // Lines named for the wrong candidate of the same file (the span next door) are taken from the
+        // candidate that holds them, and the report says so.
+        let c = match (q.lines, now.get(&c.key)) {
+            (Some([a, b]), Some((_, unit_text, _))) if span_text(unit_text, &c.locator, a, b).is_none() => {
+                let path = c.locator.rsplit_once("#L").map(|x| x.0);
+                let holder = candidates.iter().find(|o| {
+                    o.n != c.n
+                        && o.locator.rsplit_once("#L").map(|x| x.0) == path
+                        && now
+                            .get(&o.key)
+                            .is_some_and(|(_, t, _)| span_text(t, &o.locator, a, b).is_some())
+                });
+                match holder {
+                    Some(o) => {
+                        report.aligned.push(format!(
+                            "quote {k}: lines {a}-{b} are in candidate {} ({}), not {}; taken from there",
+                            o.n, o.locator, c.n
+                        ));
+                        o
+                    }
+                    None => c,
+                }
+            }
+            _ => c,
+        };
         let text = match (q.lines, now.get(&c.key)) {
             (Some([a, b]), Some((_, unit_text, _))) => match span_text(unit_text, &c.locator, a, b) {
                 Some(t) => normalize(&t),
@@ -409,7 +434,7 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
     found
         .hits
         .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-    found.hits.truncate(q.limit);
+    found.hits = with_slots(std::mem::take(&mut found.hits), q.limit);
     found
         .facts
         .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
@@ -421,6 +446,31 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
         .hits
         .retain(|h| !seen.contains(&(h.project.clone(), h.key.clone())));
     Ok(found)
+}
+
+/// At most this many places each project read is sure of, so a small project (the owner's notes, 800
+/// units) is not crowded out of the packet by a large one (a repo of 7,000). Measured 2026-10-26: the
+/// note answering mem-11 ranked first inside `memory` and never reached a packet of 20.
+pub const SLOTS_PER_PROJECT: usize = 3;
+
+/// `limit` hits from a list sorted best first: every project's top SLOTS_PER_PROJECT first (in score
+/// order), then the best of the rest.
+fn with_slots(sorted: Vec<Hit>, limit: usize) -> Vec<Hit> {
+    let mut per: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut sure, mut rest) = (Vec::new(), Vec::new());
+    for h in sorted {
+        let n = per.entry(h.project.clone()).or_default();
+        if *n < SLOTS_PER_PROJECT {
+            *n += 1;
+            sure.push(h);
+        } else {
+            rest.push(h);
+        }
+    }
+    sure.truncate(limit);
+    sure.extend(rest.into_iter().take(limit.saturating_sub(sure.len())));
+    sure.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    sure
 }
 
 /// "searched: a, b; skipped: c (private)": the line every read ends with, so a reader knows its reach.
@@ -857,6 +907,40 @@ mod tests {
         let a = align("one two three\nfour five six seven\neight", "four FIVE six, seven").unwrap();
         assert_eq!((a.first, a.last), (1, 1));
         assert!(align("one two three", "nine ten eleven").is_none());
+    }
+
+    #[test]
+    fn every_project_read_keeps_its_top_places() {
+        let hit = |project: &str, score: f64| Hit {
+            project: project.into(),
+            key: format!("{project}{score}"),
+            hash: String::new(),
+            locator: "f#L1-1".into(),
+            kind: None,
+            commit: None,
+            experts: vec![],
+            score: Some(score),
+            text: String::new(),
+            changed_at: None,
+            marked: None,
+            marks: vec![],
+            fact: None,
+            fact_grade: None,
+        };
+        let mut sorted: Vec<Hit> = (0..30).map(|i| hit("big", 100.0 - i as f64)).collect();
+        sorted.push(hit("notes", 5.0));
+        sorted.push(hit("notes", 4.0));
+        let out = with_slots(sorted, 20);
+        assert_eq!(out.len(), 20);
+        assert_eq!(
+            out.iter().filter(|h| h.project == "notes").count(),
+            2,
+            "both notes kept"
+        );
+        assert!(
+            out[0].score == Some(100.0) && out[19].score == Some(4.0),
+            "still best first"
+        );
     }
 
     #[test]

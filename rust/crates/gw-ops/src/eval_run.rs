@@ -366,14 +366,24 @@ fn grade(cwd: &Path, q: &Question, answer: &str, model: &str) -> Result<(Value, 
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let out = session(cwd, &grade_prompt(q, answer), &args, Duration::from_secs(300))?;
-    let cost = out["total_cost_usd"].as_f64().unwrap_or(0.0);
-    let text = out["result"].as_str().unwrap_or_default();
-    let json_part = text
-        .find('{')
-        .and_then(|a| text.rfind('}').map(|b| &text[a..=b]))
-        .context("the grader printed no JSON")?;
-    Ok((serde_json::from_str(json_part).context("the grader's JSON")?, cost))
+    // A grader that prints broken JSON gets one more go; its cost counts both times.
+    let mut cost = 0.0;
+    let mut last = None;
+    for _ in 0..2 {
+        let out = session(cwd, &grade_prompt(q, answer), &args, Duration::from_secs(300))?;
+        cost += out["total_cost_usd"].as_f64().unwrap_or(0.0);
+        let text = out["result"].as_str().unwrap_or_default();
+        let parsed = text
+            .find('{')
+            .and_then(|a| text.rfind('}').map(|b| &text[a..=b]))
+            .context("the grader printed no JSON")
+            .and_then(|j| serde_json::from_str::<Value>(j).context("the grader's JSON"));
+        match parsed {
+            Ok(v) => return Ok((v, cost)),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("the grader failed twice")))
 }
 
 /// Did the answer cite a gold file at (about) a gold line? Mechanical, so the grader cannot drift on it.
@@ -533,7 +543,7 @@ fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path, me
         .map(|c| {
             let text = c["result"].as_str().unwrap_or_default();
             let input = c["input"].to_string();
-            json!({"name": c["name"], "input": input.chars().take(300).collect::<String>(),
+            json!({"name": c["name"], "input": input.chars().take(if c["is_error"] == true { 2000 } else { 300 }).collect::<String>(),
                    "result_chars": text.chars().count(), "is_error": c["is_error"],
                    // A refusal's text is short and is the thing to study; results are otherwise not kept.
                    "refusal": if c["is_error"] == true { json!(text.chars().take(600).collect::<String>()) } else { Value::Null },
