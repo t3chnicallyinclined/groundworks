@@ -337,11 +337,16 @@ fn last_changed(project_dir: &Path) -> BTreeMap<String, String> {
 
 /// `modified:`, `date:` or `updated:` from a file's YAML frontmatter, when the value starts like a date.
 fn frontmatter_date(text: &str) -> Option<String> {
-    let front = text.strip_prefix("---")?.split_once("
----")?.0;
+    let front = text
+        .strip_prefix("---")?
+        .split_once(
+            "
+---",
+        )?
+        .0;
     for key in ["modified:", "date:", "updated:"] {
         if let Some(v) = front.lines().find_map(|l| l.trim().strip_prefix(key)) {
-            let v = v.trim().trim_matches(['"', ''']);
+            let v = v.trim().trim_matches(['"', '\'']);
             if v.len() >= 10 && v.as_bytes()[4] == b'-' && v.as_bytes()[7] == b'-' {
                 return Some(v.to_owned());
             }
