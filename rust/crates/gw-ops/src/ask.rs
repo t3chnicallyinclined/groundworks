@@ -49,14 +49,14 @@ pub struct Candidate {
 pub struct QuoteIn {
     /// The candidate number the quote comes from.
     pub n: usize,
-    /// Copied character for character from that candidate (whitespace may differ). Leave it empty and
-    /// give `lines` instead to have the program copy the text itself.
-    #[serde(default)]
-    pub quote: String,
-    /// The file lines of the quote, inclusive, as the candidate numbers them (e.g. [120, 122]); the quote
-    /// text is then taken from the candidate word for word, so nothing can be mistyped.
+    /// Preferred: the file lines of the quote, inclusive, as the candidate numbers them (e.g. [120, 122]).
+    /// The program copies those lines word for word, so nothing can be mistyped.
     #[serde(default)]
     pub lines: Option<[usize; 2]>,
+    /// Only when lines cannot be given: text copied character for character from the candidate
+    /// (whitespace may differ).
+    #[serde(default)]
+    pub quote: String,
     /// `support` (the answer rests on it) or `note` (it says something relevant). Default support.
     #[serde(rename = "use")]
     pub use_: Option<String>,

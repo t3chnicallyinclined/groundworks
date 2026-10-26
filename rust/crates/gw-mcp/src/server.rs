@@ -238,7 +238,8 @@ pub struct AnswerArgs {
     pub packet: String,
     /// The candidate numbers you read in full: all of them.
     pub read: Vec<usize>,
-    /// The answer, its quotes, gaps, and whether the candidates could answer it at all.
+    /// The answer, its quotes (each `{n, lines: [a, b], use}`; `quote` text only when lines cannot be
+    /// given), gaps, and whether the candidates could answer it at all.
     #[serde(flatten)]
     pub answer: gw_ops::ask::AnswerIn,
 }
@@ -520,7 +521,7 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Answer an ask packet. The check refuses: a candidate not read, a quote not found word for word (at least 3 words), a quote from a candidate not read or outside the packet, support from a unit that changed or left since retrieval. Reports corpus, retrieved, read and not read. FAIL is returned as an error."
+        description = "Answer an ask packet. Give each quote as a line range: {n, lines: [a, b]} using the file line numbers the candidate shows; the program copies the text, so it cannot be mistyped. The check refuses: a candidate not read, lines outside the candidate, a typed quote not found word for word, a quote from a candidate not read or outside the packet, support from a unit that changed or left since retrieval. A FAILED packet may be answered again. Pass record: true to keep a passed answer as a fact."
     )]
     async fn answer(&self, args: Parameters<AnswerArgs>) -> Result<String, String> {
         let a = args.0;

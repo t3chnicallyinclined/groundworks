@@ -201,6 +201,8 @@ enum Command {
         #[arg(long)]
         haiku: bool,
     },
+    /// Seed the journal from an approved set: gold answers become CONFIRMED facts with their gold quotes.
+    EvalSeed { set: std::path::PathBuf },
     /// Summarise an eval run folder: rates with 95% intervals per arm, and the paired comparison.
     EvalReport { dir: std::path::PathBuf },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
@@ -574,6 +576,14 @@ async fn dispatch(command: Command) -> Result<bool> {
             }
             std::fs::write(out.join("router.jsonl"), f)?;
             (format!("{text}\nrows: {}", out.join("router.jsonl").display()), true)
+        }
+        Command::EvalSeed { set } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            (
+                store::blocking(move || gw_ops::eval::seed(&home, &store, &set)).await?,
+                true,
+            )
         }
         Command::EvalRetrieval { file } => {
             let store = open_store(&home).await?;

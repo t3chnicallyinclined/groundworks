@@ -229,6 +229,78 @@ pub fn check(home: &Home, path: &Path) -> Result<(String, bool)> {
     Ok((out, bad == 0 && good > 0))
 }
 
+/// Seed the journal from an approved set: each non-trap question's gold answer becomes a CONFIRMED fact in
+/// the project that holds its first gold quote, with that quote (widened to whole file lines) as the
+/// evidence the store checks. Idempotent: a fact with the same text in that project is not written twice.
+pub fn seed(home: &Home, store: &crate::store::Store, path: &Path) -> Result<String> {
+    let registry = Registry::load(home)?;
+    let sha = &crate::store::sha256_hex(&[std::fs::read(path)?.as_slice()])[..12];
+    let (mut written, mut skipped, mut out) = (0, 0, String::new());
+    for (_, q) in load(path)? {
+        let Ok(q) = q else { continue };
+        let Some(g) = q.gold.first() else { continue };
+        let repo = g.repo.as_deref().unwrap_or(&q.project);
+        let project = registry.project(repo)?;
+        let dir = project.path(&home.workspace);
+        let file = g.file.replace('\\', "/");
+        let text = std::fs::read_to_string(dir.join(&file))
+            .with_context(|| format!("{}: reading {file}", q.id))?
+            .replace("\r\n", "\n");
+        let lines: Vec<&str> = text.lines().collect();
+        let want = normalize(&g.quote);
+        // The smallest run of whole lines around the stated line that holds the quote.
+        let mut found = None;
+        'outer: for width in 1..=4usize {
+            for start in g.line.saturating_sub(1 + WINDOW)..=(g.line + WINDOW).min(lines.len()) {
+                let end = start + width;
+                if start < lines.len() && end <= lines.len() && normalize(&lines[start..end].join(" ")).contains(&want)
+                {
+                    found = Some((start + 1, lines[start..end].join("\n")));
+                    break 'outer;
+                }
+            }
+        }
+        let Some((line, quote_text)) = found else {
+            writeln!(
+                out,
+                "{}: gold quote not found around {file}:{}; not seeded",
+                q.id, g.line
+            )?;
+            continue;
+        };
+        if store
+            .facts(&project.name, None, 2000)?
+            .iter()
+            .any(|f| f.text == q.gold_answer.trim())
+        {
+            skipped += 1;
+            continue;
+        }
+        let fact = crate::store::FactIn {
+            kind: crate::journal::Kind::Fact,
+            text: q.gold_answer.trim().to_owned(),
+            confidence: crate::journal::Confidence::Confirmed,
+            source: format!("owner-approved eval gold ({}, set {sha})", q.id),
+            by: "eval-gold".to_owned(),
+            receipt: None,
+            owner_statement: None,
+            quote: Some(crate::store::Quote {
+                file: file.clone(),
+                line,
+                text: quote_text,
+            }),
+            lens: None,
+            attacks: None,
+            stance: None,
+        };
+        let id = store.add_fact(&dir, &project.name, &fact)?;
+        writeln!(out, "{}: {id} in {} ({file}:{line})", q.id, project.name)?;
+        written += 1;
+    }
+    writeln!(out, "\n{written} fact(s) written, {skipped} already there")?;
+    Ok(out)
+}
+
 /// Retrieval alone, no model: for each question with gold, was every gold line ingested (a present unit
 /// covers it), and at what rank does the store's ranked read put a gold unit when the question itself is
 /// the query? Reports coverage, recall at 1, 5, 20 and 200, and the mean reciprocal rank.
