@@ -102,6 +102,9 @@ pub struct Row {
     pub saw_gold: bool,
     #[serde(default)]
     pub first_gold_call: Option<usize>,
+    /// A tool result showed a recorded fact (ask puts them first).
+    #[serde(default)]
+    pub saw_fact: bool,
     /// Every tool call: name, input (cut to 300 chars), size of the result, whether it named a gold file.
     #[serde(default)]
     pub calls: Vec<Value>,
@@ -536,12 +539,18 @@ fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path, me
         })
         .collect();
     let first_gold_call = calls.iter().position(|c| c["gold"] == true);
+    let saw_fact = out["_calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|c| c["result"].as_str().is_some_and(|t| t.contains("RECORDED FACT")));
     Ok(Row {
         id: q.id.clone(),
         arm: arm.to_owned(),
         category: q.category.clone(),
         project: q.project.clone(),
         saw_gold: first_gold_call.is_some(),
+        saw_fact,
         first_gold_call,
         calls,
         cites_gold: cites_gold(q, &answer),
@@ -645,6 +654,11 @@ pub fn report(out: &Path) -> Result<String> {
                 f.sort_unstable();
                 f.get(f.len() / 2).map_or("-".to_owned(), |x| x.to_string())
             }
+        )?;
+        writeln!(
+            s,
+            "- a recorded fact was among what it read: {}",
+            rate(count(&|r| r.saw_fact), n)
         )?;
         writeln!(
             s,
