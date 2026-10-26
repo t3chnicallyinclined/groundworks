@@ -926,6 +926,65 @@ impl Store {
         }
     }
 
+    /// The numbers a pulse takes from one project (no model, a few aggregate queries).
+    pub fn pulse_project(&self, project: &str) -> Result<crate::pulse::ProjectPulse> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "RETURN count(SELECT VALUE id FROM unit WHERE present = true AND kind != 'quote');\
+                 RETURN count(SELECT VALUE id FROM unit WHERE present = false);\
+                 RETURN count(SELECT VALUE id FROM fact WHERE status = 'live');\
+                 RETURN count(SELECT VALUE id FROM fact WHERE status = 'stale');\
+                 RETURN count(SELECT VALUE id FROM fact WHERE status != 'gone' AND grade = 'CONFIRMED');\
+                 RETURN count(SELECT VALUE id FROM fact WHERE status != 'gone' AND string::starts_with(source ?? '', 'ask_packet:'));\
+                 RETURN count(SELECT VALUE id FROM fact WHERE status != 'gone' AND attacks != NONE);\
+                 RETURN count(SELECT VALUE id FROM evidence);",
+                &serde_json::Map::new(),
+                Some(8),
+            )?)
+        })?;
+        let at = |i: usize| rows.get(i).and_then(Value::as_u64).unwrap_or(0);
+        Ok(crate::pulse::ProjectPulse {
+            units: at(0),
+            units_gone: at(1),
+            facts_live: at(2),
+            facts_stale: at(3),
+            facts_confirmed: at(4),
+            facts_from_asks: at(5),
+            attacks: at(6),
+            evidence_links: at(7),
+        })
+    }
+
+    /// Facts recorded from asks in the last `days`.
+    pub fn facts_from_asks_since(&self, project: &str, days: u64) -> Result<u64> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let vars = Vars::default().set("d", format!("{days}d"));
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "RETURN count(SELECT VALUE id FROM fact WHERE string::starts_with(source ?? '', 'ask_packet:') \
+                 AND at > time::now() - <duration>$d);",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_u64().unwrap_or(0))
+    }
+
+    /// Ask packets opened in the last `days`: status and candidates (fact or not).
+    pub fn ask_packets_since(&self, days: u64) -> Result<Vec<Value>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("d", format!("{days}d"));
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT status, candidates.*.fact AS facts, candidates FROM ask_packet WHERE at > time::now() - <duration>$d;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_array().cloned().unwrap_or_default())
+    }
+
     /// Record the expert directory in `global`: each expert's name, summary and definition file.
     pub fn upsert_experts(&self, experts: &[crate::intake::Expert]) -> Result<()> {
         let global = self.agent(GLOBAL_NS)?;

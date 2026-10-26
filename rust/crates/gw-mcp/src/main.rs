@@ -163,6 +163,12 @@ enum Command {
         #[arg(long, default_value_t = gw_ops::ask::DEFAULT_K)]
         k: usize,
     },
+    /// The pulse: is the knowledge growing, used, and holding up? A few store numbers, no model; one line
+    /// appended to metrics/pulse.jsonl so the trend is a file. `--history` prints the trend.
+    Pulse {
+        #[arg(long)]
+        history: bool,
+    },
     /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
     /// file of its project, every trap's premise absent.
     EvalCheck { file: std::path::PathBuf },
@@ -513,6 +519,21 @@ async fn dispatch(command: Command) -> Result<bool> {
                 store::blocking(move || ops::grep(&home, &store, project.as_deref(), &pattern, limit)).await?,
                 true,
             )
+        }
+        Command::Pulse { history } => {
+            if history {
+                (gw_ops::pulse::history(&home)?, true)
+            } else {
+                let store = open_store(&home).await?;
+                let home2 = Arc::clone(&home);
+                let text = store::blocking(move || {
+                    let p = gw_ops::pulse::take(&home2, &store)?;
+                    let path = gw_ops::pulse::record(&home2, &p)?;
+                    Ok(format!("{}recorded in {}", gw_ops::pulse::render(&p), path.display()))
+                })
+                .await?;
+                (text, true)
+            }
         }
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
         Command::EvalRun {

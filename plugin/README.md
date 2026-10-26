@@ -93,3 +93,10 @@ The server calls no model and holds no API key. Secrets are references (`env:`, 
 
 A project's registry file may list `related = ["tickets"]`: `ask` and `search` on it then read those projects
 too (private ones included, because you named them), and the result says which were searched.
+
+## Is the knowledge getting smarter?
+
+`groundworks pulse` takes a few numbers from the store with no model (facts live and stale, the share
+CONFIRMED, facts recorded from asks, attacks, units; asks in the last week and how many were served with a
+recorded fact among their candidates; live facts per thousand units) and appends one line to
+`metrics/pulse.jsonl` in the home. `groundworks pulse --history` prints the trend. Run it weekly.

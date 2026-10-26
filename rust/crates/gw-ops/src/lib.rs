@@ -14,6 +14,7 @@ pub mod knowledge;
 pub mod lens;
 pub mod ops;
 pub mod panel;
+pub mod pulse;
 pub mod registry;
 pub mod scaffold;
 pub mod scan;
