@@ -484,8 +484,8 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     );
     let (err, text) = s.call("answer", json!({"packet": packet, "read": all, "answer": "again"}))?;
     c.check(
-        "a passed packet is final",
-        err && text.contains("already passed"),
+        "a second answer after a pass repeats the verdict instead of failing",
+        !err && text.contains("already passed its check; the verdict stands"),
         &text,
     );
     let (_, text) = s.call(

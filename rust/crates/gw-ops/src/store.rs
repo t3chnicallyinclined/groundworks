@@ -1018,7 +1018,13 @@ pub struct Hit {
 
 /// The first line of a `path#Lstart-end` locator.
 pub fn first_line(locator: &str) -> Option<usize> {
-    locator.rsplit_once("#L")?.1.split('-').next()?.parse().ok()
+    line_range(locator).map(|r| r.0)
+}
+
+/// The `(start, end)` of a `path#Lstart-end` locator.
+pub fn line_range(locator: &str) -> Option<(usize, usize)> {
+    let (a, b) = locator.rsplit_once("#L")?.1.split_once('-')?;
+    Some((a.parse().ok()?, b.parse().ok()?))
 }
 
 /// A unit's text with its file line numbers (`120| ...`), so a reader can cite path:line without reopening

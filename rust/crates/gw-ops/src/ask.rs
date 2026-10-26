@@ -83,11 +83,20 @@ pub struct AnswerIn {
 
 /// Lines `a..=b` (file numbering) of a unit whose locator starts at some line, or None when outside it.
 fn span_text(unit_text: &str, locator: &str, a: usize, b: usize) -> Option<String> {
-    // A unit without file lines (a commit) counts its own lines from 1, as the reader saw them.
-    let start = store::first_line(locator).unwrap_or(1);
+    // A unit without file lines (a commit) counts its own lines from 1, as the reader saw them. The
+    // end comes from the locator: a trailing blank line is dropped by `lines()`, and a quote of the
+    // span's last line was refused for it (measured, eval v2 r5).
     let lines: Vec<&str> = unit_text.lines().collect();
-    let end = start + lines.len().checked_sub(1)?;
-    (a >= start && b >= a && b <= end).then(|| lines[a - start..=b - start].join("\n"))
+    let (start, end) = match store::line_range(locator) {
+        Some(r) => r,
+        None => (1, lines.len()),
+    };
+    (a >= start && b >= a && b <= end).then(|| {
+        (a..=b)
+            .map(|n| lines.get(n - start).copied().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
 }
 
 /// A quote's words must appear, in order, at this share of their count inside a span of the candidate for
@@ -605,6 +614,17 @@ pub fn answer(
     answer: &AnswerIn,
 ) -> Result<(String, bool)> {
     let packet = store.packet(packet_id)?;
+    if packet["status"] == "PASS" {
+        // Answering twice happens (to add record, or by habit); the verdict stands and is repeated.
+        let report = &packet["report"];
+        return Ok((
+            format!(
+                "{packet_id} already passed its check; the verdict stands: corpus {} | retrieved {} | read {} | not read {}. Open a new ask to answer again.\n",
+                report["corpus_total"], report["retrieved"], report["read"], report["not_read"]
+            ),
+            true,
+        ));
+    }
     let candidates: Vec<Candidate> = serde_json::from_value(packet["candidates"].clone())?;
     let corpus_total = packet["corpus_total"].as_u64().unwrap_or(0) as usize;
     let mut now = Now::new();
@@ -901,7 +921,7 @@ mod tests {
         by_lines.quotes.push(QuoteIn {
             n: 1,
             quote: String::new(),
-            lines: Some([1, 2]),
+            lines: Some([1, 1]),
             use_: None,
             why: None,
         });
@@ -978,6 +998,14 @@ mod tests {
             out[0].score == Some(100.0) && out[19].score == Some(4.0),
             "still best first"
         );
+    }
+
+    #[test]
+    fn the_last_line_of_a_span_is_quotable_even_when_blank() {
+        // Locator says 3 lines; the stored text lost its trailing blank line.
+        assert_eq!(span_text("a\nb", "f.md#L10-12", 12, 12).as_deref(), Some(""));
+        assert_eq!(span_text("a\nb", "f.md#L10-12", 11, 12).as_deref(), Some("b\n"));
+        assert_eq!(span_text("a\nb", "f.md#L10-12", 13, 13), None);
     }
 
     #[test]

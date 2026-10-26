@@ -15,6 +15,9 @@ When the user asks a question about a project (what, why, how many, which is cur
   search misses. Grep, Read and Glob on the working tree are for what was never ingested.
 - Read every candidate it returns; they are numbered and in full, with line numbers and the date its file
   last changed. Answer from them, citing path:line.
+- A `RECORDED FACT (CONFIRMED)` is an answer that was already checked against its evidence. Answer from
+  it. Disagree with it only when a candidate line supersedes it (a later retraction, a newer measurement,
+  a source of record), and then say that you are overriding a recorded fact and cite that line.
 - When two candidates give different values for the same thing, do not pick one. Name both with their
   dates, then look for the line that settles it (a retraction, "superseded", "stale", a source of record,
   a newer measurement), with `search` if it is not among the candidates, and say which is current and why.
