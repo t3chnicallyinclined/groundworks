@@ -535,6 +535,8 @@ fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path, me
             let input = c["input"].to_string();
             json!({"name": c["name"], "input": input.chars().take(300).collect::<String>(),
                    "result_chars": text.chars().count(), "is_error": c["is_error"],
+                   // A refusal's text is short and is the thing to study; results are otherwise not kept.
+                   "refusal": if c["is_error"] == true { json!(text.chars().take(600).collect::<String>()) } else { Value::Null },
                    "gold": !names.is_empty() && names.iter().any(|n| text.contains(n) || input.contains(n))})
         })
         .collect();
@@ -660,6 +662,47 @@ pub fn report(out: &Path) -> Result<String> {
             "- a recorded fact was among what it read: {}",
             rate(count(&|r| r.saw_fact), n)
         )?;
+        let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
+        for r in rs {
+            for c in r
+                .calls
+                .iter()
+                .filter(|c| c["name"] == "mcp__groundworks__answer" && c["is_error"] == true)
+            {
+                // The first rule named in the refusal, after the header line.
+                let why = c["refusal"]
+                    .as_str()
+                    .unwrap_or("")
+                    .lines()
+                    .nth(1)
+                    .unwrap_or("(no text)")
+                    .trim_start_matches("- ")
+                    .trim();
+                let key: String = why
+                    .split(':')
+                    .next()
+                    .unwrap_or(why)
+                    .split(" in ")
+                    .next()
+                    .unwrap_or(why)
+                    .chars()
+                    .take(60)
+                    .collect();
+                *refusals.entry(key).or_default() += 1;
+            }
+        }
+        if !refusals.is_empty() {
+            let mut v: Vec<_> = refusals.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            writeln!(
+                s,
+                "- answer refusals by first rule named: {}",
+                v.iter()
+                    .map(|(k, n)| format!("{n}x {k:?}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )?;
+        }
         writeln!(
             s,
             "- used a Groundworks tool: {}; tool calls {}; permission denials {}",
