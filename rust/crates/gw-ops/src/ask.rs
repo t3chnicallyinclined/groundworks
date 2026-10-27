@@ -488,42 +488,29 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
             Err(e) => found.skipped.push(format!("{name} ({e:#})")),
         }
     }
-    // One order over facts and hits by the packet's own words (a fact counts with its text and its
-    // evidence), the top `limit` shown, the facts among them first. A fact's evidence is shown once,
-    // as the fact. A fact that merely shares a word with the question no longer takes a place:
-    // measured 2026-10-26, facts about PGO, a row count and an ADC bench led a packet about a Pi 4
-    // crash loop, five of its places, because facts were matched on any word and always shown.
+    // Facts first (they take the first places of the packet, as the store ranks them), then the
+    // hits that fill the rest in the packet's own order over the whole read. A fact's evidence is
+    // shown once, as the fact.
+    //
+    // Facts were ranked with the hits for one day (2026-10-26/27, commit 0d58edf): a fact that
+    // merely shares a word with the question took a place (facts about PGO, a row count and an ADC
+    // bench led a packet about a Pi 4 crash loop). Ranked with the hits, the recorded facts that
+    // answer a question dropped out of most packets (ask-v2 r8: a session saw a recorded fact on
+    // 30 of 66 questions against 61 of 66 before), and the agents asked more and answered worse.
+    // The recorded fact is the checked answer; it goes first. Junk facts are a separate fix with
+    // its own measurement.
     found
         .facts
         .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
     let mut seen = std::collections::BTreeSet::new();
     found.facts.retain(|h| seen.insert((h.project.clone(), h.key.clone())));
+    found.facts.truncate(FACTS_K);
     found
         .hits
         .retain(|h| !seen.contains(&(h.project.clone(), h.key.clone())));
-    let n_facts = found.facts.len();
-    let mut all: Vec<Hit> = std::mem::take(&mut found.facts);
-    all.extend(std::mem::take(&mut found.hits));
-    let docs: Vec<String> = all
-        .iter()
-        .enumerate()
-        .map(|(i, h)| match (&h.fact, i < n_facts) {
-            (Some(fact), true) => format!("{fact}\n{}", h.text),
-            _ => h.text.clone(),
-        })
-        .collect();
-    let order = order_by_words(q.text, &docs);
-    let mut taken: Vec<Option<Hit>> = all.into_iter().map(Some).collect();
-    for i in order.into_iter().take(q.limit) {
-        let Some(h) = taken[i].take() else { continue };
-        if i < n_facts {
-            if found.facts.len() < FACTS_K {
-                found.facts.push(h);
-            }
-        } else {
-            found.hits.push(h);
-        }
-    }
+    let places = q.limit.saturating_sub(found.facts.len()).max(1);
+    found.hits = order_hits(q.text, std::mem::take(&mut found.hits));
+    found.hits.truncate(places);
     Ok(found)
 }
 
