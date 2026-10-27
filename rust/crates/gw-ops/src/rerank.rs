@@ -42,52 +42,114 @@ pub fn path_words(locator: &str, stem: bool) -> Vec<String> {
 /// BM25 of each document against the query, with document frequencies taken over these documents
 /// alone. A document is its bag of words.
 pub fn bm25(query: &[String], docs: &[Vec<String>]) -> Vec<f64> {
+    bm25_with(query, docs, B)
+}
+
+/// The distinct query terms, in order.
+fn terms(query: &[String]) -> Vec<&str> {
+    let mut seen: Vec<&str> = Vec::new();
+    for t in query {
+        if !seen.contains(&t.as_str()) {
+            seen.push(t);
+        }
+    }
+    seen
+}
+
+/// Document frequency of every word over `docs`, and the inverse document frequency of a term.
+fn idf_over(docs: &[Vec<String>]) -> impl Fn(&str) -> f64 + '_ {
+    let n = docs.len() as f64;
+    let mut df: HashMap<&str, usize> = HashMap::new();
+    for d in docs {
+        let mut seen: Vec<&str> = Vec::new();
+        for w in d {
+            if !seen.contains(&w.as_str()) {
+                seen.push(w);
+                *df.entry(w).or_default() += 1;
+            }
+        }
+    }
+    move |t: &str| {
+        let n_t = *df.get(t).unwrap_or(&0) as f64;
+        ((n - n_t + 0.5) / (n_t + 0.5) + 1.0).ln()
+    }
+}
+
+/// One bag's BM25 against the terms, given the idf, its length and the average length.
+fn score_bag(terms: &[&str], idf: &dyn Fn(&str) -> f64, bag: &HashMap<&str, usize>, len: f64, avg_len: f64, b: f64) -> f64 {
+    terms
+        .iter()
+        .filter_map(|t| {
+            let tf = *bag.get(t)? as f64;
+            let norm = tf + K1 * (1.0 - b + b * len / avg_len.max(1.0));
+            Some(idf(t) * tf * (K1 + 1.0) / norm)
+        })
+        .sum()
+}
+
+fn bag_of(doc: &[String]) -> HashMap<&str, usize> {
+    let mut bag: HashMap<&str, usize> = HashMap::new();
+    for w in doc {
+        *bag.entry(w.as_str()).or_default() += 1;
+    }
+    bag
+}
+
+/// BM25 with the length-normalisation constant `b` given (0: none; 1: full).
+pub fn bm25_with(query: &[String], docs: &[Vec<String>], b: f64) -> Vec<f64> {
     let n = docs.len();
     if n == 0 {
         return Vec::new();
     }
     let avg_len = docs.iter().map(Vec::len).sum::<usize>() as f64 / n as f64;
-    let mut df: HashMap<&str, usize> = HashMap::new();
-    let bags: Vec<HashMap<&str, usize>> = docs
+    let idf = idf_over(docs);
+    let terms = terms(query);
+    docs.iter()
+        .map(|doc| score_bag(&terms, &idf, &bag_of(doc), doc.len() as f64, avg_len, b))
+        .collect()
+}
+
+/// Lines of text in a scoring window, and the step between windows.
+pub const WINDOW_LINES: usize = 12;
+
+/// The best window of each text: BM25 of every `WINDOW_LINES`-line window (stepping half a
+/// window), with document frequencies over the whole texts and the average length over the
+/// windows, the text's score being its best window's. A long unit with the question's words
+/// scattered through it no longer outranks a short one that answers in one place.
+pub fn bm25_window(query: &[String], texts: &[&str]) -> Vec<f64> {
+    let docs: Vec<Vec<String>> = texts.iter().map(|t| words(t, false)).collect();
+    if docs.is_empty() {
+        return Vec::new();
+    }
+    let idf = idf_over(&docs);
+    let terms = terms(query);
+    let windows: Vec<Vec<Vec<String>>> = texts
         .iter()
-        .map(|d| {
-            let mut bag: HashMap<&str, usize> = HashMap::new();
-            for w in d {
-                *bag.entry(w.as_str()).or_default() += 1;
-            }
-            for w in bag.keys() {
-                *df.entry(w).or_default() += 1;
-            }
-            bag
-        })
-        .collect();
-    let mut seen: Vec<&str> = Vec::new();
-    let terms: Vec<&str> = query
-        .iter()
-        .map(String::as_str)
-        .filter(|t| {
-            if seen.contains(t) {
-                false
+        .map(|t| {
+            let lines: Vec<&str> = t.lines().collect();
+            let step = (WINDOW_LINES / 2).max(1);
+            let starts: Vec<usize> = if lines.len() <= WINDOW_LINES {
+                vec![0]
             } else {
-                seen.push(t);
-                true
-            }
+                (0..=lines.len() - WINDOW_LINES).step_by(step).collect()
+            };
+            starts
+                .into_iter()
+                .map(|s| words(&lines[s..(s + WINDOW_LINES).min(lines.len())].join("\n"), false))
+                .collect()
         })
         .collect();
-    bags.iter()
-        .zip(docs)
-        .map(|(bag, doc)| {
-            let len = doc.len() as f64;
-            terms
-                .iter()
-                .filter_map(|t| {
-                    let tf = *bag.get(t)? as f64;
-                    let n_t = *df.get(t).unwrap_or(&0) as f64;
-                    let idf = ((n as f64 - n_t + 0.5) / (n_t + 0.5) + 1.0).ln();
-                    let norm = tf + K1 * (1.0 - B + B * len / avg_len.max(1.0));
-                    Some(idf * tf * (K1 + 1.0) / norm)
-                })
-                .sum()
+    let (sum, count) = windows
+        .iter()
+        .flatten()
+        .fold((0usize, 0usize), |(s, c), w| (s + w.len(), c + 1));
+    let avg_len = sum as f64 / count.max(1) as f64;
+    windows
+        .iter()
+        .map(|ws| {
+            ws.iter()
+                .map(|w| score_bag(&terms, &idf, &bag_of(w), w.len() as f64, avg_len, B))
+                .fold(0.0f64, f64::max)
         })
         .collect()
 }
@@ -113,13 +175,17 @@ pub fn rrf(orders: &[Vec<usize>], k: f64) -> Vec<usize> {
     order_desc(&score)
 }
 
-/// The arms of the retrieval ladder, in the order they are reported.
-pub const ARMS: [&str; 7] = [
+/// The arms of the retrieval ladder, in the order they are reported. The first is the baseline the
+/// paired tests run against: the store's merged scores, the order ask shipped until 2026-10-26.
+pub const ARMS: [&str; 10] = [
     "store",
     "bm25",
+    "bm25-b1",
+    "bm25-window",
     "bm25-stem",
     "bm25-fields",
     "rrf",
+    "rrf-window",
     "own-first",
     "rrf-own-bm25",
 ];
@@ -164,17 +230,23 @@ pub fn ladder_orders(question: &str, pool: &Pool<'_>) -> Vec<(&'static str, Vec<
         .collect();
     let store: Vec<usize> = (0..texts.len()).collect();
     let bm25_plain = order_desc(&bm25(&plain_q, &plain_docs));
+    let bm25_b1 = order_desc(&bm25_with(&plain_q, &plain_docs, 1.0));
+    let window = order_desc(&bm25_window(&plain_q, texts));
     let bm25_stem = order_desc(&bm25(&stem_q, &stem_docs));
     let bm25_fields = order_desc(&bm25(&stem_q, &field_docs));
     let fused = rrf(&[store.clone(), bm25_stem.clone()], RRF_K);
+    let fused_window = rrf(&[bm25_plain.clone(), window.clone()], RRF_K);
     let own = own_first(pool);
     let own_bm25 = rrf(&[own.clone(), bm25_plain.clone()], RRF_K);
     vec![
         ("store", store),
         ("bm25", bm25_plain),
+        ("bm25-b1", bm25_b1),
+        ("bm25-window", window),
         ("bm25-stem", bm25_stem),
         ("bm25-fields", bm25_fields),
         ("rrf", fused),
+        ("rrf-window", fused_window),
         ("own-first", own),
         ("rrf-own-bm25", own_bm25),
     ]
@@ -234,7 +306,25 @@ mod tests {
         }
         assert_eq!(orders[0].1, [0, 1, 2], "store keeps the given order");
         assert_eq!(orders[1].1[0], 1, "plain bm25 finds the exact words");
-        assert_eq!(orders[2].1[0], 1, "stemmed too");
+        assert_eq!(orders[4].1[0], 1, "stemmed too");
         assert_eq!(own_first(&pool), [1, 0, 2], "own project first, then the rest by their own rank");
+    }
+
+    #[test]
+    fn the_best_window_beats_breadth() {
+        // A long unit with the words scattered, against a short one that answers in one place.
+        let scattered = format!(
+            "the save set\n{}\nrollback\n{}\nbytes restored\n{}\n277,288",
+            "filler line\n".repeat(20),
+            "filler line\n".repeat(20),
+            "filler line\n".repeat(20)
+        );
+        let texts = [scattered.as_str(), "the save set is 277,288 bytes, every rollback restores it"];
+        let q = words("how many bytes is the save set a rollback restores", false);
+        let whole = bm25(&q, &texts.iter().map(|t| words(t, false)).collect::<Vec<_>>());
+        let window = bm25_window(&q, &texts);
+        assert!(window[1] > window[0], "{window:?}");
+        assert!(whole[1] > whole[0] || whole[0] > 0.0, "{whole:?}");
+        assert_eq!(bm25_window(&q, &[]), Vec::<f64>::new());
     }
 }

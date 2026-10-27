@@ -384,6 +384,11 @@ pub struct LadderRow {
     /// Bytes of candidate text in each arm's top 10 and top 20.
     pub bytes_10: BTreeMap<String, usize>,
     pub bytes_20: BTreeMap<String, usize>,
+    /// The store arm's top-20 bytes: the packet's cost today. Per arm, whether a gold unit is
+    /// among the candidates that fit in that many bytes taken in the arm's order (the same token
+    /// cost as today's packet).
+    pub budget_bytes: usize,
+    pub in_budget: BTreeMap<String, bool>,
     /// Each arm's top five as `project:locator (kind, bytes)`, with `*` on a gold unit: what sits
     /// above the gold when it is not first.
     pub top5: BTreeMap<String, Vec<String>>,
@@ -437,7 +442,9 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                 union.iter().map(|(h, r)| (key(h), *r)).collect();
             let mut by_score: Vec<crate::store::Hit> = union.into_iter().map(|(h, _)| h).collect();
             by_score.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-            let pool = crate::ask::order_hits(&q.question, by_score);
+            // The pool's own order is the store's merged scores (the order ask shipped until
+            // 2026-10-26, the ladder's baseline); the shipped order is the `bm25` arm.
+            let pool = by_score;
             let texts: Vec<&str> = pool.iter().map(|h| h.text.as_str()).collect();
             let locators: Vec<&str> = pool.iter().map(|h| h.locator.as_str()).collect();
             let projects: Vec<&str> = pool.iter().map(|h| h.project.as_str()).collect();
@@ -464,14 +471,29 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                     h.text.len()
                 )
             };
-            let (mut ranks, mut bytes_10, mut bytes_20, mut top5) =
-                (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+            let (mut ranks, mut bytes_10, mut bytes_20, mut top5, mut in_budget) =
+                (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+            let budget_bytes: usize = texts.iter().take(20).map(|t| t.len()).sum();
             for (arm, order) in crate::rerank::ladder_orders(&q.question, &arms_pool) {
                 ranks.insert(arm.to_owned(), order.iter().position(|&i| is_gold[i]).map(|p| p + 1));
                 let bytes = |k: usize| order.iter().take(k).map(|&i| texts[i].len()).sum::<usize>();
                 bytes_10.insert(arm.to_owned(), bytes(10));
                 bytes_20.insert(arm.to_owned(), bytes(20));
                 top5.insert(arm.to_owned(), order.iter().take(5).map(|&i| label(i)).collect());
+                let mut used = 0usize;
+                let mut hit = false;
+                for &i in &order {
+                    used += texts[i].len();
+                    // The first candidate always fits, as it does in a real packet.
+                    if used > budget_bytes && used != texts[i].len() {
+                        break;
+                    }
+                    if is_gold[i] {
+                        hit = true;
+                        break;
+                    }
+                }
+                in_budget.insert(arm.to_owned(), hit);
             }
             let gold_in: Vec<String> = (0..pool.len()).filter(|&i| is_gold[i]).map(label).collect();
             rows.push(LadderRow {
@@ -488,6 +510,8 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                 bytes_20,
                 top5,
                 gold_in,
+                budget_bytes,
+                in_budget,
             });
         }
     }
@@ -540,7 +564,7 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
         );
         let _ = writeln!(
             out,
-            "| arm | gold at 1 (95% CI) | top 5 | top 10 | top 20 | MRR | vs store: wins/losses, p | tokens top 10 | tokens top 20 |\n|---|---|---|---|---|---|---|---|---|"
+            "| arm | gold at 1 (95% CI) | top 5 | top 10 | top 20 | in today's bytes | MRR | vs store: wins/losses, p | tokens top 10 | tokens top 20 |\n|---|---|---|---|---|---|---|---|---|---|"
         );
         let rank_of = |r: &LadderRow, arm: &str| r.ranks.get(arm).copied().flatten().unwrap_or(depth + 1);
         for arm in ARMS {
@@ -556,9 +580,13 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
             };
             let t10 = tokens(&|r| r.bytes_10.get(arm).copied().unwrap_or(0));
             let t20 = tokens(&|r| r.bytes_20.get(arm).copied().unwrap_or(0));
+            let in_budget = in_scope
+                .iter()
+                .filter(|r| r.in_budget.get(arm).copied().unwrap_or(false))
+                .count();
             let _ = writeln!(
                 out,
-                "| {arm} | {}/{n} ({:.0}%, {:.0}-{:.0}) | {} | {} | {} | {mrr:.3} | {} | {t10:.0} | {t20:.0} |",
+                "| {arm} | {}/{n} ({:.0}%, {:.0}-{:.0}) | {} | {} | {} | {in_budget} | {mrr:.3} | {} | {t10:.0} | {t20:.0} |",
                 at(1),
                 100.0 * at(1) as f64 / n as f64,
                 100.0 * lo,
