@@ -24,7 +24,10 @@ pub const TASK_NAME: &str = "Groundworks store";
 /// counts it). `surreal` names the binary when the caller cannot rely on PATH.
 pub fn open_store(home: &Home, surreal: Option<PathBuf>) -> Result<Store> {
     let launcher = Launcher::for_home(home)?.with_binary(surreal);
-    Ok(Store::with_launcher_lazy(launcher, &crate::store::read_secret(home, "agent")?))
+    Ok(Store::with_launcher_lazy(
+        launcher,
+        &crate::store::read_secret(home, "agent")?,
+    ))
 }
 
 /// The supervisor's log, beside the server's own log under the data directory.
@@ -100,7 +103,14 @@ pub fn uninstall_task() -> Result<String> {
 
 fn powershell(script: &str) -> Result<String> {
     let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .stdin(Stdio::null())
         .output()
         .context("running powershell.exe")?;
@@ -149,11 +159,13 @@ impl Log {
         if std::fs::metadata(&self.path).map_or(0, |m| m.len()) > 2 * 1024 * 1024 {
             let _ = std::fs::rename(&self.path, self.path.with_extension("log.1"));
         }
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        writeln!(f, "{} [{}] {text}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"), self.machine)?;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.path)?;
+        writeln!(
+            f,
+            "{} [{}] {text}",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"),
+            self.machine
+        )?;
         Ok(())
     }
 }
@@ -253,7 +265,16 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for ns in store.namespaces()? {
         let output = Command::new(&binary)
-            .args(["export", "--endpoint", &base, "--namespace", &ns, "--database", gw_store::DB_NAME, "-"])
+            .args([
+                "export",
+                "--endpoint",
+                &base,
+                "--namespace",
+                &ns,
+                "--database",
+                gw_store::DB_NAME,
+                "-",
+            ])
             .env("SURREAL_USER", "root")
             .env("SURREAL_PASS", store.root_pass())
             .stdin(Stdio::null())

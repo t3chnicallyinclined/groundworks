@@ -155,8 +155,14 @@ mod tests {
 
     #[test]
     fn words_split_lowercase_and_stem_like_the_store() {
-        assert_eq!(words("Rollback re-simulates Frames!", false), ["rollback", "re", "simulates", "frames"]);
-        assert_eq!(words("Rollback re-simulates Frames!", true), ["rollback", "re", "simul", "frame"]);
+        assert_eq!(
+            words("Rollback re-simulates Frames!", false),
+            ["rollback", "re", "simulates", "frames"]
+        );
+        assert_eq!(
+            words("Rollback re-simulates Frames!", true),
+            ["rollback", "re", "simul", "frame"]
+        );
         assert_eq!(path_words("src/net_sim.rs#L10-20", false), ["src", "net_sim", "rs"]);
     }
 

@@ -816,7 +816,10 @@ async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
             let home = Arc::clone(home);
             store::blocking(move || ops::import_journals(&home, &store)).await
         }
-        StoreAction::Supervise { .. } | StoreAction::Export { .. } | StoreAction::Install { .. } | StoreAction::Uninstall => {
+        StoreAction::Supervise { .. }
+        | StoreAction::Export { .. }
+        | StoreAction::Install { .. }
+        | StoreAction::Uninstall => {
             unreachable!("handled by store_service before home discovery")
         }
     }

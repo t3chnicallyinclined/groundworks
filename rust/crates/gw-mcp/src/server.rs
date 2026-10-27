@@ -271,6 +271,13 @@ impl Groundworks {
         let home = Arc::clone(&self.home);
         let store = Arc::new(store::blocking(move || Store::open(&home)).await.map_err(fail)?);
         *slot = Some(Arc::clone(&store));
+        // Knowledge is refreshed in the background once per server: every project on this machine
+        // whose tree changed since its last intake, and a pulse when the last one is a day old.
+        let (home, bg) = (Arc::clone(&self.home), Arc::clone(&store));
+        tokio::task::spawn_blocking(move || {
+            let report = gw_ops::fresh::refresh_all(&home, &bg);
+            tracing::info!("{report}");
+        });
         Ok(store)
     }
 }
@@ -468,8 +475,9 @@ impl Groundworks {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
         store::blocking(move || {
+            let fresh = gw_ops::fresh::ensure_reach_fresh(&home, &store, a.project.as_deref());
             let kinds = a.kinds.unwrap_or_default();
-            ops::search(
+            let text = ops::search(
                 &home,
                 &store,
                 gw_ops::ask::Query {
@@ -479,7 +487,8 @@ impl Groundworks {
                     kinds: &kinds,
                     limit: a.limit.unwrap_or(10),
                 },
-            )
+            )?;
+            Ok(format!("{}{text}", gw_ops::fresh::note(&fresh)))
         })
         .await
         .map_err(fail)
@@ -491,9 +500,13 @@ impl Groundworks {
     async fn grep(&self, args: Parameters<GrepArgs>) -> Result<String, String> {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
-        store::blocking(move || ops::grep(&home, &store, a.project.as_deref(), &a.pattern, a.limit.unwrap_or(20)))
-            .await
-            .map_err(fail)
+        store::blocking(move || {
+            let fresh = gw_ops::fresh::ensure_reach_fresh(&home, &store, a.project.as_deref());
+            let text = ops::grep(&home, &store, a.project.as_deref(), &a.pattern, a.limit.unwrap_or(20))?;
+            Ok(format!("{}{text}", gw_ops::fresh::note(&fresh)))
+        })
+        .await
+        .map_err(fail)
     }
 
     #[tool(
@@ -503,6 +516,7 @@ impl Groundworks {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
         store::blocking(move || {
+            let fresh = gw_ops::fresh::ensure_reach_fresh(&home, &store, a.project.as_deref());
             let kinds = a.kinds.unwrap_or_default();
             let q = gw_ops::ask::Query {
                 text: a.question.as_deref().unwrap_or_default(),
@@ -511,10 +525,11 @@ impl Groundworks {
                 kinds: &kinds,
                 limit: a.k.unwrap_or(gw_ops::ask::DEFAULT_K),
             };
-            match a.lens.as_deref() {
+            let text = match a.lens.as_deref() {
                 Some(lens) => gw_ops::lens::ask(&home, &store, lens, a.question.as_deref(), q),
                 None => gw_ops::ask::open(&home, &store, q, a.by.as_deref().unwrap_or("agent")),
-            }
+            }?;
+            Ok(format!("{}{text}", gw_ops::fresh::note(&fresh)))
         })
         .await
         .map_err(fail)

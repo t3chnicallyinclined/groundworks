@@ -198,7 +198,7 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
     git(&["commit", "-q", "-m", "initial import of the demo"])?;
     // Never committed: the doc is read, the code is not.
     std::fs::write(
-        workspace.join("demo/docs/LATE-NOTE.md"),
+        base.join("work/demo/docs/LATE-NOTE.md"),
         "# Late note\n\nThe zephyr flag is unsafe; nobody committed this.\n",
     )?;
     std::fs::write(workspace.join("demo/scratch.rs"), "fn zephyr_scratch() {}\n")?;
@@ -428,6 +428,23 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         &text,
     );
     let (err, text) = s.call("search", json!({"query": "zephyr", "project": "demo"}))?;
+    // Nobody calls intake: the next read notices the tree changed and ingests first.
+    std::fs::write(
+        base.join("work/demo/docs/LATE-NOTE.md"),
+        "# Late note\n\nThe zephyr flag is unsafe; nobody committed this.\nThe quokka setting was added later.\n",
+    )?;
+    let (err, text) = s.call("search", json!({"query": "quokka", "project": "demo"}))?;
+    c.check(
+        "a read refreshes a project whose tree changed since its last intake, and says so",
+        !err && text.starts_with("refreshed before reading: demo") && text.contains("LATE-NOTE.md"),
+        &text,
+    );
+    let (err, text) = s.call("search", json!({"query": "quokka", "project": "demo"}))?;
+    c.check(
+        "an unchanged tree is not refreshed again",
+        !err && !text.contains("refreshed before reading"),
+        &text,
+    );
     c.check(
         "an untracked doc is ingested, with no commit; untracked code is not",
         !err && text
@@ -745,7 +762,16 @@ fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
     std::fs::write(home.join("secrets/agent.pass"), AGENT_PASS)?;
     let log = home.join("db/supervisor.log");
     let mut sup = Command::new(exe)
-        .args(["store", "supervise", "--poll-ms", "200", "--no-export", "--exit-after-starts", "2", "--home"])
+        .args([
+            "store",
+            "supervise",
+            "--poll-ms",
+            "200",
+            "--no-export",
+            "--exit-after-starts",
+            "2",
+            "--home",
+        ])
         .arg(&home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -770,7 +796,10 @@ fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
         }
         until()
     };
-    let started = wait(&|| gw_store::healthy(&url) && pids(&log).len() == 1, Duration::from_secs(25));
+    let started = wait(
+        &|| gw_store::healthy(&url) && pids(&log).len() == 1,
+        Duration::from_secs(25),
+    );
     let first = pids(&log);
     c.check(
         "the supervisor starts a store for a home with none",
@@ -781,7 +810,11 @@ fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
     if let Some(&pid) = first.first() {
         kill_pid(pid);
         let down = wait(&|| !gw_store::healthy(&url), Duration::from_secs(10));
-        restarted = down && wait(&|| gw_store::healthy(&url) && pids(&log).len() == 2, Duration::from_secs(25));
+        restarted = down
+            && wait(
+                &|| gw_store::healthy(&url) && pids(&log).len() == 2,
+                Duration::from_secs(25),
+            );
     }
     c.check(
         "the supervisor starts it again after it is killed",

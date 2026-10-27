@@ -100,3 +100,12 @@ too (private ones included, because you named them), and the result says which w
 CONFIRMED, facts recorded from asks, attacks, units; asks in the last week and how many were served with a
 recorded fact among their candidates; live facts per thousand units) and appends one line to
 `metrics/pulse.jsonl` in the home. `groundworks pulse --history` prints the trend. Run it weekly.
+
+## When is knowledge ingested?
+
+Automatically. Before `ask`, `grep` or `search` reads a project, Groundworks fingerprints its working tree
+(HEAD, `git status`, the times of the files status names); if it changed since the last intake, the project
+is ingested first (about a second after a small edit) and the result starts with `refreshed before reading:`.
+When a session's server first opens the store, every project on the machine is refreshed in the background
+and a pulse is taken if the last one is over a day old. `GROUNDWORKS_NO_REFRESH=1` turns this off (an eval
+run needs a store that does not move). `groundworks intake` still works for an explicit full pass.

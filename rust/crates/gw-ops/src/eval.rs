@@ -393,7 +393,12 @@ pub const BYTES_PER_TOKEN: f64 = 2.98;
 /// unit, the reach's merged read at `depth` (facts excluded) is reordered by each arm of
 /// `rerank::ladder_orders`, and the best gold's rank under each is recorded. Returns the report
 /// and the rows.
-pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathBuf], depth: usize) -> Result<(String, Vec<LadderRow>)> {
+pub fn ladder(
+    home: &Home,
+    store: &crate::store::Store,
+    sets: &[std::path::PathBuf],
+    depth: usize,
+) -> Result<(String, Vec<LadderRow>)> {
     let machine = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_owned());
@@ -481,7 +486,12 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
     use crate::eval_run::wilson;
     use crate::rerank::ARMS;
     let mut out = String::new();
-    let mut scopes: Vec<String> = rows.iter().map(|r| r.set.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+    let mut scopes: Vec<String> = rows
+        .iter()
+        .map(|r| r.set.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     scopes.push("all".to_owned());
     let machine = rows.first().map_or("unknown", |r| r.machine.as_str());
     let _ = writeln!(
@@ -539,11 +549,22 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
         out.push('\n');
     }
     let _ = writeln!(out, "## Per question (best gold rank per arm; - = not in the pool)\n");
-    let _ = writeln!(out, "| id | set | {} |\n|---|---|{}", ARMS.join(" | "), "---|".repeat(ARMS.len()));
+    let _ = writeln!(
+        out,
+        "| id | set | {} |\n|---|---|{}",
+        ARMS.join(" | "),
+        "---|".repeat(ARMS.len())
+    );
     for r in rows {
         let cells: Vec<String> = ARMS
             .iter()
-            .map(|a| r.ranks.get(*a).copied().flatten().map_or("-".to_owned(), |k| k.to_string()))
+            .map(|a| {
+                r.ranks
+                    .get(*a)
+                    .copied()
+                    .flatten()
+                    .map_or("-".to_owned(), |k| k.to_string())
+            })
             .collect();
         let _ = writeln!(out, "| {} | {} | {} |", r.id, r.set, cells.join(" | "));
     }

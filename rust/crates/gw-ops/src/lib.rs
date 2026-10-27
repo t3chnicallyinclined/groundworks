@@ -7,6 +7,7 @@ pub mod eval;
 pub mod eval_router;
 pub mod eval_run;
 pub mod exec;
+pub mod fresh;
 pub mod home;
 pub mod intake;
 pub mod journal;
