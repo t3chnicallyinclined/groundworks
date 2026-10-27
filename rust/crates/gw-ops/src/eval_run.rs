@@ -437,10 +437,15 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
         cwd.display()
     );
     let home_path = home.root.display().to_string().replace('\\', "/");
+    // The sessions' server: the installed `groundworks` unless GROUNDWORKS_EVAL_EXE names a
+    // candidate binary, so a change can be measured before it is installed for every session.
+    let exe = std::env::var("GROUNDWORKS_EVAL_EXE")
+        .map(|p| p.replace('\\', "/"))
+        .unwrap_or_else(|_| "groundworks".to_owned());
     std::fs::write(
         plan.out.join("mcp-groundworks.json"),
         serde_json::to_string_pretty(&json!({"mcpServers": {"groundworks": {
-            "command": "groundworks", "args": ["serve"],
+            "command": exe, "args": ["serve"],
             "env": if plan.record { json!({"GROUNDWORKS_HOME": home_path}) } else { json!({"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_RECORD": "1"}) }}}}))?,
     )?;
     let set_sha = sha256_hex(&[std::fs::read(plan.set)?.as_slice()]);
@@ -453,6 +458,9 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
                 "grader_model": plan.grader_model, "arms": plan.arms, "budget_usd": plan.budget_usd,
                 "started_at": now(), "machine": crate::home::machine(),
                 "claude_version": Command::new("claude").arg("--version").output().ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()),
+                "groundworks_exe": exe,
+                "groundworks_version": Command::new(&exe).arg("--version").output().ok()
                     .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()),
             }))?,
         )?;
