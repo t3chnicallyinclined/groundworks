@@ -87,8 +87,19 @@ pub fn fingerprint(dir: &Path) -> Option<String> {
     Some(sha256_hex(&[parts.join("\n").as_bytes()]))
 }
 
+/// The supervisor exports every namespace with `surreal export` once a day (03:30 local by default); an
+/// intake in that window would hand the export a half-written project. No refresh runs in it.
+pub const EXPORT_WINDOW: (u32, u32, u32) = (3, 25, 45);
+
+fn in_export_window() -> bool {
+    use chrono::Timelike as _;
+    let now = chrono::Local::now();
+    let (h, from, to) = EXPORT_WINDOW;
+    now.hour() == h && (from..=to).contains(&now.minute())
+}
+
 fn off() -> bool {
-    std::env::var_os(ENV_OFF).is_some()
+    std::env::var_os(ENV_OFF).is_some() || in_export_window()
 }
 
 /// Ingest `names` whose working tree changed since their last intake; returns the names refreshed and
@@ -159,6 +170,12 @@ pub fn note(refreshed: &(Vec<String>, Vec<String>)) -> String {
 /// Every registered project on this machine, refreshed; then a pulse if the last one is over a day
 /// old. Meant for a background task at the server's first store open; returns a short report.
 pub fn refresh_all(home: &Home, store: &Store) -> String {
+    if in_export_window() {
+        return format!(
+            "refresh skipped: inside the supervisor's export window ({:02}:{:02}-{:02}:{:02} local)",
+            EXPORT_WINDOW.0, EXPORT_WINDOW.1, EXPORT_WINDOW.0, EXPORT_WINDOW.2
+        );
+    }
     if off() {
         return "refresh off".into();
     }
