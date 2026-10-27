@@ -81,6 +81,12 @@ impl Home {
                 })?
             }
         };
+        Self::open(&root)
+    }
+
+    /// The home at `root` (a folder holding `groundworks.toml`), with no discovery.
+    pub fn open(root: &Path) -> Result<Self> {
+        let root = root.to_path_buf();
         let config_path = root.join("groundworks.toml");
         let text = std::fs::read_to_string(&config_path).with_context(|| {
             format!(

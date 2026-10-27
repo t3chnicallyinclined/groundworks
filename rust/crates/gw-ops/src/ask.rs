@@ -506,7 +506,7 @@ pub const SLOTS_PER_PROJECT: usize = 3;
 
 /// `limit` hits from a list sorted best first: every project's top SLOTS_PER_PROJECT first (in score
 /// order), then the best of the rest.
-fn with_slots(sorted: Vec<Hit>, limit: usize) -> Vec<Hit> {
+pub(crate) fn with_slots(sorted: Vec<Hit>, limit: usize) -> Vec<Hit> {
     let mut per: BTreeMap<String, usize> = BTreeMap::new();
     let (mut sure, mut rest) = (Vec::new(), Vec::new());
     for h in sorted {

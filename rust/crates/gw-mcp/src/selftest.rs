@@ -693,6 +693,22 @@ the parser now accepts empty input
     drop(h);
     let _ = std::fs::remove_dir_all(&empty);
 
+    // The export: every namespace of the throwaway, as a gzipped file each.
+    let backups = base.join("backup");
+    let exported = gw_ops::supervise::export(&owner, &backups, 7);
+    let namespaces = owner.namespaces().unwrap_or_default();
+    c.check(
+        "store export writes one gzipped file per namespace",
+        exported.as_ref().is_ok_and(|files| {
+            files.len() == namespaces.len()
+                && !files.is_empty()
+                && files.iter().all(|f| std::fs::metadata(f).is_ok_and(|m| m.len() > 20))
+        }),
+        &format!("{exported:?} for namespaces {namespaces:?}"),
+    );
+
+    supervisor_checks(exe, base, &mut c)?;
+
     let total = c
         .lines
         .iter()
@@ -705,6 +721,100 @@ the parser now accepts empty input
     };
     c.lines.push(summary);
     Ok((c.lines.join("\n"), c.failed))
+}
+
+/// The supervisor, on a second throwaway home with no server: it starts one, and when that one is
+/// killed it starts another. Every process it started is killed here before returning.
+fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
+    use std::time::{Duration, Instant};
+    let home = base.join("sup-home");
+    let workspace = base.join("sup-work");
+    for dir in [home.join("secrets"), home.join("registry/projects"), workspace.clone()] {
+        std::fs::create_dir_all(dir)?;
+    }
+    let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+    let url = format!("http://127.0.0.1:{port}/sql");
+    std::fs::write(
+        home.join("groundworks.toml"),
+        format!(
+            "workspace = \"{}\"\n\n[store]\nurl = \"{url}\"\n",
+            workspace.display().to_string().replace('\\', "/")
+        ),
+    )?;
+    std::fs::write(home.join("secrets/root.pass"), ROOT_PASS)?;
+    std::fs::write(home.join("secrets/agent.pass"), AGENT_PASS)?;
+    let log = home.join("db/supervisor.log");
+    let mut sup = Command::new(exe)
+        .args(["store", "supervise", "--poll-ms", "200", "--no-export", "--exit-after-starts", "2", "--home"])
+        .arg(&home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("starting the supervisor")?;
+    let pids = |log: &Path| -> Vec<u32> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split("started surreal pid ").nth(1))
+            .filter_map(|rest| rest.split_whitespace().next()?.parse().ok())
+            .collect()
+    };
+    let wait = |until: &dyn Fn() -> bool, limit: Duration| {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if until() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        until()
+    };
+    let started = wait(&|| gw_store::healthy(&url) && pids(&log).len() == 1, Duration::from_secs(25));
+    let first = pids(&log);
+    c.check(
+        "the supervisor starts a store for a home with none",
+        started && first.len() == 1,
+        &std::fs::read_to_string(&log).unwrap_or_default(),
+    );
+    let mut restarted = false;
+    if let Some(&pid) = first.first() {
+        kill_pid(pid);
+        let down = wait(&|| !gw_store::healthy(&url), Duration::from_secs(10));
+        restarted = down && wait(&|| gw_store::healthy(&url) && pids(&log).len() == 2, Duration::from_secs(25));
+    }
+    c.check(
+        "the supervisor starts it again after it is killed",
+        restarted,
+        &std::fs::read_to_string(&log).unwrap_or_default(),
+    );
+    // It exits by itself after the second start; if not, it is killed.
+    let exit_deadline = Instant::now() + Duration::from_secs(10);
+    while matches!(sup.try_wait(), Ok(None)) && Instant::now() < exit_deadline {
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    if matches!(sup.try_wait(), Ok(None)) {
+        let _ = sup.kill();
+    }
+    let _ = sup.wait();
+    for pid in pids(&log) {
+        kill_pid(pid);
+    }
+    wait(&|| !gw_store::healthy(&url), Duration::from_secs(10));
+    Ok(())
+}
+
+fn kill_pid(pid: u32) {
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("taskkill");
+        c.args(["/PID", &pid.to_string(), "/F"]);
+        c
+    } else {
+        let mut c = Command::new("kill");
+        c.args(["-9", &pid.to_string()]);
+        c
+    };
+    let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
 #[cfg(test)]

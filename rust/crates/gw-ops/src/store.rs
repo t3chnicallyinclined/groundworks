@@ -95,6 +95,14 @@ impl Store {
         Ok(store)
     }
 
+    /// As [`Store::with_launcher`], without starting the server now: the supervisor starts it itself
+    /// and counts the starts.
+    pub fn with_launcher_lazy(launcher: Launcher, agent_master: &str) -> Self {
+        let mut store = Self::connect(&launcher.url, &launcher.root_pass, agent_master);
+        store.launcher = Some(launcher);
+        store
+    }
+
     /// The launcher this store restarts its server with, if any.
     pub fn launcher(&self) -> Option<&Launcher> {
         self.launcher.as_ref()
@@ -102,6 +110,23 @@ impl Store {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The root password, for the export command's environment (never a command-line argument).
+    pub(crate) fn root_pass(&self) -> &str {
+        &self.root_pass
+    }
+
+    /// Every namespace the server holds, sorted.
+    pub fn namespaces(&self) -> Result<Vec<String>> {
+        let root = self.root(GLOBAL_NS)?;
+        let info = root.sql("INFO FOR ROOT;", Some(1))?;
+        let mut names: Vec<String> = info[0]["namespaces"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        names.sort();
+        Ok(names)
     }
 
     /// Run `f`; if the server could not be reached, start it again and run `f` once more.
@@ -1458,7 +1483,7 @@ fn secrets_dir(home: &Home) -> PathBuf {
     home.path("secrets")
 }
 
-fn read_secret(home: &Home, name: &str) -> Result<String> {
+pub(crate) fn read_secret(home: &Home, name: &str) -> Result<String> {
     let path = secrets_dir(home).join(format!("{name}.pass"));
     let text = std::fs::read_to_string(&path).with_context(|| {
         format!(
@@ -1527,6 +1552,25 @@ impl Launcher {
             home.root
                 .join(home.config.store.data.as_deref().unwrap_or(Path::new("db"))),
         ))
+    }
+
+    /// The same launcher with the SurrealDB binary named explicitly (the supervisor's task has no
+    /// environment to find it through).
+    pub fn with_binary(mut self, binary: Option<PathBuf>) -> Self {
+        if binary.is_some() {
+            self.binary = binary;
+        }
+        self
+    }
+
+    /// The data directory (the rocksdb store and the server's log live under it).
+    pub fn data(&self) -> &Path {
+        &self.data
+    }
+
+    /// The configured SurrealDB binary, if the home names one.
+    pub fn binary(&self) -> Option<&Path> {
+        self.binary.as_deref()
     }
 
     /// Make sure a server answers at `url`, starting one if none does. Several sessions may race

@@ -16,11 +16,14 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | Python and standard library | PSF License | All scripts | No |
 | git | GPL-2.0 | Development tooling (privacy scan, pre-commit hook) | No |
 | Rust crate `anyhow` | MIT OR Apache-2.0 | Errors in gw-ops and gw-mcp | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `chrono` | MIT OR Apache-2.0 | Local time in the store supervisor's log and daily export (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `ciborium` | Apache-2.0 | CBOR encoding for bound query variables (gw-core) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `clap` | MIT OR Apache-2.0 | The groundworks command line | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `flate2` | MIT OR Apache-2.0 | Gzip of the store's daily exports (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `getrandom` | MIT OR Apache-2.0 | Store credentials from OS randomness | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `regex` | MIT OR Apache-2.0 | Config parsing (gw-core), estate scan globs (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `rmcp` | Apache-2.0 | The Rust MCP SDK: the groundworks MCP server | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `rust-stemmers` | MIT OR BSD-3-Clause | Snowball English stemming in the retrieval ladder's rerank arms (gw-ops), matching the store's analyzer | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `schemars` | MIT | JSON schemas for MCP tool arguments | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `serde` | MIT OR Apache-2.0 | Serialization | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `serde_json` | MIT OR Apache-2.0 | JSON | Compiled into binaries built from `rust/`; no binary is distributed |
