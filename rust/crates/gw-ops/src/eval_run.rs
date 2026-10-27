@@ -250,7 +250,34 @@ fn tokens(usage: &Value) -> (u64, u64) {
     )
 }
 
-fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path, memory: Option<&Path>) -> Result<Vec<String>> {
+/// What a session may never read, whichever directories it was given: the home's secrets, the
+/// store's files and its exports. Second layer behind the directory list (gw-security, 2026-10-27:
+/// `--add-dir` of the whole workspace put the secrets and the exports inside Read/Grep/Glob).
+const DENIED: [&str; 6] = [
+    "Read(**/.groundworks/secrets/**)",
+    "Read(**/.groundworks/db/**)",
+    "Read(**/.groundworks/backup/**)",
+    "Read(.groundworks/secrets/**)",
+    "Read(.groundworks/db/**)",
+    "Read(.groundworks/backup/**)",
+];
+/// Git reads that are writes or execs in disguise: `git log --output=<file>` writes, `git grep -O`
+/// opens a program. Prefix rules, so an option placed later in the command still passes; the
+/// allowlist stays read-only in intent and these close the two documented forms.
+const DENIED_GIT: [&str; 4] = [
+    "Bash(git log --output:*)",
+    "Bash(git log -o:*)",
+    "Bash(git grep -O:*)",
+    "Bash(git grep --open-files-in-pager:*)",
+];
+
+/// The session's settings: the plugin off, and the deny list.
+fn settings_json() -> String {
+    let denied: Vec<&str> = DENIED.iter().chain(DENIED_GIT.iter()).copied().collect();
+    json!({"enabledPlugins": {"groundworks@groundworks": false}, "permissions": {"deny": denied}}).to_string()
+}
+
+fn answer_args(arm: &str, plan: &Plan<'_>, add_dirs: &[PathBuf], run: &Path, memory: Option<&Path>) -> Result<Vec<String>> {
     let mut args: Vec<String> = [
         "--output-format",
         "stream-json",
@@ -261,18 +288,19 @@ fn answer_args(arm: &str, plan: &Plan<'_>, projects: &Path, run: &Path, memory: 
         "--max-budget-usd",
         &plan.budget_usd.to_string(),
         "--settings",
-        r#"{"enabledPlugins":{"groundworks@groundworks":false}}"#,
+        &settings_json(),
         "--strict-mcp-config",
-        "--add-dir",
-        &projects.display().to_string(),
-        "--tools",
-        BASE_TOOLS,
-        "--permission-mode",
-        "dontAsk",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
+    // The registered projects' folders, one by one: never the workspace, whose other folders (the
+    // home with its secrets and exports, and folders no project registers) are not the sessions'.
+    for dir in add_dirs {
+        args.push("--add-dir".into());
+        args.push(dir.display().to_string());
+    }
+    args.extend(["--tools", BASE_TOOLS, "--permission-mode", "dontAsk"].iter().map(|s| s.to_string()));
     if let Some(e) = plan.effort {
         args.push("--effort".into());
         args.push(e.to_owned());
@@ -476,10 +504,14 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
     let results = plan.out.join("results.jsonl");
     let finished = done(&results)?;
     let projects = home.workspace.clone();
-    let memory = crate::registry::Registry::load(home)?
-        .project("memory")
-        .ok()
-        .map(|p| p.path(&home.workspace));
+    let registry = crate::registry::Registry::load(home)?;
+    let memory = registry.project("memory").ok().map(|p| p.path(&home.workspace));
+    let add_dirs: Vec<PathBuf> = registry
+        .projects
+        .values()
+        .map(|p| p.path(&home.workspace))
+        .filter(|p| p.is_dir())
+        .collect();
     let mut log = String::new();
     for q in questions
         .iter()
@@ -494,7 +526,7 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
             if finished.contains(&(q.id.clone(), arm.clone())) {
                 continue;
             }
-            let row = one(q, arm, plan, &projects, &cwd, memory.as_deref())?;
+            let row = one(q, arm, plan, &projects, &add_dirs, &cwd, memory.as_deref())?;
             writeln!(
                 log,
                 "{} {:<11} {:<9} cw={} cites={} {:>7} tok ${:.2} {} turns {:?}",
@@ -516,8 +548,16 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
     Ok(log)
 }
 
-fn one(q: &Question, arm: &str, plan: &Plan<'_>, projects: &Path, cwd: &Path, memory: Option<&Path>) -> Result<Row> {
-    let args = answer_args(arm, plan, projects, plan.out, memory)?;
+fn one(
+    q: &Question,
+    arm: &str,
+    plan: &Plan<'_>,
+    projects: &Path,
+    add_dirs: &[PathBuf],
+    cwd: &Path,
+    memory: Option<&Path>,
+) -> Result<Row> {
+    let args = answer_args(arm, plan, add_dirs, plan.out, memory)?;
     let mut text = prompt(q, projects);
     if plan.record {
         text.push_str(
@@ -806,6 +846,36 @@ mod tests {
         assert!(!cites_gold(&q(), "NETCODE-PLAN.md:400"));
         assert!(!cites_gold(&q(), "NETCODE-PLAN.md without a line"));
         assert!(!cites_gold(&q(), "OTHER.md:120"));
+    }
+
+    #[test]
+    fn a_session_gets_only_the_projects_and_never_the_home() {
+        let plan = Plan {
+            set: Path::new("set.jsonl"),
+            out: Path::new("out"),
+            only: &[],
+            arms: &[],
+            model: "opus",
+            grader_model: "opus",
+            budget_usd: 1.0,
+            effort: None,
+            record: false,
+        };
+        let dirs = [PathBuf::from("C:/w/alpha"), PathBuf::from("C:/w/beta")];
+        let args = answer_args("plain", &plan, &dirs, Path::new("out"), None).unwrap();
+        let added: Vec<&String> = args
+            .iter()
+            .zip(args.iter().skip(1))
+            .filter(|(f, _)| *f == "--add-dir")
+            .map(|(_, d)| d)
+            .collect();
+        assert_eq!(added, ["C:/w/alpha", "C:/w/beta"], "each project, never the workspace");
+        let settings = &args[args.iter().position(|a| a == "--settings").unwrap() + 1];
+        let v: serde_json::Value = serde_json::from_str(settings).unwrap();
+        let deny = v["permissions"]["deny"].as_array().unwrap();
+        assert!(deny.iter().any(|d| d == "Read(**/.groundworks/secrets/**)"));
+        assert!(deny.iter().any(|d| d == "Bash(git log --output:*)"));
+        assert_eq!(v["enabledPlugins"]["groundworks@groundworks"], false);
     }
 
     #[test]
