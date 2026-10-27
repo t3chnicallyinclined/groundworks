@@ -318,8 +318,13 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let mut listing = String::new();
     for ns in store.namespaces()? {
+        // To a file, never to stdout: `surreal export ... -` on 3.1.6 writes its own INFO log line
+        // into stdout ahead of the script, and `surreal import` then refuses the file (the first
+        // restore drill, 2026-10-27, failed on all 20 namespaces that way).
+        let raw = part.join(format!("{ns}.surql"));
         let output = Command::new(&binary)
-            .args(["export", "--endpoint", &base, "--namespace", &ns, "--database", gw_store::DB_NAME, "-"])
+            .args(["export", "--log", "warn", "--endpoint", &base, "--namespace", &ns, "--database", gw_store::DB_NAME])
+            .arg(&raw)
             .env("SURREAL_USER", "root")
             .env("SURREAL_PASS", store.root_pass())
             .stdin(Stdio::null())
@@ -330,17 +335,29 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
             "surreal export of {ns} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
+        let script = std::fs::read(&raw).with_context(|| format!("reading the export of {ns}"))?;
+        let _ = std::fs::remove_file(&raw);
         ensure!(
-            !ns.starts_with("proj_") || output.stdout.len() >= 1024,
+            !ns.starts_with("proj_") || script.len() >= 1024,
             "surreal export of {ns} is {} bytes: too small to be a project",
-            output.stdout.len()
+            script.len()
+        );
+        ensure!(
+            script.starts_with(b"--") || script.starts_with(b"OPTION") || script.starts_with(b"DEFINE"),
+            "surreal export of {ns} does not start with SurrealQL: {:?}",
+            String::from_utf8_lossy(&script[..script.len().min(60)])
         );
         let name = format!("{ns}.surql.gz");
         let path = part.join(&name);
         let mut enc = flate2::write::GzEncoder::new(File::create(&path)?, flate2::Compression::default());
-        enc.write_all(&output.stdout)?;
+        enc.write_all(&script)?;
         enc.finish()?;
-        let _ = writeln!(listing, "{name} {} bytes ({} uncompressed)", std::fs::metadata(&path).map_or(0, |m| m.len()), output.stdout.len());
+        let _ = writeln!(
+            listing,
+            "{name} {} bytes ({} uncompressed)",
+            std::fs::metadata(&path).map_or(0, |m| m.len()),
+            script.len()
+        );
         files.push(out.join(name));
     }
     std::fs::write(part.join(DONE_FILE), listing)?;
