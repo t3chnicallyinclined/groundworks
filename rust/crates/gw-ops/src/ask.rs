@@ -510,9 +510,26 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
         .retain(|h| !seen.contains(&(h.project.clone(), h.key.clone())));
     let places = q.limit.saturating_sub(found.facts.len()).max(1);
     found.hits = order_hits(q.text, std::mem::take(&mut found.hits));
-    found.hits.truncate(places);
+    // The packet is filled by bytes, not by count: hits are taken in order while the packet's
+    // text fits in PACKET_CAP_BYTES (at least one hit), and never more than `places`.
+    let mut used: usize = found.facts.iter().map(|h| h.text.len()).sum();
+    let mut keep = 0usize;
+    for h in found.hits.iter().take(places) {
+        if keep > 0 && used + h.text.len() > PACKET_CAP_BYTES {
+            break;
+        }
+        used += h.text.len();
+        keep += 1;
+    }
+    found.hits.truncate(keep);
     Ok(found)
 }
+
+/// The packet's text budget. A packet of 20 candidates ordered by the store's merged scores
+/// measured 13.7k tokens (2.98 bytes per token) at the median over 114 questions, 2026-10-26;
+/// an order that puts the gold unit nearer the top also puts longer units in the top 20, so the
+/// packet is cut by bytes to keep today's cost (retrieval-ladder r5).
+pub const PACKET_CAP_BYTES: usize = 40_000;
 
 /// Indices of `docs` best first for `question`: BM25 over the documents themselves, with the
 /// question's words (split on non-alphanumerics, lowercased, no stemming) and document frequencies
@@ -523,18 +540,21 @@ pub fn order_by_words(question: &str, docs: &[String]) -> Vec<usize> {
     crate::rerank::order_desc(&crate::rerank::bm25(&query, &bags))
 }
 
-/// The packet's order of a read's hits: BM25 over the hits themselves, with the question's words
-/// (split on non-alphanumerics, lowercased, no stemming) and document frequencies from the read.
-/// The store's own scores are not used to order the packet: each project has its own full-text
-/// index, so two projects' scores were never on one scale, and a read across a project and its
-/// related ones sorted by them put the gold unit first on 16 of 62 questions where this order puts
-/// it first on 29 (retrieval-ladder r2, 2026-10-26; paired sign test 34 wins to 10, p < 0.001;
-/// ask-v1 5 to 11 of 42). Ties keep the store's order. The earlier per-project slots rule
-/// (three sure places per project read) is gone: it only mattered because the merged scores
-/// crowded small projects out, and this order does not compare projects' scores.
-pub fn order_hits(question: &str, hits: Vec<Hit>) -> Vec<Hit> {
-    let docs: Vec<String> = hits.iter().map(|h| h.text.clone()).collect();
-    let order = order_by_words(question, &docs);
+/// The packet's order of a read's hits: reciprocal rank fusion of the store's merged order and
+/// BM25 over the hits themselves with the store's own stemming (`rerank::words` stemmed, document
+/// frequencies from the read). Each project has its own full-text index, so two projects' scores
+/// were never on one scale, and the merged read sorted by them put the gold unit in a 40 KB packet
+/// on 42 of 62 questions; BM25 alone 50; this fusion 53 (retrieval-ladder r5, 2026-10-27; paired
+/// sign test on rank 37 wins to 3; ask-v1 26 to 35 of 42). Ties keep the store's order. The
+/// earlier per-project slots rule (three sure places per project read) is gone: it only mattered
+/// because the merged scores crowded small projects out.
+pub fn order_hits(question: &str, mut hits: Vec<Hit>) -> Vec<Hit> {
+    hits.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    let store: Vec<usize> = (0..hits.len()).collect();
+    let query = crate::rerank::words(question, true);
+    let docs: Vec<Vec<String>> = hits.iter().map(|h| crate::rerank::words(&h.text, true)).collect();
+    let stemmed = crate::rerank::order_desc(&crate::rerank::bm25(&query, &docs));
+    let order = crate::rerank::rrf(&[store, stemmed], crate::rerank::RRF_K);
     let mut taken: Vec<Option<Hit>> = hits.into_iter().map(Some).collect();
     order.into_iter().filter_map(|i| taken[i].take()).collect()
 }
@@ -1079,9 +1099,13 @@ mod tests {
         read.push(hit("notes", 4.0, "unrelated note"));
         let out = order_hits("how many bytes is the save set a rollback restores", read);
         assert_eq!(out.len(), 32, "nothing dropped: the caller cuts");
-        assert_eq!(out[0].project, "notes");
-        assert_eq!(out[0].score, Some(5.0));
-        assert_eq!(out[1].score, Some(100.0), "ties keep the store's order");
+        let note = out.iter().position(|h| h.score == Some(5.0)).unwrap();
+        assert!(
+            note < 15,
+            "the note with the words rises from 31st to the packet's first half (fusion with the store's rank): {note}"
+        );
+        assert_eq!(out[0].score, Some(100.0), "the store's best, which also matches, stays first");
+        assert_eq!(out[31].score, Some(4.0), "the unrelated note stays last");
         // A fact that shares one word with the question ranks below the unit that answers it.
         let docs = vec![
             "PGO: the profile is taken from the match tape, every build".to_owned(),

@@ -404,9 +404,8 @@ pub struct LadderRow {
 /// Bytes of candidate text per prompt token, measured over 114 packets (gw-probe r1, 2026-10-26).
 pub const BYTES_PER_TOKEN: f64 = 2.98;
 
-/// A byte-capped packet's size: the measured median of today's 20-candidate packet (13.7k tokens
-/// at 2.98 bytes per token) rounded to 40 KB.
-pub const PACKET_CAP_BYTES: usize = 40_000;
+/// The packet's byte cap, as ask applies it.
+pub const PACKET_CAP_BYTES: usize = crate::ask::PACKET_CAP_BYTES;
 
 /// The retrieval ladder (pre-registered as retrieval-ladder-r1): for every question with a gold
 /// unit, the reach's merged read at `depth` (facts excluded) is reordered by each arm of
