@@ -1164,20 +1164,49 @@ fn current_span_hash(project_dir: &Path, locator: &str) -> Option<String> {
     Some(sha256_hex(&[all[start - 1..end].join("\n").as_bytes()]))
 }
 
-/// The distinct words of a query, lowercased, the way Python's `retrieve.tokenize` splits (`\w+`), at
-/// most 16 so one query stays one statement.
+/// How many distinct words of a question reach the store's read. Was 16 until retrieval-ladder r3
+/// (2026-10-26): 92 of the 104 eval questions have more than 16 distinct words (median 23, max 35)
+/// and the specific ones come last, so the read never saw them.
+pub const QUERY_WORDS_MAX: usize = 48;
+
+/// English function words that match everything and rank nothing; they are dropped from a query
+/// before the read (the store has no stop list of its own). Digits and identifiers stay: a version
+/// or a byte count is the most specific word a question has.
+pub const STOP_WORDS: &[&str] = &[
+    "a", "about", "actually", "after", "again", "all", "also", "am", "an", "and", "any", "are", "as",
+    "at", "be", "because", "been", "before", "being", "between", "both", "but", "by", "can", "could",
+    "did", "do", "does", "doing", "done", "down", "during", "each", "either", "else", "ever", "every",
+    "few", "for", "from", "further", "get", "gets", "got", "had", "has", "have", "having", "he", "her",
+    "here", "hers", "him", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just",
+    "let", "like", "may", "me", "might", "more", "most", "much", "must", "my", "no", "nor", "not",
+    "now", "of", "off", "on", "once", "one", "only", "or", "other", "our", "ours", "out", "over",
+    "own", "really", "s", "same", "shall", "she", "should", "so", "some", "still", "such", "t",
+    "than", "that", "the", "their", "theirs", "them", "then", "there", "these", "they", "this",
+    "those", "though", "through", "to", "too", "under", "until", "up", "us", "very", "was", "we",
+    "were", "what", "when", "where", "whether", "which", "while", "who", "whom", "whose", "why",
+    "will", "with", "within", "without", "would", "yet", "you", "your", "yours",
+];
+
+/// The distinct words of a query, lowercased, the way Python's `retrieve.tokenize` splits (`\w+`),
+/// without the stop words, at most [`QUERY_WORDS_MAX`]. A query of stop words only keeps them, so
+/// it still reads something.
 pub fn query_words(query: &str) -> Vec<String> {
-    let mut words: Vec<String> = Vec::new();
-    for w in query
+    let all: Vec<String> = query
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
-    {
-        if !words.contains(&w) && words.len() < 16 {
-            words.push(w);
+        .collect();
+    let keep = |stop: bool| {
+        let mut words: Vec<String> = Vec::new();
+        for w in &all {
+            if !words.contains(w) && words.len() < QUERY_WORDS_MAX && (!stop || !STOP_WORDS.contains(&w.as_str())) {
+                words.push(w.clone());
+            }
         }
-    }
-    words
+        words
+    };
+    let words = keep(true);
+    if words.is_empty() { keep(false) } else { words }
 }
 
 /// About 300 characters around the first highlighted match (the whole text if there is none).
@@ -1691,6 +1720,12 @@ mod tests {
 
     #[test]
     fn the_store_listens_on_loopback_only() {
+        assert_eq!(
+            query_words("Why did the 0.4.20 Pi 4 build crash-loop once it got into the lobby?"),
+            ["0", "4", "20", "pi", "build", "crash", "loop", "lobby"],
+            "stop words out, digits and the rest in, in order"
+        );
+        assert_eq!(query_words("the and of"), ["the", "and", "of"], "stop words only: keep them");
         assert_eq!(loopback_bind("http://127.0.0.1:8004/sql").unwrap(), "127.0.0.1:8004");
         assert!(loopback_bind("http://0.0.0.0:8004/sql").is_err());
         assert!(loopback_bind("http://10.0.0.5:8004/sql").is_err());
