@@ -26,10 +26,13 @@ use crate::home::Home;
 use crate::registry::Registry;
 use crate::store::{self, Hit, Store};
 
-/// The packet's size. 20 until retrieval-ladder r2 (2026-10-26): under the packet's own order the
-/// gold unit is in the top 8 at least as often as it was in the top 20 under the store's merged
-/// scores, on both question sets (45/62 against 44/62; 30/42 against 28/42).
-pub const DEFAULT_K: usize = 8;
+/// The packet's size. Retrieval-ladder r2 (2026-10-26) found the gold unit in the top 8 of the
+/// packet's own order as often as in the old top 20, and the packet was cut to 8; the ask eval
+/// (ask-v2 r8, the same day) refused it: with 8 the agents asked more (8 turns against 6, 180k
+/// tokens a question against 110k), lost 3 correct answers on the reworded set, and gave two
+/// confidently wrong answers, both on questions whose two disagreeing sources must both be in the
+/// packet. A gold unit in the packet is not the whole packet's job. 20 it stays.
+pub const DEFAULT_K: usize = 20;
 /// How deep each project is read before the packet's order is computed over the whole read.
 pub const READ_DEPTH: usize = 60;
 pub const MAX_K: usize = 200;
