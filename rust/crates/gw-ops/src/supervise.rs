@@ -35,9 +35,12 @@ pub fn log_path(home: &Home, store: &Store) -> PathBuf {
         .join("supervisor.log")
 }
 
-/// Windows: register `store supervise` as a scheduled task for this user, at logon, S4U (no stored
-/// password, no window, no interactive session), no run-time limit, restarted on failure; then
-/// start it. Returns the task's state.
+/// Windows: register `store supervise` as a scheduled task for this user, at logon, no run-time
+/// limit, restarted on failure, then start it. First as S4U (no stored password, no window, no
+/// interactive session); where Task Scheduler refuses that to a user without administrator rights
+/// (measured 2026-10-26: "Access is denied"), as an interactive-logon task run through
+/// `conhost.exe --headless`, which gives the console program no window (measured the same day:
+/// MainWindowHandle 0). Returns the task's state.
 pub fn install_task(home: &Home, store: &Store, exe: &Path) -> Result<String> {
     ensure!(
         cfg!(windows),
@@ -51,20 +54,35 @@ pub fn install_task(home: &Home, store: &Store, exe: &Path) -> Result<String> {
     let ps = |p: &Path| std::path::absolute(p).map(|p| p.display().to_string().replace('\'', "''"));
     let (exe, home_root, surreal) = (ps(exe)?, ps(&home.root)?, ps(&binary)?);
     let work = ps(&home.workspace)?;
-    let script = format!(
-        "$ErrorActionPreference = 'Stop'\n\
-         $user = \"$env:USERDOMAIN\\$env:USERNAME\"\n\
-         $a = New-ScheduledTaskAction -Execute '{exe}' -Argument 'store supervise --home \"{home_root}\" --surreal \"{surreal}\"' -WorkingDirectory '{work}'\n\
-         $t = New-ScheduledTaskTrigger -AtLogOn -User $user\n\
-         $p = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Limited\n\
-         $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden\n\
-         Register-ScheduledTask -TaskName '{TASK_NAME}' -Description 'Keeps the Groundworks store answering and exports it daily (groundworks store supervise)' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null\n\
-         Start-ScheduledTask -TaskName '{TASK_NAME}'\n\
-         Start-Sleep -Seconds 3\n\
-         $task = Get-ScheduledTask -TaskName '{TASK_NAME}'\n\
-         \"task '{TASK_NAME}': $($task.State); runs '{exe}' at logon as $user (S4U: no window, no stored password)\"\n"
-    );
-    powershell(&script)
+    let args = format!("store supervise --home \"{home_root}\" --surreal \"{surreal}\"");
+    let script = |principal: &str, execute: &str, argument: &str, how: &str| {
+        format!(
+            "$ErrorActionPreference = 'Stop'\n\
+             $user = \"$env:USERDOMAIN\\$env:USERNAME\"\n\
+             $a = New-ScheduledTaskAction -Execute '{execute}' -Argument '{argument}' -WorkingDirectory '{work}'\n\
+             $t = New-ScheduledTaskTrigger -AtLogOn -User $user\n\
+             $p = New-ScheduledTaskPrincipal -UserId $user -LogonType {principal} -RunLevel Limited\n\
+             $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden\n\
+             Register-ScheduledTask -TaskName '{TASK_NAME}' -Description 'Keeps the Groundworks store answering and exports it daily (groundworks store supervise)' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null\n\
+             Start-ScheduledTask -TaskName '{TASK_NAME}'\n\
+             Start-Sleep -Seconds 3\n\
+             $task = Get-ScheduledTask -TaskName '{TASK_NAME}'\n\
+             \"task '{TASK_NAME}': $($task.State); runs '{exe}' at logon as $user ({how})\"\n"
+        )
+    };
+    match powershell(&script("S4U", &exe, &args, "S4U: no window, no stored password")) {
+        Ok(out) => Ok(out),
+        Err(e) if format!("{e:#}").contains("denied") => {
+            let conhost = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+            powershell(&script(
+                "Interactive",
+                &format!("{conhost}\\System32\\conhost.exe"),
+                &format!("--headless \"{exe}\" {args}"),
+                "interactive logon through conhost --headless: no window; S4U was refused to this user",
+            ))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Windows: stop and remove the task. The server it started keeps running until it stops.
