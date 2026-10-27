@@ -384,6 +384,11 @@ pub struct LadderRow {
     /// Bytes of candidate text in each arm's top 10 and top 20.
     pub bytes_10: BTreeMap<String, usize>,
     pub bytes_20: BTreeMap<String, usize>,
+    /// Each arm's top five as `project:locator (kind, bytes)`, with `*` on a gold unit: what sits
+    /// above the gold when it is not first.
+    pub top5: BTreeMap<String, Vec<String>>,
+    /// The gold units' own `project:locator (kind, bytes)`, those in the pool.
+    pub gold_in: Vec<String>,
 }
 
 /// Bytes of candidate text per prompt token, measured over 114 packets (gw-probe r1, 2026-10-26).
@@ -418,27 +423,57 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
             }
             let (names, _) = crate::ask::reach_names(home, store, Some(&q.project))
                 .with_context(|| format!("{}: reach of {}", q.id, q.project))?;
-            let mut hits = Vec::new();
+            // The union of every project's read at `depth`, each hit remembering its rank in its
+            // own project's read. The store arm is the packet's own order over the union, exactly
+            // as `ask` orders it (ask::order_hits), so its numbers are what agents get.
+            let mut union: Vec<(crate::store::Hit, usize)> = Vec::new();
             for name in &names {
                 if let Ok(found) = store.retrieve(name, &q.question, None, &[], depth) {
-                    hits.extend(found);
+                    union.extend(found.into_iter().zip(1..));
                 }
             }
-            hits.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-            let pool = crate::ask::with_slots(hits, depth);
+            let key = |h: &crate::store::Hit| (h.project.clone(), h.key.clone());
+            let rank_in_project: BTreeMap<(String, String), usize> =
+                union.iter().map(|(h, r)| (key(h), *r)).collect();
+            let mut by_score: Vec<crate::store::Hit> = union.into_iter().map(|(h, _)| h).collect();
+            by_score.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+            let pool = crate::ask::order_hits(&q.question, by_score);
             let texts: Vec<&str> = pool.iter().map(|h| h.text.as_str()).collect();
             let locators: Vec<&str> = pool.iter().map(|h| h.locator.as_str()).collect();
+            let projects: Vec<&str> = pool.iter().map(|h| h.project.as_str()).collect();
+            let project_rank: Vec<usize> = pool.iter().map(|h| rank_in_project[&key(h)]).collect();
+            let arms_pool = crate::rerank::Pool {
+                texts: &texts,
+                locators: &locators,
+                projects: &projects,
+                project_rank: &project_rank,
+                own: &q.project,
+            };
             let is_gold: Vec<bool> = pool
                 .iter()
                 .map(|h| gold.contains(&(h.project.clone(), h.key.clone())))
                 .collect();
-            let (mut ranks, mut bytes_10, mut bytes_20) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-            for (arm, order) in crate::rerank::ladder_orders(&q.question, &texts, &locators) {
+            let label = |i: usize| {
+                let h = &pool[i];
+                format!(
+                    "{}{}:{} ({}, {}b)",
+                    if is_gold[i] { "*" } else { "" },
+                    h.project,
+                    h.locator,
+                    h.kind.as_deref().unwrap_or("?"),
+                    h.text.len()
+                )
+            };
+            let (mut ranks, mut bytes_10, mut bytes_20, mut top5) =
+                (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+            for (arm, order) in crate::rerank::ladder_orders(&q.question, &arms_pool) {
                 ranks.insert(arm.to_owned(), order.iter().position(|&i| is_gold[i]).map(|p| p + 1));
                 let bytes = |k: usize| order.iter().take(k).map(|&i| texts[i].len()).sum::<usize>();
                 bytes_10.insert(arm.to_owned(), bytes(10));
                 bytes_20.insert(arm.to_owned(), bytes(20));
+                top5.insert(arm.to_owned(), order.iter().take(5).map(|&i| label(i)).collect());
             }
+            let gold_in: Vec<String> = (0..pool.len()).filter(|&i| is_gold[i]).map(label).collect();
             rows.push(LadderRow {
                 id: q.id.clone(),
                 set: set.clone(),
@@ -451,6 +486,8 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                 ranks,
                 bytes_10,
                 bytes_20,
+                top5,
+                gold_in,
             });
         }
     }

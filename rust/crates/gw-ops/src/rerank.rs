@@ -114,11 +114,38 @@ pub fn rrf(orders: &[Vec<usize>], k: f64) -> Vec<usize> {
 }
 
 /// The arms of the retrieval ladder, in the order they are reported.
-pub const ARMS: [&str; 5] = ["store", "bm25", "bm25-stem", "bm25-fields", "rrf"];
+pub const ARMS: [&str; 7] = [
+    "store",
+    "bm25",
+    "bm25-stem",
+    "bm25-fields",
+    "rrf",
+    "own-first",
+    "rrf-own-bm25",
+];
 
-/// Every arm's order of `texts` (with their locators) against `question`, as indices into the
-/// pool, keyed by arm name. `store` is the order given.
-pub fn ladder_orders(question: &str, texts: &[&str], locators: &[&str]) -> Vec<(&'static str, Vec<usize>)> {
+/// A read's candidates as the arms see them: text and locator, which project each came from, its
+/// rank inside that project's own read (1 = that project's best), and the question's own project.
+pub struct Pool<'a> {
+    pub texts: &'a [&'a str],
+    pub locators: &'a [&'a str],
+    pub projects: &'a [&'a str],
+    pub project_rank: &'a [usize],
+    pub own: &'a str,
+}
+
+/// The question's own project's read in its own order, then the related projects' reads merged by
+/// their within-project rank: the one order that never compares scores from two indexes.
+pub fn own_first(pool: &Pool<'_>) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..pool.texts.len()).collect();
+    idx.sort_by_key(|&i| (pool.projects[i] != pool.own, pool.project_rank[i], i));
+    idx
+}
+
+/// Every arm's order of the pool against `question`, as indices into it, keyed by arm name.
+/// `store` is the order given.
+pub fn ladder_orders(question: &str, pool: &Pool<'_>) -> Vec<(&'static str, Vec<usize>)> {
+    let (texts, locators) = (pool.texts, pool.locators);
     let plain_q = words(question, false);
     let stem_q = words(question, true);
     let plain_docs: Vec<Vec<String>> = texts.iter().map(|t| words(t, false)).collect();
@@ -140,12 +167,16 @@ pub fn ladder_orders(question: &str, texts: &[&str], locators: &[&str]) -> Vec<(
     let bm25_stem = order_desc(&bm25(&stem_q, &stem_docs));
     let bm25_fields = order_desc(&bm25(&stem_q, &field_docs));
     let fused = rrf(&[store.clone(), bm25_stem.clone()], RRF_K);
+    let own = own_first(pool);
+    let own_bm25 = rrf(&[own.clone(), bm25_plain.clone()], RRF_K);
     vec![
         ("store", store),
         ("bm25", bm25_plain),
         ("bm25-stem", bm25_stem),
         ("bm25-fields", bm25_fields),
         ("rrf", fused),
+        ("own-first", own),
+        ("rrf-own-bm25", own_bm25),
     ]
 }
 
@@ -187,13 +218,23 @@ mod tests {
     fn the_ladder_reports_every_arm_over_the_given_pool() {
         let texts = ["nothing here", "the parser rejects empty input", "parsers and inputs"];
         let locators = ["a/b.md#L1-1", "notes.txt#L2-2", "parser/input.rs#L1-1"];
-        let orders = ladder_orders("why does the parser reject empty input", &texts, &locators);
+        let projects = ["big", "notes", "big"];
+        let pool = Pool {
+            texts: &texts,
+            locators: &locators,
+            projects: &projects,
+            project_rank: &[1, 1, 2],
+            own: "notes",
+        };
+        let orders = ladder_orders("why does the parser reject empty input", &pool);
         assert_eq!(orders.len(), ARMS.len());
-        for (arm, order) in &orders {
+        for ((arm, order), name) in orders.iter().zip(ARMS) {
             assert_eq!(order.len(), 3, "{arm}");
+            assert_eq!(*arm, name);
         }
         assert_eq!(orders[0].1, [0, 1, 2], "store keeps the given order");
         assert_eq!(orders[1].1[0], 1, "plain bm25 finds the exact words");
         assert_eq!(orders[2].1[0], 1, "stemmed too");
+        assert_eq!(own_first(&pool), [1, 0, 2], "own project first, then the rest by their own rank");
     }
 }
