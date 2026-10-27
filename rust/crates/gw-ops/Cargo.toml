@@ -19,6 +19,8 @@ chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 # Exports are gzipped SurrealQL.
 flate2 = "1"
+# The supervisor reads the store volume's free space (no unsafe of our own).
+fs2 = "0.4"
 getrandom = "0.3"
 # rerank: the store's analyzer stems with Snowball (English); the local arms must match it.
 rust-stemmers = "1"

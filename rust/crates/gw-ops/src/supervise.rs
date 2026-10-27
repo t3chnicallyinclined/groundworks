@@ -6,10 +6,11 @@
 //! `surreal export` command, keeping the newest few days. Its log is a file beside the data.
 
 use std::fs::File;
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use chrono::Timelike as _;
@@ -145,17 +146,37 @@ impl Log {
         })
     }
 
-    pub fn line(&self, text: &str) -> Result<()> {
+    /// Append one line. Never fails the caller: a full disk must not stop the supervisor (it
+    /// would be restarted three times into the same full disk and then given up on).
+    pub fn line(&self, text: &str) {
         if std::fs::metadata(&self.path).map_or(0, |m| m.len()) > 2 * 1024 * 1024 {
             let _ = std::fs::rename(&self.path, self.path.with_extension("log.1"));
         }
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        writeln!(f, "{} [{}] {text}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"), self.machine)?;
-        Ok(())
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+            let _ = writeln!(
+                f,
+                "{} [{}] {text}",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"),
+                self.machine
+            );
+        }
     }
+}
+
+/// Health misses in a row before the supervisor starts a server. One 800 ms miss during a busy
+/// eval started a competing server that died on rocksdb's lock (measured 2026-10-26, twice).
+pub const MISSES_BEFORE_START: u32 = 2;
+/// Free space on the store's volume under which the supervisor logs loudly, once an hour.
+pub const DISK_WARN_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+/// Free space under which the export is refused: an export on a full disk left a partial day
+/// folder that counted as done (measured 2026-10-26).
+pub const DISK_EXPORT_FLOOR_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// The file in a day's export folder that says the export finished; a folder without it is a
+/// partial export and is replaced.
+pub const DONE_FILE: &str = "DONE";
+
+fn gib(bytes: u64) -> f64 {
+    bytes as f64 / 2f64.powi(30)
 }
 
 /// Run until killed (or until `exit_after_starts`). Never returns Ok while the store is down.
@@ -172,59 +193,98 @@ pub fn run(store: &Store, opts: &Options) -> Result<()> {
         opts.export_at
             .map_or("off".to_owned(), |(h, m)| format!("daily at {h:02}:{m:02}")),
         opts.keep
-    ))?;
+    ));
     let mut starts = 0usize;
+    let mut misses = 0u32;
     let mut backoff = Duration::from_secs(1);
     let mut adopted = false;
+    let mut last_disk_line: Option<Instant> = None;
+    let mut last_export_try: Option<Instant> = None;
     loop {
         if gw_store::healthy(&launcher.url) {
             if !adopted && starts == 0 {
-                log.line("adopted a server already answering")?;
+                log.line("adopted a server already answering");
             }
             adopted = true;
+            misses = 0;
             backoff = Duration::from_secs(1);
         } else {
-            log.line(if adopted || starts > 0 {
-                "store stopped answering; starting it"
+            misses += 1;
+            if misses < MISSES_BEFORE_START {
+                log.line(&format!("health miss {misses} of {MISSES_BEFORE_START}"));
+                std::thread::sleep(opts.poll);
+                continue;
+            }
+            log.line(&if adopted || starts > 0 {
+                format!("store stopped answering ({misses} misses in a row); starting it")
             } else {
-                "no server answering; starting it"
-            })?;
+                "no server answering; starting it".to_owned()
+            });
+            if let Ok(mut last) = launcher.last_started.lock() {
+                *last = None;
+            }
             match launcher.ensure() {
                 Ok(()) => {
-                    starts += 1;
-                    let pid = launcher.last_started.lock().map(|p| *p).unwrap_or(None);
-                    log.line(&format!(
-                        "started surreal pid {} (start {starts})",
-                        pid.map_or("?".to_owned(), |p| p.to_string())
-                    ))?;
+                    misses = 0;
                     adopted = true;
-                    if opts.exit_after_starts.is_some_and(|n| starts >= n) {
-                        log.line(&format!("exiting after {starts} start(s) as asked"))?;
-                        return Ok(());
+                    match launcher.last_started.lock().map(|p| *p).unwrap_or(None) {
+                        Some(pid) => {
+                            starts += 1;
+                            log.line(&format!("started surreal pid {pid} (start {starts})"));
+                            if opts.exit_after_starts.is_some_and(|n| starts >= n) {
+                                log.line(&format!("exiting after {starts} start(s) as asked"));
+                                return Ok(());
+                            }
+                        }
+                        None => log.line("answered again without a start"),
                     }
                 }
                 Err(e) => {
-                    log.line(&format!("start failed: {e:#}; next try in {}s", backoff.as_secs()))?;
+                    log.line(&format!("start failed: {e:#}; next try in {}s", backoff.as_secs()));
                     std::thread::sleep(backoff);
                     backoff = (backoff * 2).min(Duration::from_secs(60));
                     continue;
                 }
             }
         }
+        let free = fs2::available_space(launcher.data()).ok();
+        if let Some(free) = free
+            && free < DISK_WARN_BYTES
+            && last_disk_line.is_none_or(|t| t.elapsed() > Duration::from_secs(3600))
+        {
+            log.line(&format!(
+                "DISK LOW: {:.1} GB free on the store's volume (warned under {:.0} GB; exports refused under {:.0} GB)",
+                gib(free),
+                gib(DISK_WARN_BYTES),
+                gib(DISK_EXPORT_FLOOR_BYTES)
+            ));
+            last_disk_line = Some(Instant::now());
+        }
         if let Some((h, m)) = opts.export_at {
             let now = chrono::Local::now();
             let day = now.format("%Y-%m-%d").to_string();
-            if (now.hour(), now.minute()) >= (h, m) && !opts.backups.join(&day).is_dir() {
-                match export(store, &opts.backups, opts.keep) {
-                    Ok(files) => log.line(&format!(
-                        "exported {} namespace(s) to {}",
-                        files.len(),
-                        opts.backups.join(&day).display()
-                    ))?,
-                    Err(e) => {
-                        log.line(&format!("export failed: {e:#}"))?;
-                        // Leave the day's folder so it is not retried every poll; the log has why.
-                        let _ = std::fs::create_dir_all(opts.backups.join(&day));
+            let due = (now.hour(), now.minute()) >= (h, m) && !opts.backups.join(&day).join(DONE_FILE).is_file();
+            let may_try = last_export_try.is_none_or(|t| t.elapsed() > Duration::from_secs(3600));
+            if due && may_try {
+                last_export_try = Some(Instant::now());
+                if free.is_some_and(|f| f < DISK_EXPORT_FLOOR_BYTES) {
+                    log.line(&format!(
+                        "export skipped: {:.1} GB free is under the {:.0} GB floor; next try in an hour",
+                        gib(free.unwrap_or(0)),
+                        gib(DISK_EXPORT_FLOOR_BYTES)
+                    ));
+                } else {
+                    match export(store, &opts.backups, opts.keep) {
+                        Ok(files) => {
+                            let bytes: u64 = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+                            log.line(&format!(
+                                "exported {} namespace(s), {:.1} MB, to {}",
+                                files.len(),
+                                bytes as f64 / 1e6,
+                                opts.backups.join(&day).display()
+                            ));
+                        }
+                        Err(e) => log.line(&format!("export failed: {e:#}; next try in an hour")),
                     }
                 }
             }
@@ -234,7 +294,10 @@ pub fn run(store: &Store, opts: &Options) -> Result<()> {
 }
 
 /// Export every namespace of the store as `<dir>/<YYYY-MM-DD>/<namespace>.surql.gz` through
-/// `surreal export`, then drop the oldest day folders beyond `keep`. Returns the files written.
+/// `surreal export`, into a `.part` folder first; when every namespace is written and no project
+/// export is implausibly small, a `DONE` file listing the files is written and the folder takes
+/// the day's name (replacing a partial one). Then the oldest day folders beyond `keep` go.
+/// Returns the files written.
 pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
     let binary = store
         .launcher()
@@ -249,8 +312,11 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
         .to_owned();
     let day = chrono::Local::now().format("%Y-%m-%d").to_string();
     let out = dir.join(&day);
-    std::fs::create_dir_all(&out)?;
+    let part = dir.join(format!("{day}.part"));
+    let _ = std::fs::remove_dir_all(&part);
+    std::fs::create_dir_all(&part)?;
     let mut files = Vec::new();
+    let mut listing = String::new();
     for ns in store.namespaces()? {
         let output = Command::new(&binary)
             .args(["export", "--endpoint", &base, "--namespace", &ns, "--database", gw_store::DB_NAME, "-"])
@@ -264,12 +330,24 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
             "surreal export of {ns} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
-        let path = out.join(format!("{ns}.surql.gz"));
+        ensure!(
+            !ns.starts_with("proj_") || output.stdout.len() >= 1024,
+            "surreal export of {ns} is {} bytes: too small to be a project",
+            output.stdout.len()
+        );
+        let name = format!("{ns}.surql.gz");
+        let path = part.join(&name);
         let mut enc = flate2::write::GzEncoder::new(File::create(&path)?, flate2::Compression::default());
         enc.write_all(&output.stdout)?;
         enc.finish()?;
-        files.push(path);
+        let _ = writeln!(listing, "{name} {} bytes ({} uncompressed)", std::fs::metadata(&path).map_or(0, |m| m.len()), output.stdout.len());
+        files.push(out.join(name));
     }
+    std::fs::write(part.join(DONE_FILE), listing)?;
+    if out.exists() {
+        std::fs::remove_dir_all(&out).with_context(|| format!("replacing the partial export {}", out.display()))?;
+    }
+    std::fs::rename(&part, &out).with_context(|| format!("naming the export {}", out.display()))?;
     let mut days: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(Result::ok)
         .map(|e| e.path())
