@@ -394,10 +394,19 @@ pub struct LadderRow {
     pub top5: BTreeMap<String, Vec<String>>,
     /// The gold units' own `project:locator (kind, bytes)`, those in the pool.
     pub gold_in: Vec<String>,
+    /// Per arm, whether a gold unit is among the candidates a byte-capped packet would hold:
+    /// taken in the arm's order while the text fits in [`PACKET_CAP_BYTES`], at most 20.
+    pub in_cap: BTreeMap<String, bool>,
+    /// Per arm, how many candidates that packet holds.
+    pub cap_count: BTreeMap<String, usize>,
 }
 
 /// Bytes of candidate text per prompt token, measured over 114 packets (gw-probe r1, 2026-10-26).
 pub const BYTES_PER_TOKEN: f64 = 2.98;
+
+/// A byte-capped packet's size: the measured median of today's 20-candidate packet (13.7k tokens
+/// at 2.98 bytes per token) rounded to 40 KB.
+pub const PACKET_CAP_BYTES: usize = 40_000;
 
 /// The retrieval ladder (pre-registered as retrieval-ladder-r1): for every question with a gold
 /// unit, the reach's merged read at `depth` (facts excluded) is reordered by each arm of
@@ -473,6 +482,7 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
             };
             let (mut ranks, mut bytes_10, mut bytes_20, mut top5, mut in_budget) =
                 (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+            let (mut in_cap, mut cap_count) = (BTreeMap::new(), BTreeMap::new());
             let budget_bytes: usize = texts.iter().take(20).map(|t| t.len()).sum();
             for (arm, order) in crate::rerank::ladder_orders(&q.question, &arms_pool) {
                 ranks.insert(arm.to_owned(), order.iter().position(|&i| is_gold[i]).map(|p| p + 1));
@@ -494,6 +504,17 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                     }
                 }
                 in_budget.insert(arm.to_owned(), hit);
+                let (mut used, mut count, mut hit) = (0usize, 0usize, false);
+                for &i in &order {
+                    if count == 20 || (used + texts[i].len() > PACKET_CAP_BYTES && count > 0) {
+                        break;
+                    }
+                    used += texts[i].len();
+                    count += 1;
+                    hit |= is_gold[i];
+                }
+                in_cap.insert(arm.to_owned(), hit);
+                cap_count.insert(arm.to_owned(), count);
             }
             let gold_in: Vec<String> = (0..pool.len()).filter(|&i| is_gold[i]).map(label).collect();
             rows.push(LadderRow {
@@ -512,6 +533,8 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                 gold_in,
                 budget_bytes,
                 in_budget,
+                in_cap,
+                cap_count,
             });
         }
     }
@@ -564,7 +587,7 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
         );
         let _ = writeln!(
             out,
-            "| arm | gold at 1 (95% CI) | top 5 | top 10 | top 20 | in today's bytes | MRR | vs store: wins/losses, p | tokens top 10 | tokens top 20 |\n|---|---|---|---|---|---|---|---|---|---|"
+            "| arm | gold at 1 (95% CI) | top 5 | top 10 | top 20 | in today's bytes | in a 40 KB packet (mean size) | MRR | vs store: wins/losses, p | tokens top 10 | tokens top 20 |\n|---|---|---|---|---|---|---|---|---|---|---|"
         );
         let rank_of = |r: &LadderRow, arm: &str| r.ranks.get(arm).copied().flatten().unwrap_or(depth + 1);
         for arm in ARMS {
@@ -584,9 +607,15 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
                 .iter()
                 .filter(|r| r.in_budget.get(arm).copied().unwrap_or(false))
                 .count();
+            let in_cap = in_scope
+                .iter()
+                .filter(|r| r.in_cap.get(arm).copied().unwrap_or(false))
+                .count();
+            let cap_mean = in_scope.iter().map(|r| r.cap_count.get(arm).copied().unwrap_or(0)).sum::<usize>() as f64
+                / n as f64;
             let _ = writeln!(
                 out,
-                "| {arm} | {}/{n} ({:.0}%, {:.0}-{:.0}) | {} | {} | {} | {in_budget} | {mrr:.3} | {} | {t10:.0} | {t20:.0} |",
+                "| {arm} | {}/{n} ({:.0}%, {:.0}-{:.0}) | {} | {} | {} | {in_budget} | {in_cap} ({cap_mean:.1}) | {mrr:.3} | {} | {t10:.0} | {t20:.0} |",
                 at(1),
                 100.0 * at(1) as f64 / n as f64,
                 100.0 * lo,
