@@ -427,7 +427,6 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         !err && text.contains("no ingested unit contains"),
         &text,
     );
-    let (err, text) = s.call("search", json!({"query": "zephyr", "project": "demo"}))?;
     // Nobody calls intake: the next read notices the tree changed and ingests first.
     std::fs::write(
         base.join("work/demo/docs/LATE-NOTE.md"),
@@ -445,6 +444,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         !err && !text.contains("refreshed before reading"),
         &text,
     );
+    let (err, text) = s.call("search", json!({"query": "zephyr", "project": "demo"}))?;
     c.check(
         "an untracked doc is ingested, with no commit; untracked code is not",
         !err && text
