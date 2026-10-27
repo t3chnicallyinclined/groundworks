@@ -446,7 +446,9 @@ pub fn run(home: &Home, plan: &Plan<'_>) -> Result<String> {
         plan.out.join("mcp-groundworks.json"),
         serde_json::to_string_pretty(&json!({"mcpServers": {"groundworks": {
             "command": exe, "args": ["serve"],
-            "env": if plan.record { json!({"GROUNDWORKS_HOME": home_path}) } else { json!({"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_RECORD": "1"}) }}}}))?,
+            // GROUNDWORKS_NO_REFRESH: the server must not re-ingest during a run, or the store moves
+            // under the packets being measured (the auto-intake branch honours it).
+            "env": if plan.record { json!({"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_REFRESH": "1"}) } else { json!({"GROUNDWORKS_HOME": home_path, "GROUNDWORKS_NO_RECORD": "1", "GROUNDWORKS_NO_REFRESH": "1"}) }}}}))?,
     )?;
     let set_sha = sha256_hex(&[std::fs::read(plan.set)?.as_slice()]);
     let meta = plan.out.join("run.json");
