@@ -771,6 +771,15 @@ pub async fn doctor(home: &Home, store: Result<Arc<Store>, String>) -> Result<(S
             writeln!(out, "FAIL store: {e}")?;
         }
     }
+    for line in environment_checks(&claude_dir(), vscode_mcp_path().as_deref()) {
+        if line.starts_with("FAIL") {
+            fails += 1;
+        } else if line.starts_with("warn") {
+            warns += 1;
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
     let (line, machine) = machine_check(crate::home::machine_known());
     if line.starts_with("FAIL") {
         fails += 1;
@@ -778,6 +787,143 @@ pub async fn doctor(home: &Home, store: Result<Arc<Store>, String>) -> Result<(S
     out.push_str(&line);
     writeln!(out, "\n{fails} failure(s), {warns} warning(s) on {machine}")?;
     Ok((out, fails == 0))
+}
+
+/// Claude Code's user directory: `GROUNDWORKS_CLAUDE_DIR` (tests point it at a fixture), else `~/.claude`.
+pub fn claude_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("GROUNDWORKS_CLAUDE_DIR") {
+        return PathBuf::from(dir);
+    }
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|p| PathBuf::from(p).join(".claude"))
+        .unwrap_or_else(|| PathBuf::from(".claude"))
+}
+
+/// VS Code's user mcp.json: `GROUNDWORKS_VSCODE_MCP`, else `%APPDATA%/Code/User/mcp.json` (None when
+/// neither names a location, so the check says it could not look rather than passing).
+pub fn vscode_mcp_path() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("GROUNDWORKS_VSCODE_MCP") {
+        return Some(PathBuf::from(p));
+    }
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Code").join("User").join("mcp.json"))
+}
+
+/// The enforcement's own health (decision 1itizcerhaj5x1mjfyj2, layer 4), as doctor lines: FAIL when the
+/// installed plugin has no hooks.json, or any agent lacks the stamp block; warn when VS Code's mcp.json
+/// exists without a groundworks server, or when Claude Code is not installed here at all.
+pub fn environment_checks(claude: &Path, vscode_mcp: Option<&Path>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !claude.is_dir() {
+        lines.push(format!(
+            "warn claude: {} is not here (Claude Code not installed; hooks cannot run)",
+            claude.display()
+        ));
+    } else {
+        let cache = claude
+            .join("plugins")
+            .join("cache")
+            .join("groundworks")
+            .join("groundworks");
+        let mut versions: Vec<PathBuf> = std::fs::read_dir(&cache)
+            .map(|rd| {
+                rd.filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default();
+        versions.sort_by_key(|p| version_key(&p.file_name().unwrap_or_default().to_string_lossy()));
+        match versions.last() {
+            None => lines.push(format!(
+                "FAIL plugin: groundworks is not installed under {} (claude plugin install groundworks@groundworks)",
+                cache.display()
+            )),
+            Some(newest) => {
+                let hooks = newest.join("hooks").join("hooks.json");
+                let rules = newest.join("hooks").join("deny.toml");
+                if hooks.is_file() && rules.is_file() {
+                    lines.push(format!(
+                        "ok   plugin: {} has hooks/hooks.json and hooks/deny.toml",
+                        newest.display()
+                    ));
+                } else {
+                    lines.push(format!(
+                        "FAIL plugin: {} lacks {} (an older plugin: claude plugin update groundworks@groundworks)",
+                        newest.display(),
+                        if hooks.is_file() {
+                            "hooks/deny.toml"
+                        } else {
+                            "hooks/hooks.json"
+                        }
+                    ));
+                }
+            }
+        }
+        let agents = claude.join("agents");
+        match agent_files(&agents) {
+            Err(_) => lines.push(format!("warn agents: no {} (nothing to stamp)", agents.display())),
+            Ok(files) if files.is_empty() => lines.push(format!("warn agents: {} holds no agent", agents.display())),
+            Ok(files) => {
+                let drifting: Vec<String> = files
+                    .iter()
+                    .filter(|p| {
+                        std::fs::read_to_string(p)
+                            .ok()
+                            .is_none_or(|t| stamp_drift(&t).is_some())
+                    })
+                    .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                    .collect();
+                if drifting.is_empty() {
+                    lines.push(format!("ok   agents: all {} carry the Groundworks block", files.len()));
+                } else {
+                    let shown: Vec<&str> = drifting.iter().take(3).map(String::as_str).collect();
+                    lines.push(format!(
+                        "FAIL agents: {} of {} lack the Groundworks block or drift from it ({}{}): groundworks install-team --stamp",
+                        drifting.len(),
+                        files.len(),
+                        shown.join(", "),
+                        if drifting.len() > 3 { ", ..." } else { "" }
+                    ));
+                }
+            }
+        }
+    }
+    match vscode_mcp {
+        None => lines.push("warn vscode: no APPDATA, so mcp.json could not be looked for".to_owned()),
+        Some(path) if !path.is_file() => {
+            lines.push(format!(
+                "ok   vscode: no {} (VS Code MCP not configured here)",
+                path.display()
+            ));
+        }
+        Some(path) => {
+            let has = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .is_some_and(|v| v["servers"]["groundworks"].is_object() || v["mcpServers"]["groundworks"].is_object());
+            if has {
+                lines.push(format!("ok   vscode: {} has a groundworks server", path.display()));
+            } else {
+                lines.push(format!(
+                    "warn vscode: {} has no groundworks server (docs/VSCODE-MCP.md); Copilot sessions there are blind",
+                    path.display()
+                ));
+            }
+        }
+    }
+    lines
+}
+
+/// `0.10.2` sorts after `0.9.0`: numeric fields, then the text as a tie-break.
+fn version_key(name: &str) -> (Vec<u64>, String) {
+    (
+        name.split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect(),
+        name.to_owned(),
+    )
 }
 
 /// Doctor's machine line and the name the summary uses. A box that cannot name itself is a failure:
@@ -1374,6 +1520,50 @@ knowledge base on\"): re_kb is ON again -- SurrealDB on\n127.0.0.1:8001 (ns `re`
             !ok && report.contains("DRIFT") && report.contains("gw-engineer.md: block differs"),
             "{report}"
         );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn environment_checks_fail_on_a_hookless_plugin_and_an_unstamped_agent_and_warn_on_vscode() {
+        let base = std::env::temp_dir().join(format!("gw-doctor-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let claude = base.join("claude");
+        let cache = claude.join("plugins/cache/groundworks/groundworks");
+        std::fs::create_dir_all(cache.join("0.2.0")).unwrap();
+        std::fs::create_dir_all(claude.join("agents")).unwrap();
+        std::fs::write(claude.join("agents/plain.md"), "# plain\n").unwrap();
+        let mcp = base.join("mcp.json");
+        std::fs::write(&mcp, r#"{"servers": {"other": {"type": "stdio"}}}"#).unwrap();
+        let lines = environment_checks(&claude, Some(&mcp));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("FAIL plugin") && l.contains("hooks/hooks.json")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("FAIL agents: 1 of 1") && l.contains("plain.md")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.starts_with("warn vscode")), "{lines:?}");
+        // Fixed: a newer version with the hooks (0.10.0 sorts after 0.2.0), a stamped agent, a server entry.
+        std::fs::create_dir_all(cache.join("0.10.0/hooks")).unwrap();
+        std::fs::write(cache.join("0.10.0/hooks/hooks.json"), "{}").unwrap();
+        std::fs::write(cache.join("0.10.0/hooks/deny.toml"), "").unwrap();
+        std::fs::write(claude.join("agents/plain.md"), stamp_text("# plain\n").unwrap()).unwrap();
+        std::fs::write(
+            &mcp,
+            r#"{"servers": {"groundworks": {"type": "stdio", "command": "groundworks"}}}"#,
+        )
+        .unwrap();
+        let lines = environment_checks(&claude, Some(&mcp));
+        assert!(lines.iter().all(|l| l.starts_with("ok   ")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("0.10.0")), "{lines:?}");
+        // No Claude Code here at all is a warning, not a pass; no APPDATA is a warning too.
+        let lines = environment_checks(&base.join("nowhere"), None);
+        assert_eq!(lines.iter().filter(|l| l.starts_with("warn")).count(), 2, "{lines:?}");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

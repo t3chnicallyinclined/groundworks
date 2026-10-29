@@ -242,6 +242,30 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
         home.join("registry/projects/secret.toml"),
         "name = \"secret\"\ndir = \"secret\"\nsummary = \"isolated by the owner\"\n",
     )?;
+    // Claude Code as doctor expects it (never the real ~/.claude): the plugin with its hooks, one stamped
+    // agent, a VS Code mcp.json with the server; and a bad twin for the red side.
+    let claude = base.join("claude");
+    let cache = claude.join("plugins/cache/groundworks/groundworks/0.5.0/hooks");
+    std::fs::create_dir_all(&cache)?;
+    std::fs::write(
+        cache.join("hooks.json"),
+        include_str!("../../../../plugin/hooks/hooks.json"),
+    )?;
+    std::fs::write(cache.join("deny.toml"), gw_ops::hook::DEFAULT_RULES)?;
+    std::fs::create_dir_all(claude.join("agents"))?;
+    std::fs::write(
+        claude.join("agents/stamped.md"),
+        gw_ops::ops::stamp_text("---\nname: stamped\n---\n").context("stamp")?,
+    )?;
+    std::fs::write(
+        base.join("mcp.json"),
+        r#"{"servers": {"groundworks": {"type": "stdio", "command": "groundworks", "args": ["serve"]}}}"#,
+    )?;
+    let bad = base.join("claude-bad");
+    std::fs::create_dir_all(bad.join("plugins/cache/groundworks/groundworks/0.2.0"))?;
+    std::fs::create_dir_all(bad.join("agents"))?;
+    std::fs::write(bad.join("agents/unstamped.md"), "# unstamped\n")?;
+    std::fs::write(base.join("mcp-without.json"), r#"{"servers": {}}"#)?;
     Ok(home)
 }
 
@@ -284,12 +308,16 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
 
     let home_env = home.display().to_string();
     let experts_env = base.join("experts").display().to_string();
+    let claude_env = base.join("claude").display().to_string();
+    let mcp_env = base.join("mcp.json").display().to_string();
     let mut s = Client::start(
         exe,
         &[
             ("GROUNDWORKS_HOME", &home_env),
             ("GROUNDWORKS_MACHINE", "SELFTEST"),
             ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+            ("GROUNDWORKS_VSCODE_MCP", &mcp_env),
         ],
         &["GROUNDWORKS_START"],
     )?;
@@ -741,11 +769,42 @@ the parser now accepts empty input
 
     let (err, text) = s.call("doctor", json!({}))?;
     c.check(
-        "doctor finds no failures, store included",
-        !err && text.contains("ok   store"),
+        "doctor finds no failures: store, installed plugin with hooks, stamped agents, VS Code server, machine",
+        !err && text.contains("ok   store")
+            && text.contains("ok   plugin")
+            && text.contains("ok   agents: all 1")
+            && text.contains("ok   vscode")
+            && text.contains("ok   machine: SELFTEST")
+            && text.contains("
+0 failure(s), "),
         &text,
     );
     drop(s);
+
+    // The red side of doctor, through the CLI: a plugin without hooks, an unstamped agent, a VS Code
+    // mcp.json without the server.
+    let bad = Command::new(exe)
+        .arg("doctor")
+        .env("GROUNDWORKS_HOME", &home_env)
+        .env("GROUNDWORKS_MACHINE", "SELFTEST")
+        .env("GROUNDWORKS_CLAUDE_DIR", base.join("claude-bad"))
+        .env("GROUNDWORKS_VSCODE_MCP", base.join("mcp-without.json"))
+        .env_remove("GROUNDWORKS_START")
+        .stdin(Stdio::null())
+        .output()?;
+    let bad_text = String::from_utf8_lossy(&bad.stdout);
+    c.check(
+        "doctor FAILS on a hookless plugin and an unstamped agent, warns on mcp.json without groundworks, and exits non-zero",
+        !bad.status.success()
+            && bad_text.contains("FAIL plugin")
+            && bad_text.contains("hooks/hooks.json")
+            && bad_text.contains("FAIL agents: 1 of 1")
+            && bad_text.contains("unstamped.md")
+            && bad_text.contains("warn vscode")
+            && bad_text.contains("
+2 failure(s), "),
+        &bad_text,
+    );
 
     hook_checks(exe, base, &home, &owner, &mut c)?;
 
