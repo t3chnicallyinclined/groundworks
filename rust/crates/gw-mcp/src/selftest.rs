@@ -315,6 +315,41 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         &text,
     );
 
+    // Secret-shaped text is refused before it reaches the store, by gw-security's fixture both ways.
+    let refusal_failures = gw_ops::refusal::selfcheck();
+    let fixture = gw_ops::refusal::Fixture::load()?;
+    c.check(
+        &format!(
+            "every refusal fixture sample behaves ({} must-refuse, {} must-accept)",
+            fixture.must_refuse.len(),
+            fixture.must_accept.len()
+        ),
+        refusal_failures.is_empty(),
+        &refusal_failures.join("; "),
+    );
+    let (err, text) = s.call(
+        "journal_add",
+        json!({"project": "demo", "kind": "status", "text": "GROUNDWORKS_OWNER_PASS=k4RvsbZdgBplk8Qq", "source": "selftest",
+               "confidence": "INFERRED", "by": "selftest"}),
+    )?;
+    c.check(
+        "journal_add refuses secret-shaped text with the exact message and without the value",
+        err && text.contains("refused: text looks like it contains a secret (kv-secret at character ")
+            && text.contains("Nothing was recorded.")
+            && !text.contains("k4RvsbZdgBplk8Qq"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "journal_add",
+        json!({"project": "demo", "kind": "status", "text": "the admin password is in bw:rise3 server#root password; never print it",
+               "source": "selftest", "confidence": "INFERRED", "by": "selftest"}),
+    )?;
+    c.check(
+        "a Bitwarden reference is the recommended replacement and is accepted",
+        !err && text.contains("bw:rise3 server#root password"),
+        &text,
+    );
+
     let (err, text) = s.call(
         "run",
         json!({"project": "demo", "env": "local", "command": "echo hello"}),
@@ -1448,6 +1483,17 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         rejections.iter().any(|r| {
             r["surface"] == "journal_add" && r["reason"] == "confirmed-needs-evidence" && r["project"] == "demo"
         }) && !serde_json::to_string(&rejections)?.contains("unbacked"),
+        &format!("{rejections:?}"),
+    );
+    c.check(
+        "the secret-shaped refusal is a rejection row with the pattern id, field, offset and length, never the value",
+        rejections.iter().any(|r| {
+            r["surface"] == "journal_add"
+                && r["reason"] == "kv-secret"
+                && r["field"] == "text"
+                && r["offset"].as_u64().is_some()
+                && r["match_len"].as_u64().is_some_and(|n| n > 10)
+        }) && !serde_json::to_string(&rejections)?.contains("k4RvsbZdgBplk8Qq"),
         &format!("{rejections:?}"),
     );
 

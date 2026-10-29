@@ -812,7 +812,13 @@ fn record(
         attacks: None,
         stance: None,
     };
-    let id = store.add_fact(&project.path(&home.workspace), &project.name, &fact)?;
+    let id = match store.add_fact(&project.path(&home.workspace), &project.name, &fact) {
+        Ok(id) => id,
+        Err(e) => {
+            crate::ops::record_refusal(store, "ask_record", &project.name, &fact.by, &e);
+            return Err(e);
+        }
+    };
     Ok(format!(
         "recorded {id} in {}: CONFIRMED by {}#L{}-{}",
         project.name,

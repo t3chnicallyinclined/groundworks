@@ -269,6 +269,8 @@ impl Store {
     /// receipt, an owner statement, or a quote that was found word for word (checked here first, so
     /// the refusal can say what the file really contains).
     pub fn add_fact(&self, project_dir: &Path, project: &str, fact: &FactIn) -> Result<String> {
+        // Before any network call: secret-shaped text never leaves this process (JOURNAL-REFUSALS.md).
+        crate::refusal::check_fact(fact)?;
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         self.retrying(|| self.write_fact(&db, project_dir, fact, None))
     }
@@ -281,6 +283,7 @@ impl Store {
         fact: &FactIn,
         owner_pass: &str,
     ) -> Result<String> {
+        crate::refusal::check_fact(fact)?;
         let db = self.owner(&project_ns(&slug(project)?)?, owner_pass)?;
         self.retrying(|| self.write_fact(&db, project_dir, fact, None))
     }
@@ -299,6 +302,7 @@ impl Store {
     ) -> Result<Option<String>> {
         // Refuse bad input before the duplicate check, so a bad entry is never silently "already there".
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
+        crate::refusal::check_fact(fact)?;
         needs_evidence(fact)?;
         let ns = project_ns(&slug(project)?)?;
         self.agent(&ns)?;
@@ -324,6 +328,7 @@ impl Store {
 
     fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, origin: Option<&Origin>) -> Result<String> {
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
+        crate::refusal::check_fact(fact)?;
         let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
         needs_evidence(fact)?;
         let grade = grade(fact.confidence);
@@ -883,6 +888,7 @@ impl Store {
         sha: &str,
         by: &str,
     ) -> Result<()> {
+        crate::refusal::check_text("text", text)?;
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         let vars = Vars::default()
             .set("key", panel_key(id)?)

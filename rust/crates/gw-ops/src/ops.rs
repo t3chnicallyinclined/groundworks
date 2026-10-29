@@ -175,16 +175,7 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
         Ok(id) => id,
         Err(e) => {
             // The refusal is counted (pulse: store rejections) as a code: never the text.
-            let row = store::RejectionIn {
-                surface: note.surface,
-                project: Some(&project.name),
-                by: Some(note.by),
-                reason: rejection_code(&format!("{e:#}")),
-                ..store::RejectionIn::default()
-            };
-            if store.record_rejection(&row).is_err() {
-                eprintln!("rejection not recorded");
-            }
+            record_refusal(store, note.surface, &project.name, note.by, &e);
             return Err(e);
         }
     };
@@ -193,6 +184,33 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
         .pop()
         .map_or_else(|| id.clone(), |f| f.render());
     Ok(format!("recorded {id}: {recorded}"))
+}
+
+/// Count a refused write as a rejection row: the pattern id, field, offset and length for a
+/// secret-shaped refusal, else the store rule's code. Never the text. A failure to record is printed
+/// and swallowed: the caller's refusal is the result that matters.
+pub fn record_refusal(store: &Store, surface: &str, project: &str, by: &str, e: &anyhow::Error) {
+    let row = match e.downcast_ref::<crate::refusal::Refusal>() {
+        Some(r) => store::RejectionIn {
+            surface,
+            project: Some(project),
+            by: Some(by),
+            reason: r.id,
+            field: Some(r.field),
+            offset: Some(r.offset as u64),
+            match_len: Some(r.len as u64),
+        },
+        None => store::RejectionIn {
+            surface,
+            project: Some(project),
+            by: Some(by),
+            reason: rejection_code(&format!("{e:#}")),
+            ..store::RejectionIn::default()
+        },
+    };
+    if store.record_rejection(&row).is_err() {
+        eprintln!("rejection not recorded ({surface})");
+    }
 }
 
 /// The store rule a refusal came from, as the code a rejection row keeps; nothing of what was refused.
@@ -316,7 +334,7 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
         if entries.is_empty() {
             continue;
         }
-        let (mut imported, mut skipped) = (0usize, 0usize);
+        let (mut imported, mut skipped, mut refused) = (0usize, 0usize, 0usize);
         for entry in &entries {
             let (kind, mut text) = entry.kind_and_text();
             let owner = entry.source.trim_start().to_lowercase().starts_with("owner");
@@ -348,16 +366,23 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
                 &fact,
                 &entry.ts,
                 Some(entry.machine.as_str()),
-            )? {
-                Some(_) => imported += 1,
-                None => skipped += 1,
+            ) {
+                Ok(Some(_)) => imported += 1,
+                Ok(None) => skipped += 1,
+                // An old entry that looks like it holds a secret stays in the file and is counted.
+                Err(e) if e.downcast_ref::<crate::refusal::Refusal>().is_some() => {
+                    record_refusal(store, "import_journals", &project.name, &entry.by, &e);
+                    refused += 1;
+                }
+                Err(e) => return Err(e),
             }
         }
         let done = path.with_extension("jsonl.imported");
         std::fs::rename(&path, &done)?;
         writeln!(
             out,
-            "{}: {imported} imported, {skipped} already there (an import can be re-run safely); {} renamed",
+            "{}: {imported} imported, {skipped} already there, {refused} refused as secret-shaped (an import can be \
+             re-run safely); {} renamed",
             project.name,
             done.display()
         )?;

@@ -16,6 +16,7 @@ pub mod lens;
 pub mod ops;
 pub mod panel;
 pub mod pulse;
+pub mod refusal;
 pub mod registry;
 pub mod rerank;
 pub mod scaffold;
