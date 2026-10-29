@@ -42,7 +42,13 @@ pub fn projects(home: &Home) -> Result<String> {
     Ok(out)
 }
 
-pub fn show(home: &Home, store: Option<&Store>, name: &str, journal_limit: usize) -> Result<String> {
+pub fn show(
+    home: &Home,
+    store: Option<&Store>,
+    name: &str,
+    journal_limit: usize,
+    since: Option<&str>,
+) -> Result<String> {
     let registry = Registry::load(home)?;
     let project = registry.project(name)?;
     let path = project.path(&home.workspace);
@@ -67,10 +73,14 @@ pub fn show(home: &Home, store: Option<&Store>, name: &str, journal_limit: usize
         let exists = path.join(doc).is_file();
         writeln!(out, "doc: {doc}{}", if exists { "" } else { " (MISSING)" })?;
     }
-    out.push_str("\n## Journal\n");
-    match store.map(|s| s.facts(name, None, journal_limit)) {
+    match since {
+        Some(since) => writeln!(out, "\n## Journal since {since}")?,
+        None => out.push_str("\n## Journal\n"),
+    }
+    match store.map(|s| s.facts_query(name, None, since, journal_limit)) {
         None => out.push_str("(store unavailable: the journal could not be read)\n"),
         Some(Err(e)) => writeln!(out, "(store unavailable: {e:#})")?,
+        Some(Ok(facts)) if facts.is_empty() && since.is_some() => out.push_str("(nothing recorded since then)\n"),
         Some(Ok(facts)) if facts.is_empty() => out.push_str("(empty: record what you learn with journal_add)\n"),
         Some(Ok(facts)) => {
             for fact in &facts {
@@ -166,11 +176,23 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
     Ok(format!("recorded {id}: {recorded}"))
 }
 
-pub fn journal(home: &Home, store: &Store, project: &str, kind: Option<Kind>, limit: usize) -> Result<String> {
+/// A project's journal, newest `limit` entries oldest first; one kind only, or only entries after
+/// `since` (RFC 3339), when asked.
+pub fn journal(
+    home: &Home,
+    store: &Store,
+    project: &str,
+    kind: Option<Kind>,
+    since: Option<&str>,
+    limit: usize,
+) -> Result<String> {
     Registry::load(home)?.project(project)?;
-    let facts = store.facts(project, kind, limit)?;
+    let facts = store.facts_query(project, kind, since, limit)?;
     if facts.is_empty() {
-        return Ok(format!("{project} has no matching journal entries"));
+        return Ok(match since {
+            Some(since) => format!("{project} has no matching journal entries since {since}"),
+            None => format!("{project} has no matching journal entries"),
+        });
     }
     Ok(facts.iter().map(|f| format!("- {}\n", f.render())).collect())
 }

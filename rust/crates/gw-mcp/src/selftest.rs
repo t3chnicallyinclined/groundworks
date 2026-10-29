@@ -380,6 +380,31 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         &text,
     );
 
+    let (err, text) = s.call(
+        "journal_read",
+        json!({"project": "demo", "since": "2000-01-01T00:00:00Z"}),
+    )?;
+    c.check(
+        "journal_read since a past time returns the entries",
+        !err && text.contains("the parser rejects empty input"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "journal_read",
+        json!({"project": "demo", "since": "2999-01-01T00:00:00Z"}),
+    )?;
+    c.check(
+        "journal_read since a future time returns nothing, and says since when",
+        !err && text.contains("no matching journal entries since 2999-01-01T00:00:00Z"),
+        &text,
+    );
+    let (err, text) = s.call("journal_read", json!({"project": "demo", "since": "yesterday"}))?;
+    c.check(
+        "a since that is not RFC 3339 is refused",
+        err && text.contains("RFC 3339"),
+        &text,
+    );
+
     let (err, text) = s.call("intake", json!({"project": "demo"}))?;
     c.check(
         "intake reads the project, names the expert whose definition cites it, and skips the secret",

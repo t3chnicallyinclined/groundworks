@@ -377,15 +377,39 @@ impl Store {
 
     /// The newest `limit` facts, oldest first, optionally of one kind.
     pub fn facts(&self, project: &str, kind_filter: Option<Kind>, limit: usize) -> Result<Vec<FactRow>> {
+        self.facts_query(project, kind_filter, None, limit)
+    }
+
+    /// Every fact recorded after `since` (RFC 3339), oldest first. The Stop hook asks this to learn
+    /// whether a session wrote anything; the pulse asks it per window.
+    pub fn facts_since(&self, project: &str, since: &str) -> Result<Vec<FactRow>> {
+        self.facts_query(project, None, Some(since), 10_000)
+    }
+
+    /// The newest `limit` facts, oldest first, optionally of one kind and optionally after `since`.
+    pub fn facts_query(
+        &self,
+        project: &str,
+        kind_filter: Option<Kind>,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<FactRow>> {
         let mut vars = Vars::default();
-        let filter = match kind_filter {
-            Some(k) => {
-                vars = vars.set("kind", kind(k));
-                "WHERE kind = $kind"
-            }
-            None => "",
+        let mut clauses: Vec<&str> = Vec::with_capacity(2);
+        if let Some(k) = kind_filter {
+            vars = vars.set("kind", kind(k));
+            clauses.push("kind = $kind");
+        }
+        if let Some(since) = since {
+            vars = vars.set("since", rfc3339(since)?);
+            clauses.push("at > <datetime>$since");
+        }
+        let filter = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
         };
-        self.fact_rows(project, filter, vars, limit)
+        self.fact_rows(project, &filter, vars, limit)
     }
 
     /// The findings made through a lens, and every attack on them, oldest first.

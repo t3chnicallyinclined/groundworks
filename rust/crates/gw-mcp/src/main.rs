@@ -34,6 +34,20 @@ enum Command {
         project: String,
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Only journal entries after this RFC 3339 time (e.g. 2026-10-29T20:00:00Z).
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// A project's journal: newest entries, oldest first; one kind, or only entries after a time.
+    Journal {
+        project: String,
+        #[arg(long, value_enum)]
+        kind: Option<Kind>,
+        /// Only entries after this RFC 3339 time (e.g. 2026-10-29T20:00:00Z).
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
     /// Show an env's vars and secret references.
     Env {
@@ -502,10 +516,23 @@ async fn dispatch(command: Command) -> Result<bool> {
     let (text, ok) = match command {
         Command::Serve | Command::Selftest => unreachable!("handled above"),
         Command::Projects => (ops::projects(&home)?, true),
-        Command::Show { project, limit } => {
+        Command::Show { project, limit, since } => {
             let store = open_store(&home).await.ok();
             let home = Arc::clone(&home);
-            let text = store::blocking(move || ops::show(&home, store.as_deref(), &project, limit)).await?;
+            let text =
+                store::blocking(move || ops::show(&home, store.as_deref(), &project, limit, since.as_deref())).await?;
+            (text, true)
+        }
+        Command::Journal {
+            project,
+            kind,
+            since,
+            limit,
+        } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let text =
+                store::blocking(move || ops::journal(&home, &store, &project, kind, since.as_deref(), limit)).await?;
             (text, true)
         }
         Command::Env { project, env } => (ops::env_show(&home, &project, &env).await?, true),
