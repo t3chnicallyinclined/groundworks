@@ -941,6 +941,59 @@ the parser now accepts empty input
         &history,
     );
 
+    // install-team --stamp / --check through the CLI, on a copy of agent files (never ~/.claude/agents).
+    let agents = base.join("agents-copy");
+    std::fs::create_dir_all(&agents)?;
+    std::fs::write(
+        agents.join("old.md"),
+        "# old\n\n## Tooling note (owner, 2026-09-22)\nThe orchestration methods are OFF: no groundworks / board / \
+         tickets / hindsight / fleetview, no `orchestrate` /\n`ticket` skills. UPDATE 2026-10-18 (owner: \"turn the \
+         knowledge base on\"): re_kb is ON again.\n",
+    )?;
+    std::fs::write(agents.join("silent.md"), "# silent\n")?;
+    let team = home.join("team");
+    std::fs::create_dir_all(&team)?;
+    std::fs::write(team.join("gw-engineer.md"), "---\nname: gw-engineer\n---\nbuilds\n")?;
+    let install = |args: &[&str]| -> Result<(bool, String)> {
+        let out = Command::new(exe)
+            .args(["install-team"])
+            .args(args)
+            .arg("--agents-dir")
+            .arg(&agents)
+            .env("GROUNDWORKS_HOME", &home_env)
+            .env_remove("GROUNDWORKS_START")
+            .stdin(Stdio::null())
+            .output()?;
+        Ok((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned()))
+    };
+    let (ok, text) = install(&["--check"])?;
+    c.check(
+        "install-team --check is red on agents without the block and names them",
+        !ok && text.contains("DRIFT") && text.contains("old.md") && text.contains("silent.md"),
+        &text,
+    );
+    let (ok, text) = install(&["--stamp", "--check"])?;
+    let old = std::fs::read_to_string(agents.join("old.md"))?;
+    c.check(
+        "install-team --stamp inserts the block in every agent, replaces the OFF sentence and keeps the 2026-10-18 update; --check is then green",
+        ok && text.contains("3 file(s) written (1 OFF sentence(s) replaced)")
+            && text.contains("check: 0 of 3 agent(s) drift")
+            && old.contains(gw_ops::ops::STAMP_BLOCK)
+            && !old.contains("The orchestration methods are OFF")
+            && old.contains(gw_ops::ops::ON_SENTENCE)
+            && old.contains("re_kb is ON again"),
+        &format!("{text}\n{old}"),
+    );
+    let silent = agents.join("silent.md");
+    let edited = std::fs::read_to_string(&silent)?.replace("one agent does the work", "many agents do the work");
+    std::fs::write(&silent, edited)?;
+    let (ok, text) = install(&["--check"])?;
+    c.check(
+        "install-team --check detects a hand-edited block and exits non-zero",
+        !ok && text.contains("DRIFT") && text.contains("silent.md: block differs") && text.contains("1 of 3"),
+        &text,
+    );
+
     supervisor_checks(exe, base, &mut c)?;
 
     let total = c
