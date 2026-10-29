@@ -616,12 +616,29 @@ pub async fn doctor(home: &Home, store: Result<Arc<Store>, String>) -> Result<(S
             writeln!(out, "FAIL store: {e}")?;
         }
     }
-    writeln!(
-        out,
-        "\n{fails} failure(s), {warns} warning(s) on {}",
-        crate::home::machine()
-    )?;
+    let (line, machine) = machine_check(crate::home::machine_known());
+    if line.starts_with("FAIL") {
+        fails += 1;
+    }
+    out.push_str(&line);
+    writeln!(out, "\n{fails} failure(s), {warns} warning(s) on {machine}")?;
     Ok((out, fails == 0))
+}
+
+/// Doctor's machine line and the name the summary uses. A box that cannot name itself is a failure:
+/// every receipt and fact it wrote would carry "unknown", and a result without its machine is not a result.
+fn machine_check(known: Option<String>) -> (String, String) {
+    match known {
+        Some(name) => (format!("ok   machine: {name}\n"), name),
+        None => (
+            format!(
+                "FAIL machine: no name (set GROUNDWORKS_MACHINE, COMPUTERNAME or HOSTNAME, or install `hostname`); \
+                 every receipt and fact from here would say \"{}\"\n",
+                crate::home::UNKNOWN_MACHINE
+            ),
+            crate::home::UNKNOWN_MACHINE.to_owned(),
+        ),
+    }
 }
 
 /// Copies `team/gw-*.md` into `~/.claude/agents`. Only files with that
@@ -932,4 +949,19 @@ pub fn experts() -> Result<String> {
         .iter()
         .map(|e| format!("{}: {}\n", e.name, e.summary.chars().take(160).collect::<String>()))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doctor_fails_when_the_machine_has_no_name() {
+        let (line, name) = machine_check(None);
+        assert!(line.starts_with("FAIL machine"), "{line}");
+        assert_eq!(name, crate::home::UNKNOWN_MACHINE);
+        let (line, name) = machine_check(Some("THERIGXD".to_owned()));
+        assert_eq!(line, "ok   machine: THERIGXD\n");
+        assert_eq!(name, "THERIGXD");
+    }
 }

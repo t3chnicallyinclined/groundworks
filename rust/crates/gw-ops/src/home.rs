@@ -132,12 +132,50 @@ pub fn find_home(start: &Path) -> Option<PathBuf> {
         .find(|home| home.join("groundworks.toml").is_file())
 }
 
-/// The machine a result came from, so no result is ever detached from where it ran.
+/// What [`machine`] says when nothing on this box names it; `doctor` fails on it.
+pub const UNKNOWN_MACHINE: &str = "unknown";
+
+/// The machine a result came from, so no result is ever detached from where it ran:
+/// `GROUNDWORKS_MACHINE`, else `COMPUTERNAME` (Windows), else `HOSTNAME`, else what the `hostname`
+/// command prints (asked once per process). Measured 2026-10-29: a Claude Code session on Windows
+/// inherits neither variable, so every pulse and doctor line said "unknown".
 pub fn machine() -> String {
+    machine_known().unwrap_or_else(|| UNKNOWN_MACHINE.to_owned())
+}
+
+/// The machine's name, or None when nothing on this box names it.
+pub fn machine_known() -> Option<String> {
+    static FROM_COMMAND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    machine_from_env().or_else(|| FROM_COMMAND.get_or_init(hostname_command).clone())
+}
+
+fn machine_from_env() -> Option<String> {
     ["GROUNDWORKS_MACHINE", "COMPUTERNAME", "HOSTNAME"]
         .iter()
-        .find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()))
-        .unwrap_or_else(|| "unknown".to_owned())
+        .find_map(|var| {
+            std::env::var(var)
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        })
+}
+
+/// The first line `hostname` prints, if the command exists and prints one.
+fn hostname_command() -> Option<String> {
+    let out = std::process::Command::new("hostname")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
 }
 
 /// Names that become file names: letters, digits, `.`, `_`, `-`, not starting with `.`.
@@ -154,6 +192,21 @@ pub fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_machine_is_named_without_either_variable() {
+        // GROUNDWORKS_MACHINE wins when set; the command answers when no variable does. The test
+        // cannot unset the process environment for other tests safely, so it checks the pieces.
+        let from_command = hostname_command();
+        assert!(
+            from_command
+                .as_deref()
+                .is_some_and(|m| !m.is_empty() && m != UNKNOWN_MACHINE),
+            "hostname must name this machine: {from_command:?}"
+        );
+        assert_ne!(machine(), UNKNOWN_MACHINE);
+        assert_eq!(machine_known().as_deref(), Some(machine().as_str()));
+    }
 
     #[test]
     fn finds_the_nearest_home_walking_up() {
