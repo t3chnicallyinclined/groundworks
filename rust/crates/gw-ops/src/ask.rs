@@ -85,8 +85,16 @@ pub struct AnswerIn {
     #[serde(default)]
     pub not_answerable: bool,
     /// When the check passes, keep the answer as a fact, its first support quote as the evidence.
-    #[serde(default)]
+    /// On unless the caller says `record: false`. Measured 2026-10-28 on the live store: in three
+    /// days of real use 88 answers from real sessions passed and none was kept, with the agent text
+    /// asking for `record: true` on the ones worth keeping; the eval runs turn recording off with
+    /// GROUNDWORKS_NO_RECORD, which still wins over this default.
+    #[serde(default = "default_true")]
     pub record: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Lines `a..=b` (file numbering) of a unit whose locator starts at some line, or None when outside it.
@@ -579,6 +587,16 @@ pub fn reach(found: &Found) -> String {
 /// Open a packet: retrieve the best `q.limit` units for the question, record them, and hand the
 /// reader every candidate in full, numbered.
 pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String> {
+    // An eval session (recording off) is marked on its packet, so the pulse and a set drawn from
+    // real asks can leave it out. Measured 2026-10-29: 88 passed packets signed "main session" were
+    // eval runs whose sessions never loaded the agent text, and nothing in the store said so.
+    let marked;
+    let by = if std::env::var_os("GROUNDWORKS_NO_RECORD").is_some() {
+        marked = format!("eval:{by}");
+        marked.as_str()
+    } else {
+        by
+    };
     let question = q.text.trim();
     ensure!(!question.is_empty(), "the question is empty");
     let q = Query {
@@ -721,10 +739,7 @@ pub fn answer(
             Err(e) => writeln!(out, "not recorded: {e:#}")?,
         }
     } else if passed {
-        out.push_str(
-            "Every quote was found word for word in a candidate that was read. To keep the answer as a checked \
-             fact for the next session, answer again with record: true.\n",
-        );
+        out.push_str("Not kept as a fact (record: false).\n");
     }
     Ok((out, passed))
 }
@@ -809,6 +824,14 @@ fn record(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_answer_records_unless_told_not_to() {
+        let a: super::AnswerIn = serde_json::from_str(r#"{"answer": "x"}"#).unwrap();
+        assert!(a.record, "a passed answer is kept by default");
+        let a: super::AnswerIn = serde_json::from_str(r#"{"answer": "x", "record": false}"#).unwrap();
+        assert!(!a.record);
+    }
+
     use super::*;
 
     fn cand(n: usize, key: &str) -> Candidate {
@@ -1095,7 +1118,11 @@ mod tests {
         let mut read: Vec<Hit> = (0..30)
             .map(|i| hit("big", 100.0 - i as f64, "frames and rollback in general terms"))
             .collect();
-        read.push(hit("notes", 5.0, "the save set is 277,288 bytes, every rollback restores it"));
+        read.push(hit(
+            "notes",
+            5.0,
+            "the save set is 277,288 bytes, every rollback restores it",
+        ));
         read.push(hit("notes", 4.0, "unrelated note"));
         let out = order_hits("how many bytes is the save set a rollback restores", read);
         assert_eq!(out.len(), 32, "nothing dropped: the caller cuts");
@@ -1104,14 +1131,21 @@ mod tests {
             note < 15,
             "the note with the words rises from 31st to the packet's first half (fusion with the store's rank): {note}"
         );
-        assert_eq!(out[0].score, Some(100.0), "the store's best, which also matches, stays first");
+        assert_eq!(
+            out[0].score,
+            Some(100.0),
+            "the store's best, which also matches, stays first"
+        );
         assert_eq!(out[31].score, Some(4.0), "the unrelated note stays last");
         // A fact that shares one word with the question ranks below the unit that answers it.
         let docs = vec![
             "PGO: the profile is taken from the match tape, every build".to_owned(),
             "the save set is 277,288 bytes, every rollback restores it".to_owned(),
         ];
-        assert_eq!(order_by_words("how many bytes is the save set a rollback restores", &docs), [1, 0]);
+        assert_eq!(
+            order_by_words("how many bytes is the save set a rollback restores", &docs),
+            [1, 0]
+        );
     }
 
     #[test]

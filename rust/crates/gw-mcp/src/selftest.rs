@@ -707,6 +707,57 @@ the parser now accepts empty input
         &format!("{exported:?} for namespaces {namespaces:?}"),
     );
 
+    // The restore drill, both ways: the export restores into a scratch server with every table's
+    // count as recorded; a count raised by one in COUNTS.json fails it, and so does a truncated file.
+    let drilled = gw_ops::supervise::drill(&owner, &backups, None);
+    c.check(
+        "the restore drill restores the export into a scratch server and every table count matches",
+        drilled.as_ref().is_ok_and(|d| {
+            d.passed && d.lines.len() == namespaces.len() && d.dir.join(gw_ops::supervise::DRILL_FILE).is_file()
+        }),
+        &format!("{drilled:?}"),
+    );
+    if let Ok(d) = &drilled {
+        let counts_path = d.dir.join(gw_ops::supervise::COUNTS_FILE);
+        let original = std::fs::read_to_string(&counts_path)?;
+        let mut counts: serde_json::Value = serde_json::from_str(&original)?;
+        let mut bumped = false;
+        if let Some(ns) = counts.as_object_mut().and_then(|m| m.values_mut().next())
+            && let Some(table) = ns.as_object_mut().and_then(|m| m.values_mut().next())
+            && let Some(range) = table.as_array_mut()
+        {
+            for v in range.iter_mut() {
+                *v = json!(v.as_i64().unwrap_or(0) + 1);
+            }
+            bumped = true;
+        }
+        std::fs::write(&counts_path, counts.to_string())?;
+        let tampered = gw_ops::supervise::drill(&owner, &backups, None);
+        c.check(
+            "a count raised by one in COUNTS.json fails the drill and names the table",
+            bumped
+                && tampered.as_ref().is_ok_and(|t| {
+                    !t.passed && t.lines.iter().any(|l| l.starts_with("FAIL") && l.contains("restored"))
+                }),
+            &format!("{tampered:?}"),
+        );
+        std::fs::write(&counts_path, original)?;
+        let gz = std::fs::read_dir(&d.dir)?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "gz"))
+            .context("an export file to truncate")?;
+        let bytes = std::fs::read(&gz)?;
+        std::fs::write(&gz, &bytes[..bytes.len() / 2])?;
+        let truncated = gw_ops::supervise::drill(&owner, &backups, None);
+        c.check(
+            "a truncated export file fails the drill",
+            truncated.as_ref().is_ok_and(|t| !t.passed),
+            &format!("{truncated:?}"),
+        );
+        std::fs::write(&gz, bytes)?;
+    }
+
     supervisor_checks(exe, base, &mut c)?;
 
     let total = c
@@ -745,7 +796,16 @@ fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
     std::fs::write(home.join("secrets/agent.pass"), AGENT_PASS)?;
     let log = home.join("db/supervisor.log");
     let mut sup = Command::new(exe)
-        .args(["store", "supervise", "--poll-ms", "200", "--no-export", "--exit-after-starts", "2", "--home"])
+        .args([
+            "store",
+            "supervise",
+            "--poll-ms",
+            "200",
+            "--no-export",
+            "--exit-after-starts",
+            "2",
+            "--home",
+        ])
         .arg(&home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -770,7 +830,10 @@ fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
         }
         until()
     };
-    let started = wait(&|| gw_store::healthy(&url) && pids(&log).len() == 1, Duration::from_secs(25));
+    let started = wait(
+        &|| gw_store::healthy(&url) && pids(&log).len() == 1,
+        Duration::from_secs(25),
+    );
     let first = pids(&log);
     c.check(
         "the supervisor starts a store for a home with none",
@@ -781,7 +844,11 @@ fn supervisor_checks(exe: &Path, base: &Path, c: &mut Checks) -> Result<()> {
     if let Some(&pid) = first.first() {
         kill_pid(pid);
         let down = wait(&|| !gw_store::healthy(&url), Duration::from_secs(10));
-        restarted = down && wait(&|| gw_store::healthy(&url) && pids(&log).len() == 2, Duration::from_secs(25));
+        restarted = down
+            && wait(
+                &|| gw_store::healthy(&url) && pids(&log).len() == 2,
+                Duration::from_secs(25),
+            );
     }
     c.check(
         "the supervisor starts it again after it is killed",

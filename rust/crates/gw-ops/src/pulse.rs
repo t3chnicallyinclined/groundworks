@@ -46,8 +46,13 @@ pub struct Pulse {
     pub projects: u64,
     pub totals: ProjectPulse,
     pub per_project: BTreeMap<String, ProjectPulse>,
-    /// Asks in the window.
+    /// Asks in the window, eval sessions left out.
     pub asks: u64,
+    /// Asks by eval sessions (recording off; `by` starts with `eval:`), counted apart so the use
+    /// numbers say what real sessions did. Measured 2026-10-29: in the first week every passed ask
+    /// in the store came from eval runs, and the pulse could not tell.
+    #[serde(default)]
+    pub asks_eval: u64,
     pub asks_passed: u64,
     pub asks_failed: u64,
     pub asks_not_executed: u64,
@@ -55,6 +60,12 @@ pub struct Pulse {
     pub asks_served_from_knowledge: u64,
     /// Facts recorded from asks in the window.
     pub recorded_in_window: u64,
+    /// The newest finished export's day (`YYYY-MM-DD`), if any.
+    #[serde(default)]
+    pub last_export: Option<String>,
+    /// That export's restore drill: `PASS`, `FAIL`, or `not drilled`.
+    #[serde(default)]
+    pub last_drill: Option<String>,
 }
 
 impl Pulse {
@@ -91,8 +102,15 @@ pub fn take(home: &Home, store: &Store) -> Result<Pulse> {
         pulse.per_project.insert(name.clone(), p);
         pulse.projects += 1;
     }
+    let (last_export, last_drill) = exports_status(home);
+    pulse.last_export = last_export;
+    pulse.last_drill = last_drill;
     let asks = store.ask_packets_since(WINDOW_DAYS)?;
     for row in &asks {
+        if row["by"].as_str().is_some_and(|b| b.starts_with("eval:")) {
+            pulse.asks_eval += 1;
+            continue;
+        }
         pulse.asks += 1;
         match row["status"].as_str().unwrap_or("") {
             "PASS" => pulse.asks_passed += 1,
@@ -106,6 +124,32 @@ pub fn take(home: &Home, store: &Store) -> Result<Pulse> {
         pulse.asks_served_from_knowledge += u64::from(served);
     }
     Ok(pulse)
+}
+
+/// The newest finished export under the home's backups, and the verdict of its restore drill (the
+/// first word of its DRILL file), so a pulse says whether the data could be got back.
+fn exports_status(home: &Home) -> (Option<String>, Option<String>) {
+    let dir = crate::supervise::backups_dir(home);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (None, None);
+    };
+    let mut days: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir() && p.file_name().is_some_and(|n| n.len() == 10) && p.join(crate::supervise::DONE_FILE).is_file()
+        })
+        .collect();
+    days.sort();
+    let Some(newest) = days.pop() else {
+        return (None, None);
+    };
+    let day = newest.file_name().map(|n| n.to_string_lossy().into_owned());
+    let drill = std::fs::read_to_string(newest.join(crate::supervise::DRILL_FILE))
+        .ok()
+        .and_then(|t| t.split_whitespace().next().map(str::to_owned))
+        .unwrap_or_else(|| "not drilled".to_owned());
+    (day, Some(drill))
 }
 
 /// Append the pulse to `metrics/pulse.jsonl` in the home; returns the path.
@@ -126,7 +170,8 @@ pub fn render(p: &Pulse) -> String {
         "pulse {} on {} | {} projects\n\
          stock   units {} ({} gone) | facts live {} (CONFIRMED {:.0}%), stale {} | from asks {} | attacks {} | evidence links {}\n\
          compaction  {:.1} live facts per 1000 units\n\
-         use ({}d)  asks {} | passed {} | failed {} | not executed {} | served from knowledge {} ({:.0}%) | answers recorded {}\n",
+         use ({}d)  asks {} (eval sessions apart: {}) | passed {} | failed {} | not executed {} | served from knowledge {} ({:.0}%) | answers recorded {}\n\
+         ops     last export {} | restore drill {}\n",
         &p.at[..p.at.len().min(19)],
         p.machine,
         p.projects,
@@ -141,12 +186,15 @@ pub fn render(p: &Pulse) -> String {
         p.compaction(),
         WINDOW_DAYS,
         p.asks,
+        p.asks_eval,
         p.asks_passed,
         p.asks_failed,
         p.asks_not_executed,
         p.asks_served_from_knowledge,
         pct(p.asks_served_from_knowledge, p.asks),
-        p.recorded_in_window
+        p.recorded_in_window,
+        p.last_export.as_deref().unwrap_or("none"),
+        p.last_drill.as_deref().unwrap_or("none")
     );
     let mut rows: Vec<(&String, &ProjectPulse)> = p.per_project.iter().collect();
     rows.sort_by(|a, b| (b.1.facts_live + b.1.facts_stale).cmp(&(a.1.facts_live + a.1.facts_stale)));
@@ -165,7 +213,7 @@ pub fn history(home: &Home) -> Result<String> {
     let path = home.root.join("metrics").join("pulse.jsonl");
     let text = std::fs::read_to_string(&path).with_context(|| format!("no pulse yet at {}", path.display()))?;
     let mut s = String::from(
-        "when                 units  facts  stale  from-asks  attacks  compaction  asks  served%  recorded\n",
+        "when                 units  facts  stale  from-asks  attacks  compaction  asks  served%  recorded  drill\n",
     );
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(p) = serde_json::from_str::<Pulse>(line) else {
@@ -178,7 +226,7 @@ pub fn history(home: &Home) -> Result<String> {
         };
         let _ = writeln!(
             s,
-            "{:<20} {:>6} {:>6} {:>6} {:>10} {:>8} {:>11.1} {:>5} {:>7.0} {:>9}",
+            "{:<20} {:>6} {:>6} {:>6} {:>10} {:>8} {:>11.1} {:>5} {:>7.0} {:>9}  {}",
             &p.at[..p.at.len().min(19)],
             p.totals.units,
             p.totals.facts_live,
@@ -188,7 +236,8 @@ pub fn history(home: &Home) -> Result<String> {
             p.compaction(),
             p.asks,
             served,
-            p.recorded_in_window
+            p.recorded_in_window,
+            p.last_drill.as_deref().unwrap_or("-")
         );
     }
     Ok(s)

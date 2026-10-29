@@ -172,6 +172,18 @@ enum Command {
     /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
     /// file of its project, every trap's premise absent.
     EvalCheck { file: std::path::PathBuf },
+    /// Draw a question-set skeleton from real asks: the passed answers of the last --days, their
+    /// questions and support quotes, one JSON line each with category TODO. The owner approves or
+    /// rewrites every line; then eval-check proves the set. Nothing drawn is gold until then.
+    EvalDraw {
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Authors to leave out (the eval runner's own sessions answer as `agent`).
+        #[arg(long, value_delimiter = ',', default_value = "agent")]
+        exclude_by: Vec<String>,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
     /// Run an eval set: each question with and without Groundworks in fresh headless sessions, each
     /// answer graded blind. Resumes an interrupted run given the same --out.
     EvalRun {
@@ -262,6 +274,9 @@ enum StoreAction {
         /// Stop after this many starts (the selftest uses it).
         #[arg(long)]
         exit_after_starts: Option<usize>,
+        /// Skip the restore drill that follows the daily export.
+        #[arg(long)]
+        no_drill: bool,
     },
     /// Export every namespace now, as gzipped SurrealQL under <home>/backup/<date>/.
     Export {
@@ -269,6 +284,16 @@ enum StoreAction {
         home: Option<PathBuf>,
         #[arg(long, default_value_t = 7)]
         keep: usize,
+    },
+    /// Restore drill: import a day's export (the newest by default) into a scratch SurrealDB started
+    /// for the purpose and compare every table's row count with the counts taken at export time.
+    /// Writes DRILL beside the export; exits non-zero on FAIL. Never touches the live store.
+    Drill {
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// The export's day folder (YYYY-MM-DD).
+        #[arg(long)]
+        day: Option<String>,
     },
     /// Windows: register `store supervise` as a scheduled task for this user that runs at logon with no
     /// window and no stored password, and start it now.
@@ -300,6 +325,7 @@ async fn store_service(action: &StoreAction) -> Result<Option<String>> {
             no_export,
             keep,
             exit_after_starts,
+            no_drill,
         } => {
             let home = service_home(home.clone())?;
             let store = gw_ops::supervise::open_store(&home, surreal.clone())?;
@@ -313,15 +339,35 @@ async fn store_service(action: &StoreAction) -> Result<Option<String>> {
                 keep: *keep,
                 exit_after_starts: *exit_after_starts,
                 log: gw_ops::supervise::log_path(&home, &store),
-                backups: home.root.join("backup"),
+                backups: gw_ops::supervise::backups_dir(&home),
+                drill: !*no_drill,
+                home_root: Some(home.root.clone()),
             };
             store::blocking(move || gw_ops::supervise::run(&store, &opts)).await?;
             "supervisor stopped".to_owned()
         }
+        StoreAction::Drill { home, day } => {
+            let home = service_home(home.clone())?;
+            let store = gw_ops::supervise::open_store(&home, None)?;
+            let (dir, day) = (gw_ops::supervise::backups_dir(&home), day.clone());
+            let d = store::blocking(move || gw_ops::supervise::drill(&store, &dir, day.as_deref())).await?;
+            let mut out = format!(
+                "{} restore drill of {} in {:.1}s\n",
+                if d.passed { "PASS" } else { "FAIL" },
+                d.dir.display(),
+                d.seconds
+            );
+            for line in &d.lines {
+                out.push_str(line);
+                out.push('\n');
+            }
+            anyhow::ensure!(d.passed, "{out}");
+            out
+        }
         StoreAction::Export { home, keep } => {
             let home = service_home(home.clone())?;
             let store = gw_ops::supervise::open_store(&home, None)?;
-            let (dir, keep) = (home.root.join("backup"), *keep);
+            let (dir, keep) = (gw_ops::supervise::backups_dir(&home), *keep);
             let files = store::blocking(move || gw_ops::supervise::export(&store, &dir, keep)).await?;
             let mut out = String::new();
             for f in &files {
@@ -651,6 +697,18 @@ async fn dispatch(command: Command) -> Result<bool> {
             }
         }
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
+        Command::EvalDraw { days, exclude_by, out } => {
+            let store = open_store(&home).await?;
+            let (text, n) = store::blocking(move || gw_ops::eval::draw(&store, days, &exclude_by)).await?;
+            let tail = format!("{n} question(s) drawn (category TODO: approve or rewrite each, then eval-check)");
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &text)?;
+                    (format!("{tail} into {}", path.display()), n > 0)
+                }
+                None => (format!("{text}{tail}"), n > 0),
+            }
+        }
         Command::EvalRun {
             set,
             out,
@@ -816,7 +874,11 @@ async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
             let home = Arc::clone(home);
             store::blocking(move || ops::import_journals(&home, &store)).await
         }
-        StoreAction::Supervise { .. } | StoreAction::Export { .. } | StoreAction::Install { .. } | StoreAction::Uninstall => {
+        StoreAction::Supervise { .. }
+        | StoreAction::Export { .. }
+        | StoreAction::Drill { .. }
+        | StoreAction::Install { .. }
+        | StoreAction::Uninstall => {
             unreachable!("handled by store_service before home discovery")
         }
     }

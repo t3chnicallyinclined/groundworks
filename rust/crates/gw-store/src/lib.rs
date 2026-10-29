@@ -89,6 +89,7 @@ DEFINE FIELD IF NOT EXISTS applied ON schema_version TYPE int;\
 DEFINE FIELD IF NOT EXISTS files ON schema_version TYPE array<string>;\
 DEFINE FIELD IF NOT EXISTS updated_at ON schema_version TYPE datetime;";
 
+pub mod scratch;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 

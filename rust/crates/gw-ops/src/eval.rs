@@ -411,7 +411,12 @@ pub const PACKET_CAP_BYTES: usize = crate::ask::PACKET_CAP_BYTES;
 /// unit, the reach's merged read at `depth` (facts excluded) is reordered by each arm of
 /// `rerank::ladder_orders`, and the best gold's rank under each is recorded. Returns the report
 /// and the rows.
-pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathBuf], depth: usize) -> Result<(String, Vec<LadderRow>)> {
+pub fn ladder(
+    home: &Home,
+    store: &crate::store::Store,
+    sets: &[std::path::PathBuf],
+    depth: usize,
+) -> Result<(String, Vec<LadderRow>)> {
     let machine = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_owned());
@@ -446,8 +451,7 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                 }
             }
             let key = |h: &crate::store::Hit| (h.project.clone(), h.key.clone());
-            let rank_in_project: BTreeMap<(String, String), usize> =
-                union.iter().map(|(h, r)| (key(h), *r)).collect();
+            let rank_in_project: BTreeMap<(String, String), usize> = union.iter().map(|(h, r)| (key(h), *r)).collect();
             let mut by_score: Vec<crate::store::Hit> = union.into_iter().map(|(h, _)| h).collect();
             by_score.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
             // The pool's own order is the store's merged scores (the order ask shipped until
@@ -479,8 +483,13 @@ pub fn ladder(home: &Home, store: &crate::store::Store, sets: &[std::path::PathB
                     h.text.len()
                 )
             };
-            let (mut ranks, mut bytes_10, mut bytes_20, mut top5, mut in_budget) =
-                (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+            let (mut ranks, mut bytes_10, mut bytes_20, mut top5, mut in_budget) = (
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            );
             let (mut in_cap, mut cap_count) = (BTreeMap::new(), BTreeMap::new());
             let budget_bytes: usize = texts.iter().take(20).map(|t| t.len()).sum();
             for (arm, order) in crate::rerank::ladder_orders(&q.question, &arms_pool) {
@@ -564,7 +573,12 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
     use crate::eval_run::wilson;
     use crate::rerank::ARMS;
     let mut out = String::new();
-    let mut scopes: Vec<String> = rows.iter().map(|r| r.set.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+    let mut scopes: Vec<String> = rows
+        .iter()
+        .map(|r| r.set.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     scopes.push("all".to_owned());
     let machine = rows.first().map_or("unknown", |r| r.machine.as_str());
     let _ = writeln!(
@@ -610,7 +624,10 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
                 .iter()
                 .filter(|r| r.in_cap.get(arm).copied().unwrap_or(false))
                 .count();
-            let cap_mean = in_scope.iter().map(|r| r.cap_count.get(arm).copied().unwrap_or(0)).sum::<usize>() as f64
+            let cap_mean = in_scope
+                .iter()
+                .map(|r| r.cap_count.get(arm).copied().unwrap_or(0))
+                .sum::<usize>() as f64
                 / n as f64;
             let _ = writeln!(
                 out,
@@ -632,15 +649,92 @@ fn ladder_report(rows: &[LadderRow], depth: usize) -> String {
         out.push('\n');
     }
     let _ = writeln!(out, "## Per question (best gold rank per arm; - = not in the pool)\n");
-    let _ = writeln!(out, "| id | set | {} |\n|---|---|{}", ARMS.join(" | "), "---|".repeat(ARMS.len()));
+    let _ = writeln!(
+        out,
+        "| id | set | {} |\n|---|---|{}",
+        ARMS.join(" | "),
+        "---|".repeat(ARMS.len())
+    );
     for r in rows {
         let cells: Vec<String> = ARMS
             .iter()
-            .map(|a| r.ranks.get(*a).copied().flatten().map_or("-".to_owned(), |k| k.to_string()))
+            .map(|a| {
+                r.ranks
+                    .get(*a)
+                    .copied()
+                    .flatten()
+                    .map_or("-".to_owned(), |k| k.to_string())
+            })
             .collect();
         let _ = writeln!(out, "| {} | {} | {} |", r.id, r.set, cells.join(" | "));
     }
     out
+}
+
+/// Draw a question-set skeleton from real asks: every packet answered and passed in the last `days`
+/// by anyone not in `exclude_by` and not an eval session (`by` starting `eval:`), one JSON line each,
+/// with the answer as a provisional gold answer and its support quotes as provisional gold evidence.
+/// `category` is `TODO` and `must_mention` is empty: the owner approves or rewrites every line and
+/// `eval-check` then proves the set. Nothing drawn here is gold until the owner says so; the set is
+/// human-owned (docs/TESTING.md s.2). The retrieval ladder and the ask eval both said their next
+/// change needs a set drawn from real asks, not set 2 a sixth time (rust/docs/EVAL-2026-10.md).
+pub fn draw(store: &crate::store::Store, days: u64, exclude_by: &[String]) -> Result<(String, usize)> {
+    let mut out = String::new();
+    let mut n = 0usize;
+    for row in store.passed_packets_since(days)? {
+        let by = row["by"].as_str().unwrap_or("");
+        if by.starts_with("eval:") || exclude_by.iter().any(|x| x == by) {
+            continue;
+        }
+        let question = row["question"].as_str().unwrap_or("").trim();
+        let answer = row["answer"]["answer"].as_str().unwrap_or("").trim();
+        if question.is_empty() || answer.is_empty() {
+            continue;
+        }
+        n += 1;
+        let project = row["searched"][0].as_str().unwrap_or("").to_owned();
+        let candidates = row["candidates"].as_array().cloned().unwrap_or_default();
+        let mut gold = Vec::new();
+        for q in row["answer"]["quotes"].as_array().into_iter().flatten() {
+            if q["use"].as_str().unwrap_or("support") != "support" {
+                continue;
+            }
+            let Some(c) = candidates.iter().find(|c| c["n"] == q["n"]) else {
+                continue;
+            };
+            let locator = c["locator"].as_str().unwrap_or("");
+            let Some((file, _)) = locator.rsplit_once("#L") else {
+                continue;
+            };
+            let line = q["lines"][0]
+                .as_u64()
+                .or_else(|| crate::store::first_line(locator).map(|l| l as u64))
+                .unwrap_or(0);
+            let mut g = serde_json::json!({
+                "file": file,
+                "line": line,
+                "quote": q["quote"].as_str().unwrap_or(""),
+            });
+            if c["project"].as_str().is_some_and(|p| p != project) {
+                g["repo"] = c["project"].clone();
+            }
+            gold.push(g);
+        }
+        let line = serde_json::json!({
+            "id": format!("draw-{n:03}"),
+            "project": project,
+            "category": "TODO",
+            "question": question,
+            "gold_answer": answer,
+            "must_mention": [],
+            "gold": gold,
+            "drawn_from": row["id"],
+            "by": by,
+            "at": row["at"],
+        });
+        writeln!(out, "{line}")?;
+    }
+    Ok((out, n))
 }
 
 #[cfg(test)]

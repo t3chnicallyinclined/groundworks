@@ -5,15 +5,19 @@
 //! repeated failure), and once a day writes each namespace out as gzipped SurrealQL through the
 //! `surreal export` command, keeping the newest few days. Its log is a file beside the data.
 
-use std::fs::File;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::Write as _;
+use std::fs::File;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use chrono::Timelike as _;
+use gw_core::db::Db;
+use gw_store::scratch::Scratch;
+use serde_json::Value;
 
 use crate::home::Home;
 use crate::store::{Launcher, Store};
@@ -25,7 +29,10 @@ pub const TASK_NAME: &str = "Groundworks store";
 /// counts it). `surreal` names the binary when the caller cannot rely on PATH.
 pub fn open_store(home: &Home, surreal: Option<PathBuf>) -> Result<Store> {
     let launcher = Launcher::for_home(home)?.with_binary(surreal);
-    Ok(Store::with_launcher_lazy(launcher, &crate::store::read_secret(home, "agent")?))
+    Ok(Store::with_launcher_lazy(
+        launcher,
+        &crate::store::read_secret(home, "agent")?,
+    ))
 }
 
 /// The supervisor's log, beside the server's own log under the data directory.
@@ -101,7 +108,14 @@ pub fn uninstall_task() -> Result<String> {
 
 fn powershell(script: &str) -> Result<String> {
     let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .stdin(Stdio::null())
         .output()
         .context("running powershell.exe")?;
@@ -125,6 +139,10 @@ pub struct Options {
     pub log: PathBuf,
     /// Where exports go, one folder per day.
     pub backups: PathBuf,
+    /// Restore the day's export into a scratch server after writing it, and compare counts.
+    pub drill: bool,
+    /// The home, when the supervisor should take the pulse once a day after the export.
+    pub home_root: Option<PathBuf>,
 }
 
 /// The supervisor's log: one line per event, local time, machine named, rotated at 2 MB.
@@ -174,6 +192,16 @@ pub const DISK_EXPORT_FLOOR_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 /// The file in a day's export folder that says the export finished; a folder without it is a
 /// partial export and is replaced.
 pub const DONE_FILE: &str = "DONE";
+/// Every table's row count per namespace, taken before and after each namespace's export, so the
+/// restore drill has something to compare a restore against.
+pub const COUNTS_FILE: &str = "COUNTS.json";
+/// The restore drill's report beside the export: `PASS` or `FAIL` first, then one line per namespace.
+pub const DRILL_FILE: &str = "DRILL";
+
+/// Where a home's exports go, one folder per day.
+pub fn backups_dir(home: &Home) -> PathBuf {
+    home.root.join("backup")
+}
 
 fn gib(bytes: u64) -> f64 {
     bytes as f64 / 2f64.powi(30)
@@ -276,13 +304,44 @@ pub fn run(store: &Store, opts: &Options) -> Result<()> {
                 } else {
                     match export(store, &opts.backups, opts.keep) {
                         Ok(files) => {
-                            let bytes: u64 = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+                            let bytes: u64 = files
+                                .iter()
+                                .filter_map(|f| std::fs::metadata(f).ok())
+                                .map(|m| m.len())
+                                .sum();
                             log.line(&format!(
                                 "exported {} namespace(s), {:.1} MB, to {}",
                                 files.len(),
                                 bytes as f64 / 1e6,
                                 opts.backups.join(&day).display()
                             ));
+                            if opts.drill {
+                                match drill(store, &opts.backups, Some(&day)) {
+                                    Ok(d) if d.passed => log.line(&format!(
+                                        "restore drill PASS in {:.1}s: {} namespace(s) restored into a scratch server, every count matched; {}",
+                                        d.seconds,
+                                        d.lines.len(),
+                                        d.dir.join(DRILL_FILE).display()
+                                    )),
+                                    Ok(d) => log.line(&format!(
+                                        "RESTORE DRILL FAILED: {}; see {}",
+                                        d.lines
+                                            .iter()
+                                            .filter(|l| l.starts_with("FAIL"))
+                                            .cloned()
+                                            .collect::<Vec<_>>()
+                                            .join(" | "),
+                                        d.dir.join(DRILL_FILE).display()
+                                    )),
+                                    Err(e) => log.line(&format!("RESTORE DRILL NOT EXECUTED: {e:#}")),
+                                }
+                            }
+                            if let Some(root) = &opts.home_root {
+                                match daily_pulse(root, store) {
+                                    Ok(line) => log.line(&line),
+                                    Err(e) => log.line(&format!("pulse NOT TAKEN: {e:#}")),
+                                }
+                            }
                         }
                         Err(e) => log.line(&format!("export failed: {e:#}; next try in an hour")),
                     }
@@ -317,13 +376,28 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(&part)?;
     let mut files = Vec::new();
     let mut listing = String::new();
+    let mut counts: BTreeMap<String, BTreeMap<String, [i64; 2]>> = BTreeMap::new();
     for ns in store.namespaces()? {
+        // Counts before and after: the store is live, so a session may write between the count and
+        // the export; the drill accepts a restored count between the two and says so.
+        let live = root_db(store.url(), &ns, store.root_pass());
+        let before = table_counts(&live).with_context(|| format!("counting the tables of {ns}"))?;
         // To a file, never to stdout: `surreal export ... -` on 3.1.6 writes its own INFO log line
         // into stdout ahead of the script, and `surreal import` then refuses the file (the first
         // restore drill, 2026-10-27, failed on all 20 namespaces that way).
         let raw = part.join(format!("{ns}.surql"));
         let output = Command::new(&binary)
-            .args(["export", "--log", "warn", "--endpoint", &base, "--namespace", &ns, "--database", gw_store::DB_NAME])
+            .args([
+                "export",
+                "--log",
+                "warn",
+                "--endpoint",
+                &base,
+                "--namespace",
+                &ns,
+                "--database",
+                gw_store::DB_NAME,
+            ])
             .arg(&raw)
             .env("SURREAL_USER", "root")
             .env("SURREAL_PASS", store.root_pass())
@@ -347,6 +421,11 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
             "surreal export of {ns} does not start with SurrealQL: {:?}",
             String::from_utf8_lossy(&script[..script.len().min(60)])
         );
+        // surreal export 3.1.6 writes tables alphabetically, so the `evidence` relation's rows come
+        // before the `fact` and `unit` rows they join, and that table is ENFORCED: `surreal import`
+        // refused every export at its first relation ("The record 'fact:...' does not exist"), found
+        // 2026-10-29 by the first drill that got past the stdout defect. Relations go last.
+        let script = relations_last(&script);
         let name = format!("{ns}.surql.gz");
         let path = part.join(&name);
         let mut enc = flate2::write::GzEncoder::new(File::create(&path)?, flate2::Compression::default());
@@ -359,7 +438,18 @@ pub fn export(store: &Store, dir: &Path, keep: usize) -> Result<Vec<PathBuf>> {
             script.len()
         );
         files.push(out.join(name));
+        let after = table_counts(&live).with_context(|| format!("counting the tables of {ns}"))?;
+        let mut ranges = BTreeMap::new();
+        for (table, b) in &before {
+            ranges.insert(table.clone(), [*b, *after.get(table).unwrap_or(b)]);
+        }
+        for (table, a) in &after {
+            ranges.entry(table.clone()).or_insert([0, *a]);
+        }
+        counts.insert(ns.clone(), ranges);
     }
+    std::fs::write(part.join(COUNTS_FILE), serde_json::to_string_pretty(&counts)?)?;
+    let _ = writeln!(listing, "{COUNTS_FILE} table counts before and after each export");
     std::fs::write(part.join(DONE_FILE), listing)?;
     if out.exists() {
         std::fs::remove_dir_all(&out).with_context(|| format!("replacing the partial export {}", out.display()))?;
@@ -384,4 +474,305 @@ pub fn parse_time(text: &str) -> Result<(u32, u32)> {
     let (h, m): (u32, u32) = (h.parse()?, m.parse()?);
     ensure!(h < 24 && m < 60, "time is HH:MM");
     Ok((h, m))
+}
+
+/// A root connection to any namespace, including ones outside the data model's naming (a live
+/// server may hold a stray one, and the export covers every namespace the server has).
+fn root_db(url: &str, ns: &str, root_pass: &str) -> Db {
+    Db::new(
+        url,
+        ns,
+        gw_store::DB_NAME,
+        "root",
+        root_pass,
+        Duration::from_secs(60),
+        None,
+    )
+}
+
+/// Every table of the connection's database with its row count (root, so nothing is hidden by a
+/// permission). `INFO FOR DB` names the tables; each is counted by name through a bound variable.
+pub fn table_counts(db: &Db) -> Result<BTreeMap<String, i64>> {
+    let info = db.sql("INFO FOR DB;", Some(1))?;
+    let tables = info
+        .first()
+        .and_then(|i| i["tables"].as_object())
+        .context("INFO FOR DB named no tables")?;
+    let mut counts = BTreeMap::new();
+    for name in tables.keys() {
+        let vars = serde_json::Map::from_iter([("t".to_owned(), Value::from(name.as_str()))]);
+        let rows = db.query("RETURN count(SELECT VALUE id FROM type::table($t));", &vars, Some(1))?;
+        let n = rows
+            .first()
+            .and_then(Value::as_i64)
+            .with_context(|| format!("count of {name} was not a number: {rows:?}"))?;
+        counts.insert(name.clone(), n);
+    }
+    Ok(counts)
+}
+
+/// What a restore drill found.
+#[derive(Debug)]
+pub struct Drill {
+    /// The export folder drilled (`<dir>/<YYYY-MM-DD>`).
+    pub dir: PathBuf,
+    pub passed: bool,
+    /// One line per namespace: `ok   <ns>: ...` or `FAIL <ns>: ...`, plus any file-level failure.
+    pub lines: Vec<String>,
+    pub seconds: f64,
+}
+
+/// The restore drill: import the day's export (the newest finished one when `day` is None) into a
+/// scratch SurrealDB this function starts and stops, and compare every table's row count with the
+/// counts taken at export time. Nothing here writes to the live store; it is read for its root
+/// password and binary only. Writes `DRILL` beside the export and returns the same report. A backup
+/// nobody has restored is not a backup (CLAUDE.md rule 4): the first drill, 2026-10-27, failed on
+/// every namespace and found the export itself broken.
+pub fn drill(store: &Store, dir: &Path, day: Option<&str>) -> Result<Drill> {
+    let started = Instant::now();
+    let binary = store
+        .launcher()
+        .and_then(|l| l.binary().map(Path::to_path_buf))
+        .or_else(gw_store::find_surreal)
+        .context("SurrealDB binary not found for the restore drill")?;
+    let day_dir = match day {
+        Some(d) => dir.join(d),
+        None => newest_done(dir)?,
+    };
+    ensure!(
+        day_dir.join(DONE_FILE).is_file(),
+        "{} has no {DONE_FILE}: not a finished export",
+        day_dir.display()
+    );
+    let counts_text = std::fs::read_to_string(day_dir.join(COUNTS_FILE)).with_context(|| {
+        format!(
+            "{} has no {COUNTS_FILE}: this export predates table counts and cannot be verified",
+            day_dir.display()
+        )
+    })?;
+    let expected: BTreeMap<String, BTreeMap<String, [i64; 2]>> =
+        serde_json::from_str(&counts_text).context("reading COUNTS.json")?;
+    let scratch = Scratch::start(&binary, store.root_pass(), Duration::from_secs(30))
+        .context("starting a scratch SurrealDB for the drill")?;
+    let port = scratch.port();
+    let mut lines = Vec::new();
+    let mut passed = !expected.is_empty();
+    if expected.is_empty() {
+        lines.push(format!("FAIL {COUNTS_FILE} names no namespace"));
+    }
+    for (ns, want) in &expected {
+        let gz = day_dir.join(format!("{ns}.surql.gz"));
+        match restore_one(&binary, &scratch, ns, &gz, want) {
+            Ok(summary) => lines.push(format!("ok   {ns}: {summary}")),
+            Err(e) => {
+                passed = false;
+                lines.push(format!("FAIL {ns}: {e:#}"));
+            }
+        }
+    }
+    for entry in std::fs::read_dir(&day_dir)?.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(ns) = name.strip_suffix(".surql.gz")
+            && !expected.contains_key(ns)
+        {
+            passed = false;
+            lines.push(format!("FAIL {ns}: exported but no counts were recorded for it"));
+        }
+    }
+    drop(scratch);
+    let seconds = started.elapsed().as_secs_f64();
+    let report = format!(
+        "{} restore drill of {} on {} in {seconds:.1}s: {} namespace(s), scratch server on port {port} (stopped)\n{}\n",
+        if passed { "PASS" } else { "FAIL" },
+        day_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        crate::home::machine(),
+        expected.len(),
+        lines.join("\n")
+    );
+    std::fs::write(day_dir.join(DRILL_FILE), report)
+        .with_context(|| format!("writing {}", day_dir.join(DRILL_FILE).display()))?;
+    Ok(Drill {
+        dir: day_dir,
+        passed,
+        lines,
+        seconds,
+    })
+}
+
+/// One namespace: gunzip, import into the scratch server, count, compare.
+fn restore_one(
+    binary: &Path,
+    scratch: &Scratch,
+    ns: &str,
+    gz: &Path,
+    want: &BTreeMap<String, [i64; 2]>,
+) -> Result<String> {
+    ensure!(
+        !ns.is_empty()
+            && ns
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+        "namespace name {ns:?} is not one this store would have written"
+    );
+    let bytes = std::fs::read(gz).with_context(|| format!("reading {}", gz.display()))?;
+    let mut script = Vec::new();
+    flate2::read::GzDecoder::new(&bytes[..])
+        .read_to_end(&mut script)
+        .with_context(|| format!("gunzip of {}", gz.display()))?;
+    ensure!(!script.is_empty(), "{} is empty once decompressed", gz.display());
+    let raw = std::env::temp_dir().join(format!("gw-drill-{}-{ns}.surql", std::process::id()));
+    std::fs::write(&raw, &script)?;
+    let imported = (|| -> Result<()> {
+        root_db(&scratch.url(), ns, scratch.root_pass())
+            .sql(
+                &format!(
+                    "DEFINE NAMESPACE IF NOT EXISTS {ns}; USE NS {ns}; DEFINE DATABASE IF NOT EXISTS {};",
+                    gw_store::DB_NAME
+                ),
+                None,
+            )
+            .context("creating the namespace on the scratch server")?;
+        let output = Command::new(binary)
+            .args([
+                "import",
+                "--log",
+                "warn",
+                "--endpoint",
+                &scratch.base(),
+                "--namespace",
+                ns,
+                "--database",
+                gw_store::DB_NAME,
+            ])
+            .arg(&raw)
+            .env("SURREAL_USER", "root")
+            .env("SURREAL_PASS", scratch.root_pass())
+            .stdin(Stdio::null())
+            .output()
+            .with_context(|| format!("running {} import", binary.display()))?;
+        ensure!(
+            output.status.success(),
+            "surreal import refused the export: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&raw);
+    imported?;
+    let got =
+        table_counts(&root_db(&scratch.url(), ns, scratch.root_pass())).context("counting the restored tables")?;
+    let mut problems = Vec::new();
+    let mut rows = 0i64;
+    let mut inexact = 0usize;
+    for (table, [a, b]) in want {
+        let (lo, hi) = (*a.min(b), *a.max(b));
+        match got.get(table) {
+            Some(n) if (lo..=hi).contains(n) => {
+                rows += n;
+                inexact += usize::from(lo != hi);
+            }
+            Some(n) => problems.push(format!("{table}: restored {n}, exported {lo}..={hi}")),
+            None => problems.push(format!("{table}: missing after restore (exported {lo}..={hi})")),
+        }
+    }
+    for table in got.keys().filter(|t| !want.contains_key(*t)) {
+        problems.push(format!("{table}: restored but never exported"));
+    }
+    ensure!(problems.is_empty(), "{}", problems.join("; "));
+    Ok(format!(
+        "{} table(s), {rows} row(s) match{}",
+        want.len(),
+        if inexact > 0 {
+            format!(" ({inexact} within the export's before/after range)")
+        } else {
+            String::new()
+        }
+    ))
+}
+
+/// The export with every `INSERT RELATION` statement moved after the record statements, so an
+/// ENFORCED relation finds both ends when the file is imported. A 3.1.6 export writes one statement
+/// per line (measured over 20 namespaces and 150 INSERTs, none spanning lines); a relation line that
+/// does not end in `;` is left where it is, and a script that is not UTF-8 is returned unchanged,
+/// so the drill, not this function, is what says whether the file restores.
+pub fn relations_last(script: &[u8]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(script) else {
+        return script.to_vec();
+    };
+    let (moved, kept): (Vec<&str>, Vec<&str>) = text
+        .lines()
+        .partition(|l| l.starts_with("INSERT RELATION") && l.trim_end().ends_with(';'));
+    if moved.is_empty() {
+        return script.to_vec();
+    }
+    let mut out = kept.join("\n");
+    out.push_str(
+        "\n\n-- ------------------------------\n\
+         -- RELATIONS, moved after the records they join by the Groundworks export: an ENFORCED\n\
+         -- relation refuses to import before both of its ends exist.\n\
+         -- ------------------------------\n\n",
+    );
+    out.push_str(&moved.join("\n"));
+    out.push('\n');
+    out.into_bytes()
+}
+
+/// The newest `<dir>/<YYYY-MM-DD>` folder that has a DONE file.
+fn newest_done(dir: &Path) -> Result<PathBuf> {
+    let mut days: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("no exports under {}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.len() == 10) && p.join(DONE_FILE).is_file())
+        .collect();
+    days.sort();
+    days.pop().with_context(|| {
+        format!(
+            "no finished export (a day folder with {DONE_FILE}) under {}",
+            dir.display()
+        )
+    })
+}
+
+/// The day's pulse, appended to the home's metrics; one log line summarising it.
+fn daily_pulse(home_root: &Path, store: &Store) -> Result<String> {
+    let home = Home::open(home_root)?;
+    let p = crate::pulse::take(&home, store)?;
+    let path = crate::pulse::record(&home, &p)?;
+    Ok(format!(
+        "pulse: {} units, {} live facts ({} from asks), asks {} in {}d ({} served from knowledge, {} recorded); appended to {}",
+        p.totals.units,
+        p.totals.facts_live,
+        p.totals.facts_from_asks,
+        p.asks,
+        crate::pulse::WINDOW_DAYS,
+        p.asks_served_from_knowledge,
+        p.recorded_in_window,
+        path.display()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relations_last;
+
+    #[test]
+    fn relation_inserts_move_after_the_records_they_join() {
+        let script = b"OPTION IMPORT;\nDEFINE TABLE evidence TYPE RELATION IN fact OUT unit ENFORCED;\nINSERT RELATION [ { id: evidence:e1, in: fact:f1, out: unit:u1 } ];\nDEFINE TABLE fact;\nINSERT [ { id: fact:f1 } ];\nINSERT [ { id: unit:u1 } ];\n";
+        let out = String::from_utf8(relations_last(script)).unwrap();
+        let relation = out.find("INSERT RELATION").unwrap();
+        assert!(out.find("INSERT [ { id: fact:f1 } ]").unwrap() < relation);
+        assert!(out.find("INSERT [ { id: unit:u1 } ]").unwrap() < relation);
+        assert!(out.contains("-- RELATIONS"));
+        assert_eq!(out.matches("INSERT RELATION").count(), 1);
+    }
+
+    #[test]
+    fn a_script_without_relations_is_untouched() {
+        let script = b"OPTION IMPORT;\nINSERT [ { id: fact:f1 } ];\n";
+        assert_eq!(relations_last(script), script.to_vec());
+    }
 }

@@ -1002,7 +1002,22 @@ impl Store {
         let vars = Vars::default().set("d", format!("{days}d"));
         let rows = self.retrying(|| {
             Ok(global.query(
-                "SELECT status, candidates.*.fact AS facts, candidates FROM ask_packet WHERE at > time::now() - <duration>$d;",
+                "SELECT status, by, candidates.*.fact AS facts, candidates FROM ask_packet WHERE at > time::now() - <duration>$d;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Ask packets answered and passed in the last `days`, oldest first: question, author, time,
+    /// projects searched, candidates and the answer (for drawing an eval set from real asks).
+    pub fn passed_packets_since(&self, days: u64) -> Result<Vec<Value>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("d", format!("{days}d"));
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT id, question, by, at, searched, candidates, answer FROM ask_packet                  WHERE status = 'PASS' AND at > time::now() - <duration>$d ORDER BY at;",
                 &vars.0,
                 Some(1),
             )?)
