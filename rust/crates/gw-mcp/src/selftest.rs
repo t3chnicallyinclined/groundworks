@@ -775,8 +775,10 @@ the parser now accepts empty input
             && text.contains("ok   agents: all 1")
             && text.contains("ok   vscode")
             && text.contains("ok   machine: SELFTEST")
-            && text.contains("
-0 failure(s), "),
+            && text.contains(
+                "
+0 failure(s), ",
+            ),
         &text,
     );
     drop(s);
@@ -896,6 +898,48 @@ the parser now accepts empty input
         );
         std::fs::write(&gz, bytes)?;
     }
+
+    // The pulse reads the telemetry the hooks wrote: sessions, writes, blocks and their conversion,
+    // denies, errors, latencies, rejections, commits (docs/METRICS.md).
+    let pulse_home = gw_ops::home::Home::open(&home)?;
+    let pulse = gw_ops::pulse::take(&pulse_home, &owner)?;
+    let w = &pulse.use_.window;
+    let demo_use = pulse.use_.per_project.get("demo").map(|p| &p.window);
+    c.check(
+        "the pulse's use section counts the selftest's sessions, writes, blocks (and the converted one), denies, errors and rejections",
+        w.sessions >= 3
+            && w.sessions_that_wrote >= 1
+            && w.blocks_at_stop >= 1
+            && w.blocks_converted >= 1
+            && w.denies >= 2
+            && w.hook_errors >= 1
+            && w.hook_latency_p50_ms > 0
+            && w.hook_latency_p95_ms >= w.hook_latency_p50_ms
+            && w.journal_writes >= 3
+            && w.writes_by_kind.get("gotcha").is_some_and(|n| *n >= 1)
+            && w.store_rejections >= 2
+            && demo_use.is_some_and(|d| d.sessions >= 1 && d.commits == Some(1) && d.commits_without_sessions == Some(0)),
+        &serde_json::to_string(&pulse.use_)?,
+    );
+    let red = gw_ops::pulse::digest(&pulse);
+    c.check(
+        "the digest is red on the hook error the broken deny list caused, and on nothing about demo's commits",
+        red.iter().any(|l| l.contains("hook_errors")) && !red.iter().any(|l| l.contains("demo:")),
+        &red.join(" | "),
+    );
+    let rendered = gw_ops::pulse::render(&pulse);
+    c.check(
+        "the rendered pulse carries the hooks and journal lines and the digest",
+        rendered.contains("hooks (") && rendered.contains("journal (") && rendered.contains("digest: RED hook_errors"),
+        &rendered,
+    );
+    let pulse_path = gw_ops::pulse::record(&pulse_home, &pulse)?;
+    let history = gw_ops::pulse::history(&pulse_home)?;
+    c.check(
+        "a recorded pulse reads back in the history with its session columns",
+        pulse_path.is_file() && history.lines().count() == 2 && history.contains("sessions  wrote  blocks  denies"),
+        &history,
+    );
 
     supervisor_checks(exe, base, &mut c)?;
 

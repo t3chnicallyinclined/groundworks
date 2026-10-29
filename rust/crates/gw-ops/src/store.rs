@@ -1029,6 +1029,25 @@ impl Store {
         })
     }
 
+    /// When each receipt of a project was taken (RFC 3339), in the last `days` (all when None), oldest
+    /// first. The pulse pairs them with denies: a `run` soon after a deny is the sanctioned path taken.
+    pub fn receipt_times_since(&self, project: &str, days: Option<u64>) -> Result<Vec<String>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let (filter, vars) = match days {
+            Some(d) => (
+                " WHERE ran_at > time::now() - <duration>$d",
+                Vars::default().set("d", format!("{d}d")),
+            ),
+            None => ("", Vars::default()),
+        };
+        let sql = format!("SELECT VALUE <string> ran_at FROM receipt{filter} ORDER BY ran_at;");
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
+        Ok(rows[0]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(seconds)).collect())
+            .unwrap_or_default())
+    }
+
     /// Facts recorded from asks in the last `days`.
     pub fn facts_from_asks_since(&self, project: &str, days: u64) -> Result<u64> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;

@@ -196,6 +196,9 @@ enum Command {
     Pulse {
         #[arg(long)]
         history: bool,
+        /// Take the pulse, record it, and print only the red conditions (docs/METRICS.md), one per line.
+        #[arg(long)]
+        digest: bool,
     },
     /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
     /// file of its project, every trap's premise absent.
@@ -756,19 +759,34 @@ async fn dispatch(command: Command) -> Result<bool> {
                 true,
             )
         }
-        Command::Pulse { history } => {
+        Command::Pulse { history, digest } => {
             if history {
                 (gw_ops::pulse::history(&home)?, true)
             } else {
                 let store = open_store(&home).await?;
                 let home2 = Arc::clone(&home);
-                let text = store::blocking(move || {
+                store::blocking(move || {
                     let p = gw_ops::pulse::take(&home2, &store)?;
                     let path = gw_ops::pulse::record(&home2, &p)?;
-                    Ok(format!("{}recorded in {}", gw_ops::pulse::render(&p), path.display()))
+                    if digest {
+                        let red = gw_ops::pulse::digest(&p);
+                        let text = if red.is_empty() {
+                            format!(
+                                "nothing red on {} ({} sessions all time)",
+                                p.machine, p.use_.all_time.sessions
+                            )
+                        } else {
+                            red.join("\n")
+                        };
+                        Ok((text, red.is_empty()))
+                    } else {
+                        Ok((
+                            format!("{}recorded in {}", gw_ops::pulse::render(&p), path.display()),
+                            true,
+                        ))
+                    }
                 })
-                .await?;
-                (text, true)
+                .await?
             }
         }
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
