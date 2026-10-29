@@ -96,7 +96,8 @@ enum Command {
         source: String,
         #[arg(long, value_enum, default_value = "inferred")]
         confidence: Confidence,
-        #[arg(long, default_value = "owner")]
+        /// Who writes it. An unsigned note is an agent's; the owner signs with --as-owner.
+        #[arg(long, default_value = "agent")]
         by: String,
         /// A receipt id from run or gate.
         #[arg(long)]

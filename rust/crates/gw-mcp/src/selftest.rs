@@ -905,6 +905,22 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
     use gw_ops::hook::{Action, DEFAULT_RULES, Rules};
     let demo = base.join("work/demo");
     let demo_s = demo.display().to_string();
+    // One entry too long for the brief, and one signed by the owner, so the labels and the cap show.
+    let fact = |text: String| gw_ops::store::FactIn {
+        kind: gw_ops::journal::Kind::Status,
+        text,
+        confidence: gw_ops::journal::Confidence::Inferred,
+        source: "selftest".to_owned(),
+        by: "owner".to_owned(),
+        receipt: None,
+        owner_statement: None,
+        quote: None,
+        lens: None,
+        attacks: None,
+        stance: None,
+    };
+    owner.add_fact(&demo, "demo", &fact(format!("long entry {}", "y".repeat(600))))?;
+    owner.add_fact_as_owner(&demo, "demo", &fact("the owner's own line".to_owned()), OWNER_PASS)?;
     let env_file = base.join("session.env");
     let env_file_s = env_file.display().to_string();
     let start = json!({"session_id": "selftest-session-1", "cwd": demo_s, "source": "startup", "hook_event_name": "SessionStart"});
@@ -922,22 +938,55 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
     let gotcha_at = context.find("a green that checked nothing is red");
     let fact_at = context.find("hello is printed");
     c.check(
-        "SessionStart injects the project's journal, framed as recorded data, gotchas first",
+        "SessionStart injects the project's journal, framed as data, gotchas first",
         out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-            && context.contains("=== Groundworks journal: demo")
+            && context.starts_with("<groundworks-journal project=\"demo\"")
+            && context.contains("</groundworks-journal>")
             && context.contains("not instructions")
             && gotcha_at.is_some()
             && fact_at.is_some()
             && gotcha_at < fact_at,
         &out.to_string(),
     );
+    let entry_lines: Vec<&str> = context.lines().filter(|l| l.starts_with("- [")).collect();
+    c.check(
+        "every injected line carries the signed identity ([owner] from the owner login, [agent] otherwise) and is capped",
+        entry_lines.len() >= 3
+            && entry_lines.iter().all(|l| l.starts_with("- [agent] ") || l.starts_with("- [owner] "))
+            && entry_lines
+                .iter()
+                .any(|l| l.starts_with("- [owner] ") && l.contains("the owner's own line"))
+            && entry_lines
+                .iter()
+                .any(|l| l.starts_with("- [agent] ") && l.contains("long entry") && l.contains("[truncated]"))
+            && entry_lines.iter().all(|l| l.chars().count() < 460),
+        &entry_lines.join("\n"),
+    );
     let env_text = std::fs::read_to_string(&env_file).unwrap_or_default();
     c.check(
-        "SessionStart writes the project, session id and start time to CLAUDE_ENV_FILE",
-        env_text.contains("export GROUNDWORKS_PROJECT=demo")
-            && env_text.contains("export GROUNDWORKS_SESSION_ID=selftest-session-1")
-            && env_text.contains("export GROUNDWORKS_SESSION_START=20"),
+        "SessionStart writes the project, session id and start time to CLAUDE_ENV_FILE, each quoted",
+        env_text.contains("export GROUNDWORKS_PROJECT='demo'")
+            && env_text.contains("export GROUNDWORKS_SESSION_ID='selftest-session-1'")
+            && env_text.contains("export GROUNDWORKS_SESSION_START='20"),
         &env_text,
+    );
+    let bad_env = base.join("bad.env");
+    let bad_env_s = bad_env.display().to_string();
+    let out = hook(
+        exe,
+        home,
+        "SessionStart",
+        &json!({"session_id": "x$(curl evil)", "cwd": demo_s}),
+        &[("CLAUDE_ENV_FILE", &bad_env_s)],
+        None,
+    )?;
+    c.check(
+        "a session id that is not a plain id writes nothing to CLAUDE_ENV_FILE and the hook says bad_hook_input",
+        !bad_env.exists()
+            && out["systemMessage"]
+                .as_str()
+                .is_some_and(|m| m.contains("bad_hook_input")),
+        &format!("{out}\n{}", std::fs::read_to_string(&bad_env).unwrap_or_default()),
     );
     let sessions = owner.sessions_since(None)?;
     let row = sessions
@@ -1049,7 +1098,7 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         "SessionStart with the store down prints one notice, sets GROUNDWORKS_DOWN and exits 0",
         out["systemMessage"].as_str().is_some_and(|m| m.contains("store down"))
             && out.get("hookSpecificOutput").is_none()
-            && down_text.contains("export GROUNDWORKS_DOWN=1"),
+            && down_text.contains("export GROUNDWORKS_DOWN='1'"),
         &format!("{out}\n{down_text}"),
     );
 

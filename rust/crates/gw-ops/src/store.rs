@@ -1616,6 +1616,16 @@ pub struct FactRow {
 }
 
 impl FactRow {
+    /// Who signed the row: `owner` (the owner's login), `agent` (the shared agent login) or `imported`
+    /// (the loader, for entries that predate the store). From `written_by`, never from the free-text `by`.
+    pub fn signer(&self) -> &'static str {
+        match self.written_by.as_deref() {
+            Some("member:owner") => "owner",
+            Some(_) => "agent",
+            None => "imported",
+        }
+    }
+
     pub fn render(&self) -> String {
         let mut line = format!(
             "{} [{}] {}{} {}",
@@ -1632,9 +1642,10 @@ impl FactRow {
         let source = self.source.as_deref().filter(|s| !s.is_empty()).unwrap_or("no source");
         let _ = write!(
             line,
-            " ({source}; by {} on {})",
+            " ({source}; by {} on {}; signed {})",
             self.by.as_deref().unwrap_or("?"),
-            self.machine.as_deref().unwrap_or("?")
+            self.machine.as_deref().unwrap_or("?"),
+            self.signer()
         );
         if let Some(said) = &self.owner_statement {
             if self.written_by.as_deref() == Some("member:owner") {

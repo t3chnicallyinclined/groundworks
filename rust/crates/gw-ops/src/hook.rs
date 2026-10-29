@@ -682,22 +682,49 @@ fn context_output(event: Event, context: Option<String>, notice: Option<String>)
     Value::Object(out)
 }
 
-/// `export KEY=value` lines appended to `CLAUDE_ENV_FILE`, so later hooks and Bash calls see them.
+/// Whether `value` may be written to the env file under `key`. The file is sourced as shell (REVIEW.md
+/// finding 2), so only a registry name, a session id, a timestamp or the flag `1` ever go in: never a
+/// path, and nothing with a character outside each key's own alphabet.
+pub fn env_value_ok(key: &str, value: &str) -> bool {
+    let n = value.chars().count();
+    match key {
+        "GROUNDWORKS_PROJECT" => {
+            (1..=80).contains(&n)
+                && value.starts_with(|c: char| c.is_ascii_alphanumeric())
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        }
+        "GROUNDWORKS_SESSION_ID" => {
+            (1..=80).contains(&n)
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        }
+        "GROUNDWORKS_SESSION_START" => {
+            (20..=30).contains(&n)
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, 'T' | 'Z' | ':' | '-' | '.'))
+        }
+        "GROUNDWORKS_DOWN" => value == "1",
+        _ => false,
+    }
+}
+
+/// `export KEY='value'` lines appended to `CLAUDE_ENV_FILE`, so later hooks and Bash calls see them.
+/// Every value is checked by [`env_value_ok`] first and single-quoted; a value that fails writes nothing.
 fn persist_env(vars: &[(&str, &str)]) -> Result<()> {
+    for (k, v) in vars {
+        ensure!(env_value_ok(k, v), "{k} value refused for the env file");
+    }
     let Some(path) = std::env::var_os("CLAUDE_ENV_FILE") else {
         return Ok(());
     };
     use std::io::Write as _;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
     for (k, v) in vars {
-        let plain = v
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '-' | '+'));
-        if plain {
-            writeln!(f, "export {k}={v}")?;
-        } else {
-            writeln!(f, "export {k}='{}'", v.replace('\'', "'\\''"))?;
-        }
+        writeln!(f, "export {k}='{v}'")?;
     }
     Ok(())
 }
@@ -750,7 +777,12 @@ fn session_start(ctx: &mut Ctx) -> Value {
         ("GROUNDWORKS_SESSION_ID", &session_id),
         ("GROUNDWORKS_SESSION_START", &now),
     ]) {
-        ctx.note_error(ErrorCode::EnvFileUnwritable, &e);
+        let code = if format!("{e:#}").contains("refused") {
+            ErrorCode::BadHookInput
+        } else {
+            ErrorCode::EnvFileUnwritable
+        };
+        ctx.note_error(code, &e);
     }
     let Some(store) = store else {
         let _ = persist_env(&[("GROUNDWORKS_DOWN", "1")]);
@@ -1206,6 +1238,24 @@ samples_allow = ["ssh dev", "ls"]
         assert!(!is_selfedit_path("/home/x/project/src/hooks.rs", None));
         assert!(!is_selfedit_path("/home/x/.claude/agents/gw-engineer.md", None));
         assert!(!is_selfedit_path("", None));
+    }
+
+    #[test]
+    fn env_file_values_are_names_ids_and_times_only() {
+        assert!(env_value_ok("GROUNDWORKS_PROJECT", "GP2040-CE"));
+        assert!(env_value_ok("GROUNDWORKS_PROJECT", "groundworks.rs"));
+        assert!(!env_value_ok("GROUNDWORKS_PROJECT", "x$(curl evil)"));
+        assert!(!env_value_ok("GROUNDWORKS_PROJECT", "C:/Users/x/projects/demo"));
+        assert!(!env_value_ok("GROUNDWORKS_PROJECT", "-demo"));
+        assert!(env_value_ok(
+            "GROUNDWORKS_SESSION_ID",
+            "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        ));
+        assert!(!env_value_ok("GROUNDWORKS_SESSION_ID", "a b"));
+        assert!(env_value_ok("GROUNDWORKS_SESSION_START", "2026-10-29T20:25:25Z"));
+        assert!(!env_value_ok("GROUNDWORKS_SESSION_START", "yesterday"));
+        assert!(env_value_ok("GROUNDWORKS_DOWN", "1") && !env_value_ok("GROUNDWORKS_DOWN", "store down"));
+        assert!(!env_value_ok("PATH", "x"));
     }
 
     #[test]
