@@ -1328,6 +1328,36 @@ not json at all
     }
 
     #[test]
+    fn the_plugin_wires_every_event_to_this_binary() {
+        let hooks: Value = serde_json::from_str(include_str!("../../../../plugin/hooks/hooks.json")).unwrap();
+        let plugin: Value =
+            serde_json::from_str(include_str!("../../../../plugin/.claude-plugin/plugin.json")).unwrap();
+        assert_eq!(plugin["hooks"], "./hooks/hooks.json");
+        assert_eq!(plugin["version"], "0.5.0");
+        for event in [Event::SessionStart, Event::PreToolUse, Event::Stop, Event::SubagentStop] {
+            let groups = hooks["hooks"][event.name()]
+                .as_array()
+                .unwrap_or_else(|| panic!("{}", event.name()));
+            assert!(!groups.is_empty(), "{}", event.name());
+            for g in groups {
+                for h in g["hooks"].as_array().unwrap() {
+                    assert_eq!(h["type"], "command");
+                    let cmd = h["command"].as_str().unwrap();
+                    assert!(cmd.starts_with(&format!("groundworks hook {}", event.name())), "{cmd}");
+                    assert!(h["timeout"].as_u64().is_some_and(|t| t >= 10));
+                }
+            }
+        }
+        let bash = &hooks["hooks"]["PreToolUse"][0];
+        assert_eq!(bash["matcher"], "Bash");
+        assert!(bash["hooks"][0]["command"].as_str().unwrap().contains("--rules"));
+        assert_eq!(
+            hooks["hooks"]["PreToolUse"][1]["matcher"],
+            "Edit|Write|MultiEdit|NotebookEdit"
+        );
+    }
+
+    #[test]
     fn every_error_code_is_in_the_schema_list() {
         let schema = include_str!("../../gw-store/schema/0014_global_telemetry.surql");
         for code in [
