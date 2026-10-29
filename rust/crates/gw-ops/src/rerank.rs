@@ -76,7 +76,14 @@ fn idf_over(docs: &[Vec<String>]) -> impl Fn(&str) -> f64 + '_ {
 }
 
 /// One bag's BM25 against the terms, given the idf, its length and the average length.
-fn score_bag(terms: &[&str], idf: &dyn Fn(&str) -> f64, bag: &HashMap<&str, usize>, len: f64, avg_len: f64, b: f64) -> f64 {
+fn score_bag(
+    terms: &[&str],
+    idf: &dyn Fn(&str) -> f64,
+    bag: &HashMap<&str, usize>,
+    len: f64,
+    avg_len: f64,
+    b: f64,
+) -> f64 {
     terms
         .iter()
         .filter_map(|t| {
@@ -258,8 +265,14 @@ mod tests {
 
     #[test]
     fn words_split_lowercase_and_stem_like_the_store() {
-        assert_eq!(words("Rollback re-simulates Frames!", false), ["rollback", "re", "simulates", "frames"]);
-        assert_eq!(words("Rollback re-simulates Frames!", true), ["rollback", "re", "simul", "frame"]);
+        assert_eq!(
+            words("Rollback re-simulates Frames!", false),
+            ["rollback", "re", "simulates", "frames"]
+        );
+        assert_eq!(
+            words("Rollback re-simulates Frames!", true),
+            ["rollback", "re", "simul", "frame"]
+        );
         assert_eq!(path_words("src/net_sim.rs#L10-20", false), ["src", "net_sim", "rs"]);
     }
 
@@ -307,7 +320,11 @@ mod tests {
         assert_eq!(orders[0].1, [0, 1, 2], "store keeps the given order");
         assert_eq!(orders[1].1[0], 1, "plain bm25 finds the exact words");
         assert_eq!(orders[4].1[0], 1, "stemmed too");
-        assert_eq!(own_first(&pool), [1, 0, 2], "own project first, then the rest by their own rank");
+        assert_eq!(
+            own_first(&pool),
+            [1, 0, 2],
+            "own project first, then the rest by their own rank"
+        );
     }
 
     #[test]
@@ -319,7 +336,10 @@ mod tests {
             "filler line\n".repeat(20),
             "filler line\n".repeat(20)
         );
-        let texts = [scattered.as_str(), "the save set is 277,288 bytes, every rollback restores it"];
+        let texts = [
+            scattered.as_str(),
+            "the save set is 277,288 bytes, every rollback restores it",
+        ];
         let q = words("how many bytes is the save set a rollback restores", false);
         let whole = bm25(&q, &texts.iter().map(|t| words(t, false)).collect::<Vec<_>>());
         let window = bm25_window(&q, &texts);

@@ -277,7 +277,13 @@ fn settings_json() -> String {
     json!({"enabledPlugins": {"groundworks@groundworks": false}, "permissions": {"deny": denied}}).to_string()
 }
 
-fn answer_args(arm: &str, plan: &Plan<'_>, add_dirs: &[PathBuf], run: &Path, memory: Option<&Path>) -> Result<Vec<String>> {
+fn answer_args(
+    arm: &str,
+    plan: &Plan<'_>,
+    add_dirs: &[PathBuf],
+    run: &Path,
+    memory: Option<&Path>,
+) -> Result<Vec<String>> {
     let mut args: Vec<String> = [
         "--output-format",
         "stream-json",
@@ -300,7 +306,11 @@ fn answer_args(arm: &str, plan: &Plan<'_>, add_dirs: &[PathBuf], run: &Path, mem
         args.push("--add-dir".into());
         args.push(dir.display().to_string());
     }
-    args.extend(["--tools", BASE_TOOLS, "--permission-mode", "dontAsk"].iter().map(|s| s.to_string()));
+    args.extend(
+        ["--tools", BASE_TOOLS, "--permission-mode", "dontAsk"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
     if let Some(e) = plan.effort {
         args.push("--effort".into());
         args.push(e.to_owned());
