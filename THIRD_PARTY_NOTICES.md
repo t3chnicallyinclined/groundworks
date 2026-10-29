@@ -14,6 +14,8 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 |---|---|---|---|
 | SurrealDB server | Business Source License 1.1 (Change Date 2030-01-01, Apache-2.0). Not to be offered as a "Database Service" letting third parties create, manage or control schemas or tables | System of record, separate process over HTTP | Not today. If shipped self-hosted, include its LICENSE conspicuously |
 | Python and standard library | PSF License | All scripts | No |
+| Copier (copier-org/copier) | MIT | Renders project templates and brings later template changes into generated projects (`groundworks bootstrap` / `upgrade`, through `uvx copier`); not modified, not bundled | No |
+| uv (astral-sh/uv) | Apache-2.0 OR MIT | Runs Copier on demand (`uvx copier`); not modified, not bundled | No |
 | git | GPL-2.0 | Development tooling (privacy scan, pre-commit hook) | No |
 | Rust crate `anyhow` | MIT OR Apache-2.0 | Errors in gw-ops and gw-mcp | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `chrono` | MIT OR Apache-2.0 | Local time in the store supervisor's log and daily export (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |

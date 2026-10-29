@@ -562,7 +562,7 @@ pub fn drill(store: &Store, dir: &Path, day: Option<&str>) -> Result<Drill> {
     }
     for (ns, want) in &expected {
         let gz = day_dir.join(format!("{ns}.surql.gz"));
-        match restore_one(&binary, &scratch, ns, &gz, want) {
+        match restore_one(&binary, &scratch, ns, &gz, want, &store.agent_pass(ns)) {
             Ok(summary) => lines.push(format!("ok   {ns}: {summary}")),
             Err(e) => {
                 passed = false;
@@ -609,6 +609,7 @@ fn restore_one(
     ns: &str,
     gz: &Path,
     want: &BTreeMap<String, [i64; 2]>,
+    agent_pass: &str,
 ) -> Result<String> {
     ensure!(
         !ns.is_empty()
@@ -662,8 +663,27 @@ fn restore_one(
     })();
     let _ = std::fs::remove_file(&raw);
     imported?;
-    let got =
-        table_counts(&root_db(&scratch.url(), ns, scratch.root_pass())).context("counting the restored tables")?;
+    let restored = root_db(&scratch.url(), ns, scratch.root_pass());
+    let got = table_counts(&restored).context("counting the restored tables")?;
+    // The export carries the access with `KEY '[REDACTED]'`. Re-key it, as a restore must, and prove
+    // the real agent credential signs in to the restored namespace (where an agent member exists).
+    let mut signed_in = false;
+    if got.contains_key("member") {
+        gw_store::redefine_access(&restored).context("re-defining the member access on the restored namespace")?;
+        let agents = restored
+            .sql(
+                "RETURN count(SELECT VALUE id FROM member WHERE id = type::record('member', 'agent'));",
+                Some(1),
+            )
+            .context("looking for the agent member")?;
+        if agents.first().and_then(Value::as_i64).unwrap_or(0) > 0 {
+            gw_store::connect_member(&scratch.url(), ns, crate::store::AGENT, agent_pass)
+                .context("connecting as the agent")?
+                .sql("RETURN 1;", Some(1))
+                .context("the agent credential could not sign in to the restored namespace")?;
+            signed_in = true;
+        }
+    }
     let mut problems = Vec::new();
     let mut rows = 0i64;
     let mut inexact = 0usize;
@@ -683,12 +703,17 @@ fn restore_one(
     }
     ensure!(problems.is_empty(), "{}", problems.join("; "));
     Ok(format!(
-        "{} table(s), {rows} row(s) match{}",
+        "{} table(s), {rows} row(s) match{}{}",
         want.len(),
         if inexact > 0 {
             format!(" ({inexact} within the export's before/after range)")
         } else {
             String::new()
+        },
+        if signed_in {
+            "; access re-keyed and the agent signs in"
+        } else {
+            ""
         }
     ))
 }

@@ -711,9 +711,12 @@ the parser now accepts empty input
     // count as recorded; a count raised by one in COUNTS.json fails it, and so does a truncated file.
     let drilled = gw_ops::supervise::drill(&owner, &backups, None);
     c.check(
-        "the restore drill restores the export into a scratch server and every table count matches",
+        "the restore drill restores the export into a scratch server, every table count matches, and the agent signs in after access is re-keyed",
         drilled.as_ref().is_ok_and(|d| {
-            d.passed && d.lines.len() == namespaces.len() && d.dir.join(gw_ops::supervise::DRILL_FILE).is_file()
+            d.passed
+                && d.lines.len() == namespaces.len()
+                && d.lines.iter().filter(|l| l.contains("the agent signs in")).count() >= 2
+                && d.dir.join(gw_ops::supervise::DRILL_FILE).is_file()
         }),
         &format!("{drilled:?}"),
     );

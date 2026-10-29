@@ -363,6 +363,21 @@ fn jitter_ms() -> u64 {
         .map_or(0, |d| u64::from(d.subsec_nanos() % 32))
 }
 
+/// The `member` access as every scope's schema defines it, with no KEY clause: SurrealDB generates
+/// a fresh key when the statement runs. A test holds the schema files to this text.
+pub const MEMBER_ACCESS_BODY: &str = "ON DATABASE TYPE RECORD\n  \
+SIGNIN (SELECT * FROM member WHERE id = type::record('member', $id) AND enabled = true AND crypto::argon2::compare(pass, $pass))\n  \
+DURATION FOR TOKEN 8h, FOR SESSION 8h;";
+
+/// Define the `member` access again with a fresh key (root only). `surreal export` 3.1.6 writes the
+/// access with `KEY '[REDACTED]'`, so a database restored from an export would sign every token with
+/// a published string until this runs. The restore drill runs it after each import and then proves it
+/// by signing the agent credential in.
+pub fn redefine_access(root: &Db) -> Result<()> {
+    root.sql(&format!("DEFINE ACCESS OVERWRITE {ACCESS} {MEMBER_ACCESS_BODY}"), None)?;
+    Ok(())
+}
+
 /// Create or reset one member credential in root's namespace (root only).
 pub fn provision(root: &Db, member: &str, role: &str, password: &str) -> Result<()> {
     let plain = !member.is_empty()
@@ -430,6 +445,24 @@ pub fn healthy(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_schema_defines_the_member_access_exactly_as_redefine_access_does() {
+        let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        let want = squash(&format!("DEFINE ACCESS IF NOT EXISTS {ACCESS} {MEMBER_ACCESS_BODY}"));
+        let defining: Vec<&str> = SCHEMA
+            .iter()
+            .filter(|(_, text)| text.contains("DEFINE ACCESS"))
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(defining.len(), 3, "one access definition per scope: {defining:?}");
+        for (name, text) in SCHEMA.iter().filter(|(_, t)| t.contains("DEFINE ACCESS")) {
+            assert!(
+                squash(text).contains(&want),
+                "{name} defines the member access differently from redefine_access"
+            );
+        }
+    }
 
     #[test]
     fn namespaces_are_checked() {

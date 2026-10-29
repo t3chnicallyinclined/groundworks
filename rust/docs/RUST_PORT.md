@@ -595,9 +595,12 @@ one in COUNTS.json fails it naming the table; a truncated file fails it).
 Measured on the live home (Windows 11, 2026-10-29, debug binary): export of 20 namespaces 29.6 s;
 drill 210.7 s, 20 namespaces, 51,259 rows, every count exact (no session wrote during the export).
 `main` is a namespace SurrealDB creates itself, 0 tables; the drill's namespace names are checked
-against `[a-z0-9_]+` before they reach a statement. Known gap: the export writes `[REDACTED]` for the
-JWT keys in `DEFINE ACCESS`, so a real restore must re-define access with fresh keys; the drill checks
-data, not access.
+against `[a-z0-9_]+` before they reach a statement. The export writes `[REDACTED]` for the JWT keys in
+`DEFINE ACCESS`, so a database restored from it would sign tokens with a published string: after each
+import the drill runs `gw_store::redefine_access` (the schema's access statement with OVERWRITE and no
+KEY, so SurrealDB generates a fresh one; a test holds the three schema files to that text) and then signs
+in as the real agent credential of that namespace and runs a query, so a restore is proved usable, not
+only complete.
 
 **`eval-draw`.** `eval::draw` writes a JSON Lines skeleton from the passed packets of the last N days
 (question, answer as provisional `gold_answer`, support quotes as provisional `gold`, `category: TODO`,
@@ -607,4 +610,27 @@ them eval questions, which is what led to the mark.
 
 The pulse carries `last_export` and `last_drill` (the newest finished export's day and its DRILL
 verdict), shown on the `ops` line and as the last column of `pulse --history`.
+
+## templates through Copier; the restore drill re-keys access (2026-10-29)
+
+`scaffold::bootstrap` renders a stack's template through Copier (`uvx copier copy --defaults --quiet
+--vcs-ref=HEAD`, data `templates_dir`, `stack`, `name`, `crate`, `dependencies`, `dev_dependencies`)
+from the git repository that holds `home.templates()`, whose root carries `copier.yml`
+(`_subdirectory: "{{ templates_dir }}/{{ stack }}"`, `_templates_suffix: ""`). The project gets
+`.copier-answers.yml` with `_commit` (git describe of the template repository) and `_src_path`.
+`scaffold::upgrade` (CLI `groundworks upgrade <project>`) runs `copier update --vcs-ref=HEAD
+--conflict inline` in the project and reports the commit change and `git status --short`; Copier
+refuses a destination with uncommitted changes. Copier is found as `GROUNDWORKS_COPIER` or `uvx` on
+PATH; under Git Bash `PATHEXT` is unset and Copier's process library then cannot find `git`, so it is
+set for the child. Measured with copier 9.19.1 in a temporary clone: a working-copy render of a
+repository path ignored `_subdirectory` (whole repository copied) and a relative `_src_path` made
+`update` fail with "Unknown revision", so HEAD and an absolute root are always used. The gw-ops test
+`render_records_the_template_commit_and_upgrade_merges_later_changes` runs the real copier against a
+small template repository (render, commit, template change, upgrade, local file survives, dirty
+destination refused) and fails as NOT EXECUTED when copier cannot run. Template files are rendered
+whole, so none may contain a literal `{{` or `{%`.
+
+The restore drill, after each import, re-defines the `member` access with a fresh key
+(`gw_store::redefine_access`; the export carries `KEY '[REDACTED]'`) and signs in as the namespace's
+real agent credential; a test holds the three schema files to the access text.
 

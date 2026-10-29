@@ -27,7 +27,7 @@ use crate::home::{Home, machine};
 use crate::journal::{Confidence, Kind};
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8004/sql";
-const AGENT: &str = "agent";
+pub(crate) const AGENT: &str = "agent";
 const OWNER: &str = "owner";
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 

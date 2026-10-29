@@ -4,6 +4,18 @@
 
 Each task is done when its acceptance test passes.
 
+**Live track since October 2026: D5, the project-memory product, in Rust.** What the team builds today is a
+Groundworks scoped to the owner's own projects (`rust/`): a store, ingestion into citable units, `ask` and
+`answer` with a checked packet, recorded facts, a role team, a gate runner, a supervised store with a nightly
+export and restore drill, and a pulse. It is measured by the ask evals (`rust/docs/EVAL-2026-10.md`) and
+operated by the supervisor. The Python engine (`groundworks/`) is the frozen oracle for the appeals instance
+at v0.2.0; features land in Rust only (ruling of 2026-09-18) and the gates, loader, promotion, queue and
+evaluator are ported only when a second instance needs them in Rust (decision of 2026-10-29). Tracks B to E
+below are the engine roadmap of 2026-09-15 and stand, but they are not where effort goes until D5 has shown
+knowledge accumulating in real use (the pulse's `from asks` and `served%`). A fullstack builder on top of D5
+is scoped in `research/FULLSTACK_AI_SURVEY_2026-10-28.md`; its first step is a Copier template with a
+recorded version.
+
 ## Track 0: First instance (private, not in this repo)
 The instance runs in its own private repository. This repo receives only generic lessons and measured numbers from it.
 

@@ -69,6 +69,9 @@ enum Command {
         #[arg(long)]
         no_register: bool,
     },
+    /// Bring later template changes into a project scaffolded by bootstrap (`copier update`, a
+    /// three-way merge; conflicts marked inline). The project must be committed first.
+    Upgrade { project: String },
     /// Record a fact in a project's journal (the store refuses CONFIRMED without evidence).
     Note {
         project: String,
@@ -538,6 +541,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             ops::bootstrap(&home, &stack, &name, dir.as_deref(), !no_register)?,
             true,
         ),
+        Command::Upgrade { project } => (ops::upgrade(&home, &project)?, true),
         Command::Note {
             project,
             kind,

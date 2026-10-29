@@ -462,9 +462,10 @@ pub fn bootstrap(home: &Home, stack: &str, name: &str, dir: Option<&Path>, regis
     let target: PathBuf = dir.map_or_else(|| home.workspace.join(name), Path::to_path_buf);
     let files = scaffold::bootstrap(home, stack, name, &target)?;
     let mut out = format!(
-        "scaffolded {} from {} ({} files):\n",
+        "scaffolded {} from {} at template commit {} ({} files):\n",
         target.display(),
         stack.name,
+        scaffold::template_version(&target).unwrap_or_else(|| "?".to_owned()),
         files.len()
     );
     for file in &files {
@@ -484,7 +485,18 @@ pub fn bootstrap(home: &Home, stack: &str, name: &str, dir: Option<&Path>, regis
         )?;
     }
     writeln!(out, "next: run `gate` on {name} to prove the scaffold builds")?;
+    writeln!(
+        out,
+        "later: `groundworks upgrade {name}` brings template changes into the project (commit it first)"
+    )?;
     Ok(out)
+}
+
+/// Bring later template changes into a project scaffolded by `bootstrap`.
+pub fn upgrade(home: &Home, project: &str) -> Result<String> {
+    let registry = Registry::load(home)?;
+    let dir = registry.project(project)?.path(&home.workspace);
+    scaffold::upgrade(&dir)
 }
 
 pub fn knowledge_list(home: &Home) -> Result<String> {
