@@ -122,6 +122,46 @@ pub enum Action {
 struct RuleFile {
     #[serde(default)]
     rule: Vec<RuleIn>,
+    #[serde(default)]
+    reader_exempt: Option<ReaderExempt>,
+}
+
+/// `[reader_exempt]` in deny.toml: a command whose first word (after leading `VAR=value` assignments) is
+/// one of `commands` and which holds none of `forbidden_chars` is allowed without consulting the rules,
+/// so `grep -rn "kubectl apply" docs/` passes while `echo x | ssh rise3` (a pipe) still reaches them.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReaderExempt {
+    #[serde(default)]
+    pub commands: Vec<String>,
+    #[serde(default)]
+    pub forbidden_chars: Vec<String>,
+    #[serde(default)]
+    pub samples_allow: Vec<String>,
+    #[serde(default)]
+    pub samples_not_exempt: Vec<String>,
+}
+
+impl ReaderExempt {
+    pub fn is_exempt(&self, command: &str) -> bool {
+        if self.forbidden_chars.iter().any(|c| command.contains(c.as_str())) {
+            return false;
+        }
+        let first = command
+            .split_whitespace()
+            .find(|w| !is_assignment(w))
+            .unwrap_or_default();
+        !first.is_empty() && self.commands.iter().any(|c| c == first)
+    }
+}
+
+/// `VAR=value`: an identifier, then `=`.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 #[derive(Deserialize)]
@@ -153,6 +193,7 @@ pub struct Rule {
 
 pub struct Rules {
     pub rules: Vec<Rule>,
+    pub reader_exempt: ReaderExempt,
 }
 
 impl Rules {
@@ -187,7 +228,15 @@ impl Rules {
                 samples_allow: r.samples_allow,
             });
         }
-        Ok(Rules { rules })
+        Ok(Rules {
+            rules,
+            reader_exempt: file.reader_exempt.unwrap_or_default(),
+        })
+    }
+
+    /// Step zero of the evaluation: a plain read by a listed command, with no shell operator in it.
+    pub fn exempt(&self, command: &str) -> bool {
+        self.reader_exempt.is_exempt(command)
     }
 
     /// `path`, else `GROUNDWORKS_DENY_RULES`, else the compiled-in copy.
@@ -218,6 +267,16 @@ impl Rules {
     /// runs; [`Rules::preempted`] names those for the list's owner.
     pub fn selfcheck(&self) -> Vec<String> {
         let mut failures = Vec::new();
+        for s in &self.reader_exempt.samples_allow {
+            if !self.exempt(s) {
+                failures.push(format!("reader_exempt: {s:?} should be exempt and is not"));
+            }
+        }
+        for s in &self.reader_exempt.samples_not_exempt {
+            if self.exempt(s) {
+                failures.push(format!("reader_exempt: {s:?} should not be exempt and is"));
+            }
+        }
         for rule in &self.rules {
             if rule.samples_deny.len() < 2 || rule.samples_allow.len() < 2 {
                 failures.push(format!("{}: fewer than 2 samples of each kind", rule.id));
@@ -763,10 +822,92 @@ fn client_name() -> String {
     }
 }
 
-fn pre_tool_use(ctx: &mut Ctx, rules_path: Option<&Path>) -> Value {
-    if ctx.input.tool_name.as_deref() != Some("Bash") {
-        return json!({});
+/// What the Edit, Write, MultiEdit and NotebookEdit tools may not touch: the enforcement mechanism
+/// itself (REVIEW.md finding 5; the Bash side is deny.toml's `hook-selfedit`).
+pub const SELFEDIT_REASON: &str = "The hooks, the deny list, the HMAC-free telemetry settings and settings.json are                                    the enforcement mechanism; an agent editing them is the bypass this layer exists to                                    stop. The owner changes them in his own session (principle 14).";
+
+/// Whether `path` (as the tool gave it) is one of the files the enforcement rests on.
+pub fn is_selfedit_path(path: &str, home: Option<&Home>) -> bool {
+    let p = path.replace('\\', "/");
+    let lower = p.to_lowercase();
+    if lower.contains("/plugins/cache/groundworks/")
+        && (lower.contains("/hooks/") || lower.ends_with("hooks.json") || lower.ends_with("deny.toml"))
+    {
+        return true;
     }
+    if lower.ends_with("/.claude/settings.json")
+        || lower.ends_with("/.claude/settings.local.json")
+        || lower.contains("/.claude/hooks/")
+    {
+        return true;
+    }
+    if let Some(home) = home {
+        let root = home.root.display().to_string().replace('\\', "/").to_lowercase();
+        let root = root.trim_end_matches('/');
+        if lower.starts_with(&format!("{root}/secrets/")) || lower == format!("{root}/groundworks.toml") {
+            return true;
+        }
+    }
+    false
+}
+
+fn pre_tool_use(ctx: &mut Ctx, rules_path: Option<&Path>) -> Value {
+    let tool = ctx.input.tool_name.clone().unwrap_or_default();
+    match tool.as_str() {
+        "Bash" => {}
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => return file_tool(ctx),
+        _ => return json!({}),
+    }
+    // Fail closed on anything internal (principle 8; REVIEW.md finding 6): a panic or a store that is
+    // down while a home exists denies with a notice. An allow-on-error PreToolUse hook is the bypass.
+    if ctx.home.is_some() && ctx.store.is_none() {
+        let outcome = Outcome {
+            decision: "deny",
+            rule_id: Some("store-down".to_owned()),
+            output: deny_output(
+                "Groundworks: the store is down, so this Bash call cannot be recorded and is refused (fail closed); \
+                 check it with `groundworks store status`, or ask the owner to start it.",
+            ),
+        };
+        eprintln!("groundworks hook PreToolUse: store_down (denied)");
+        return outcome.output;
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bash_tool(ctx, rules_path))) {
+        Ok(out) => out,
+        Err(_) => {
+            eprintln!("groundworks hook PreToolUse: other (panic; denied)");
+            deny_output("Groundworks: the hook failed internally; this Bash call is refused (fail closed).")
+        }
+    }
+}
+
+fn file_tool(ctx: &mut Ctx) -> Value {
+    let path = ctx
+        .input
+        .tool_input
+        .as_ref()
+        .and_then(|t| t["file_path"].as_str().or_else(|| t["notebook_path"].as_str()))
+        .unwrap_or("");
+    let outcome = if is_selfedit_path(path, ctx.home.as_ref()) {
+        Outcome {
+            decision: "deny",
+            rule_id: Some("hook-selfedit-file".to_owned()),
+            output: deny_output(SELFEDIT_REASON),
+        }
+    } else {
+        Outcome {
+            decision: "allow",
+            rule_id: None,
+            output: json!({}),
+        }
+    };
+    if outcome.decision == "deny" {
+        ctx.log(&outcome, ToolUses::default(), 0);
+    }
+    outcome.output
+}
+
+fn bash_tool(ctx: &mut Ctx, rules_path: Option<&Path>) -> Value {
     let command = ctx
         .input
         .tool_input
@@ -792,6 +933,11 @@ fn pre_tool_use(ctx: &mut Ctx, rules_path: Option<&Path>) -> Value {
                 )),
             }
         }
+        Ok(rules) if rules.exempt(command) => Outcome {
+            decision: "exempt",
+            rule_id: None,
+            output: json!({}),
+        },
         Ok(rules) => match rules.check(command) {
             None => Outcome {
                 decision: "allow",
@@ -1027,6 +1173,39 @@ samples_allow = ["ssh dev", "ls"]
         assert_eq!(rules.check("ssh dev").unwrap().id, "w");
         assert!(rules.check("ls").is_none());
         assert!(rules.selfcheck().is_empty());
+    }
+
+    #[test]
+    fn reader_exemption_takes_plain_reads_and_nothing_with_an_operator() {
+        let rules = Rules::parse(DEFAULT_RULES).unwrap();
+        assert!(rules.exempt("grep -rn \"kubectl apply\" docs/"));
+        assert!(rules.exempt("cat scripts/deploy.sh"));
+        assert!(!rules.exempt("cat deploy.sh | ssh rise3 bash"));
+        assert!(!rules.exempt("FOO=1 kubectl apply -f x"));
+        assert!(!rules.exempt("cd rust && git push"));
+        assert!(!rules.exempt(""));
+        assert!(is_assignment("FOO=1") && !is_assignment("1X=2") && !is_assignment("grep"));
+        // A list without the table exempts nothing.
+        let bare = Rules::parse("[[rule]]\nid='a'\naction='deny'\nregex='x'\nreason='r'").unwrap();
+        assert!(!bare.exempt("cat x"));
+    }
+
+    #[test]
+    fn the_enforcement_files_are_recognised_by_path() {
+        assert!(is_selfedit_path(
+            "C:\\Users\\x\\.claude\\plugins\\cache\\groundworks\\groundworks\\0.5.0\\hooks\\hooks.json",
+            None
+        ));
+        assert!(is_selfedit_path(
+            "/home/x/.claude/plugins/cache/groundworks/groundworks/0.5.0/hooks/deny.toml",
+            None
+        ));
+        assert!(is_selfedit_path("/home/x/.claude/settings.json", None));
+        assert!(is_selfedit_path("C:/Users/x/.claude/settings.local.json", None));
+        assert!(is_selfedit_path("/home/x/.claude/hooks/pre.sh", None));
+        assert!(!is_selfedit_path("/home/x/project/src/hooks.rs", None));
+        assert!(!is_selfedit_path("/home/x/.claude/agents/gw-engineer.md", None));
+        assert!(!is_selfedit_path("", None));
     }
 
     #[test]

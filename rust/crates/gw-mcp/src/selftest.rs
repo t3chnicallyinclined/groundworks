@@ -1166,6 +1166,87 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         out == json!({}),
         &out.to_string(),
     );
+    let mut exempt_wrong = Vec::new();
+    for sample in &rules.reader_exempt.samples_allow {
+        let out = hook(exe, home, "PreToolUse", &bash(sample), &[], Some(&rules_path))?;
+        if out != json!({}) {
+            exempt_wrong.push(format!("{sample:?} -> {out}"));
+        }
+    }
+    let piped = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &bash("cat deploy.sh | ssh rise3 bash"),
+        &[],
+        Some(&rules_path),
+    )?;
+    c.check(
+        &format!(
+            "the {} reader-exempt samples pass through the hook and a piped read still reaches the rules",
+            rules.reader_exempt.samples_allow.len()
+        ),
+        exempt_wrong.is_empty()
+            && rules.reader_exempt.samples_allow.len() >= 2
+            && piped["hookSpecificOutput"]["permissionDecision"] == "deny",
+        &format!("{}; piped -> {piped}", exempt_wrong.join("; ")),
+    );
+    let edit = |tool: &str, path: String| json!({"session_id": "selftest-session-1", "cwd": demo_s, "tool_name": tool, "tool_input": {"file_path": path}});
+    let settings = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &edit("Edit", format!("{}/.claude/settings.json", base.display())),
+        &[],
+        None,
+    )?;
+    let secrets = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &edit("Write", home.join("secrets/agent.pass").display().to_string()),
+        &[],
+        None,
+    )?;
+    let hooks_json = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &edit(
+            "MultiEdit",
+            format!(
+                "{}/.claude/plugins/cache/groundworks/groundworks/0.5.0/hooks/hooks.json",
+                base.display()
+            ),
+        ),
+        &[],
+        None,
+    )?;
+    let readme = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &edit("Edit", demo.join("README.md").display().to_string()),
+        &[],
+        None,
+    )?;
+    c.check(
+        "Edit/Write on settings.json, the home's secrets or the installed hooks.json is denied; a project file is not",
+        settings["hookSpecificOutput"]["permissionDecision"] == "deny"
+            && secrets["hookSpecificOutput"]["permissionDecision"] == "deny"
+            && hooks_json["hookSpecificOutput"]["permissionDecision"] == "deny"
+            && readme == json!({}),
+        &format!("{settings} {secrets} {hooks_json} {readme}"),
+    );
+    let out = hook(exe, &down_home, "PreToolUse", &bash("ls"), &[], Some(&rules_path))?;
+    c.check(
+        "PreToolUse with the store down denies every Bash call with a notice (fails closed)",
+        out["hookSpecificOutput"]["permissionDecision"] == "deny"
+            && out["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .is_some_and(|r| r.contains("store is down")),
+        &out.to_string(),
+    );
 
     // Stop: three edits and nothing recorded since the start blocks once; a journal write approves.
     std::thread::sleep(std::time::Duration::from_millis(1100));
