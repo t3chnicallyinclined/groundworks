@@ -796,28 +796,172 @@ fn machine_check(known: Option<String>) -> (String, String) {
     }
 }
 
-/// Copies `team/gw-*.md` into `~/.claude/agents`. Only files with that
-/// prefix are ever written, so nothing else in the directory is touched.
-pub fn install_team(home: &Home) -> Result<String> {
+/// The one shared Groundworks block every agent definition carries (decision b312bl7vjqjoeofbs2sc (b),
+/// owner go cgilrpv6ynkwmvu3u929): one source, stamped by `install-team --stamp`, checked by `--check`.
+pub const STAMP_BEGIN: &str = "<!-- groundworks:begin -->";
+pub const STAMP_END: &str = "<!-- groundworks:end -->";
+pub const STAMP_BLOCK: &str = "<!-- groundworks:begin -->\n\
+## Groundworks (stamped by `groundworks install-team --stamp`; do not edit by hand)\n\
+Groundworks is ON for memory. Before answering about a project, call `project_show` and read its journal (gotchas first).\n\
+Record what you learn with `journal_add` (decision / gotcha / status / eliminated), with source and confidence; cite `file:line` or say UNKNOWN.\n\
+Run commands through `run` (receipts); prod waits for the owner's go each time.\n\
+Board / tickets / hindsight / fleetview / orchestrate stay OFF; one agent does the work.\n\
+<!-- groundworks:end -->";
+
+/// What replaces the owner's 2026-09-22 sentence; the rest of its paragraph (the 2026-10-18 re_kb and
+/// Ghidra update) stays as written.
+pub const ON_SENTENCE: &str = "Groundworks is ON for memory (see the Groundworks block in this file); board / tickets / \
+                               hindsight / fleetview stay OFF, as do the `orchestrate` / `ticket` skills.";
+
+fn off_sentence() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"The orchestration methods are OFF: no groundworks / board / tickets / hindsight / fleetview,\s+no `orchestrate` /\s+`ticket` skills\.",
+        )
+        .expect("the OFF sentence regex")
+    })
+}
+
+/// `text` with the block inserted or replaced and the OFF sentence replaced; None when nothing changes.
+pub fn stamp_text(text: &str) -> Option<String> {
+    let mut out = off_sentence().replace_all(text, ON_SENTENCE).into_owned();
+    out = match (out.find(STAMP_BEGIN), out.find(STAMP_END)) {
+        (Some(a), Some(b)) if b >= a => {
+            let end = b + STAMP_END.len();
+            format!("{}{}{}", &out[..a], STAMP_BLOCK, &out[end..])
+        }
+        _ => {
+            let mut s = out.trim_end_matches(['\n', '\r']).to_owned();
+            s.push_str("\n\n");
+            s.push_str(STAMP_BLOCK);
+            s.push('\n');
+            s
+        }
+    };
+    (out != text).then_some(out)
+}
+
+/// Why an agent file drifts from the stamp, or None when it carries the block exactly and no OFF sentence.
+pub fn stamp_drift(text: &str) -> Option<&'static str> {
+    if off_sentence().is_match(text) {
+        return Some("still carries the 2026-09-22 OFF sentence");
+    }
+    match (text.find(STAMP_BEGIN), text.find(STAMP_END)) {
+        (None, _) | (_, None) => Some("no Groundworks block"),
+        (Some(a), Some(b)) if b < a => Some("block markers out of order"),
+        (Some(a), Some(b)) => {
+            (&text[a..b + STAMP_END.len()] != STAMP_BLOCK).then_some("block differs from the template")
+        }
+    }
+}
+
+/// `install-team` options. With neither flag it copies `team/gw-*.md` as before.
+#[derive(Debug, Default, Clone)]
+pub struct InstallTeam {
+    /// Insert or refresh the shared block in every `*.md` of the agents dir, replacing the OFF sentence.
+    pub stamp: bool,
+    /// Report every agent whose block differs from the template; the result is red when any does.
+    pub check: bool,
+    /// The agents directory (default `~/.claude/agents`).
+    pub agents_dir: Option<PathBuf>,
+}
+
+fn agents_dir(opts: &InstallTeam) -> Result<PathBuf> {
+    if let Some(dir) = &opts.agents_dir {
+        return Ok(dir.clone());
+    }
     let profile = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .context("neither USERPROFILE nor HOME is set")?;
-    let target = PathBuf::from(profile).join(".claude").join("agents");
+    Ok(PathBuf::from(profile).join(".claude").join("agents"))
+}
+
+fn agent_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "md"))
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// Copies `team/gw-*.md` into the agents dir (only files with that prefix are ever written there by the
+/// copy), then `--stamp` and/or `--check` over every `*.md` in it. Returns the report and whether it is
+/// green (`--check` is red on any drift; `--stamp` is red when a file could not be written).
+pub fn install_team(home: &Home, opts: &InstallTeam) -> Result<(String, bool)> {
+    let target = agents_dir(opts)?;
     std::fs::create_dir_all(&target)?;
     let mut out = String::new();
-    let mut count = 0usize;
-    for entry in std::fs::read_dir(home.path("team"))? {
-        let path = entry?.path();
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        if file_name.starts_with("gw-") && file_name.ends_with(".md") {
-            std::fs::copy(&path, target.join(&file_name))?;
-            count += 1;
-            writeln!(out, "installed {}", target.join(&file_name).display())?;
+    let mut ok = true;
+    if !opts.check || opts.stamp {
+        let mut count = 0usize;
+        for entry in std::fs::read_dir(home.path("team"))? {
+            let path = entry?.path();
+            let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            if file_name.starts_with("gw-") && file_name.ends_with(".md") {
+                std::fs::copy(&path, target.join(&file_name))?;
+                count += 1;
+                writeln!(out, "installed {}", target.join(&file_name).display())?;
+            }
         }
+        ensure!(count > 0, "no team/gw-*.md files found; nothing installed");
+        writeln!(out, "{count} agent(s) installed")?;
     }
-    ensure!(count > 0, "no team/gw-*.md files found; nothing installed");
-    writeln!(out, "{count} agent(s) installed")?;
-    Ok(out)
+    if opts.stamp {
+        let (mut stamped, mut unchanged, mut sentences) = (0usize, 0usize, 0usize);
+        for path in agent_files(&target)? {
+            let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            let had_sentence = off_sentence().is_match(&text);
+            match stamp_text(&text) {
+                Some(new) => {
+                    std::fs::write(&path, new).with_context(|| format!("writing {}", path.display()))?;
+                    stamped += 1;
+                    sentences += usize::from(had_sentence);
+                    writeln!(
+                        out,
+                        "stamped {}{}",
+                        path.display(),
+                        if had_sentence { " (OFF sentence replaced)" } else { "" }
+                    )?;
+                }
+                None => unchanged += 1,
+            }
+        }
+        writeln!(
+            out,
+            "stamp: {stamped} file(s) written ({sentences} OFF sentence(s) replaced), {unchanged} already current, in {}",
+            target.display()
+        )?;
+    }
+    if opts.check {
+        let mut drift = 0usize;
+        let files = agent_files(&target)?;
+        for path in &files {
+            let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            match stamp_drift(&text) {
+                None => writeln!(out, "ok    {}", path.display())?,
+                Some(why) => {
+                    drift += 1;
+                    writeln!(out, "DRIFT {}: {why}", path.display())?;
+                }
+            }
+        }
+        if files.is_empty() {
+            drift += 1;
+            writeln!(out, "DRIFT {}: no agent files (nothing checked)", target.display())?;
+        }
+        writeln!(
+            out,
+            "check: {drift} of {} agent(s) drift from the Groundworks block{}",
+            files.len(),
+            if drift > 0 { " (run install-team --stamp)" } else { "" }
+        )?;
+        ok = drift == 0;
+    }
+    Ok((out, ok))
 }
 
 /// The read-only estate scan (bootstrap stage 1): one record per project under `root` (default:
@@ -1145,6 +1289,92 @@ mod tests {
         let cut = truncate_entry(&long, 400);
         assert_eq!(cut.chars().count(), 400 + " [truncated]".len());
         assert!(cut.ends_with(" [truncated]"));
+    }
+
+    const OFF_PARAGRAPH: &str = "## Tooling note (owner, 2026-09-22)\nThe orchestration methods are OFF: no groundworks / \
+board / tickets / hindsight / fleetview, no `orchestrate` /\n`ticket` skills. UPDATE 2026-10-18 (owner: \"turn the \
+knowledge base on\"): re_kb is ON again -- SurrealDB on\n127.0.0.1:8001 (ns `re`, db `kb`, root/root). Ghidra \
+(GhidraMCP) is also on.\n";
+
+    #[test]
+    fn the_stamp_inserts_once_replaces_the_off_sentence_and_keeps_the_rest() {
+        let text = format!("---\nname: x\n---\n\nBody.\n\n{OFF_PARAGRAPH}");
+        let stamped = stamp_text(&text).expect("changes");
+        assert!(stamped.contains(ON_SENTENCE), "{stamped}");
+        assert!(!stamped.contains("The orchestration methods are OFF"), "{stamped}");
+        assert!(stamped.contains("UPDATE 2026-10-18 (owner: \"turn the knowledge base on\"): re_kb is ON again"));
+        assert!(stamped.contains("Ghidra (GhidraMCP) is also on."));
+        assert_eq!(stamped.matches(STAMP_BEGIN).count(), 1);
+        assert!(stamped.ends_with(&format!("{STAMP_BLOCK}\n")));
+        assert!(STAMP_BLOCK.lines().count() <= 8, "the block is at most 8 lines");
+        assert_eq!(stamp_drift(&stamped), None);
+        assert_eq!(stamp_text(&stamped), None, "a second stamp changes nothing");
+        // A hand-edited block is drift and is put back by the next stamp.
+        let edited = stamped.replace("one agent does the work", "many agents do the work");
+        assert_eq!(stamp_drift(&edited), Some("block differs from the template"));
+        assert_eq!(stamp_text(&edited).as_deref(), Some(stamped.as_str()));
+        assert_eq!(stamp_drift("# plain agent\n"), Some("no Groundworks block"));
+        assert_eq!(
+            stamp_drift(&format!("{STAMP_BLOCK}\n{OFF_PARAGRAPH}")),
+            Some("still carries the 2026-09-22 OFF sentence")
+        );
+    }
+
+    #[test]
+    fn install_team_stamp_and_check_work_on_a_directory() {
+        let base = std::env::temp_dir().join(format!("gw-install-team-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let home_dir = base.join(".groundworks");
+        std::fs::create_dir_all(home_dir.join("team")).unwrap();
+        std::fs::write(home_dir.join("groundworks.toml"), "").unwrap();
+        std::fs::write(
+            home_dir.join("team/gw-engineer.md"),
+            "---\nname: gw-engineer\n---\nbuilds\n",
+        )
+        .unwrap();
+        let agents = base.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("old.md"), format!("# old\n\n{OFF_PARAGRAPH}")).unwrap();
+        std::fs::write(agents.join("silent.md"), "# silent\n").unwrap();
+        std::fs::write(agents.join("notes.txt"), "not an agent").unwrap();
+        let home = Home::open(&home_dir).unwrap();
+        let check = InstallTeam {
+            check: true,
+            agents_dir: Some(agents.clone()),
+            ..InstallTeam::default()
+        };
+        let (report, ok) = install_team(&home, &check).unwrap();
+        assert!(!ok, "{report}");
+        assert_eq!(report.matches("DRIFT").count(), 2, "{report}");
+        let stamp = InstallTeam {
+            stamp: true,
+            check: true,
+            agents_dir: Some(agents.clone()),
+        };
+        let (report, ok) = install_team(&home, &stamp).unwrap();
+        assert!(ok, "{report}");
+        assert!(report.contains("1 agent(s) installed"), "{report}");
+        assert!(
+            report.contains("3 file(s) written (1 OFF sentence(s) replaced)"),
+            "{report}"
+        );
+        assert!(report.contains("check: 0 of 3 agent(s) drift"), "{report}");
+        assert_eq!(
+            std::fs::read_to_string(agents.join("notes.txt")).unwrap(),
+            "not an agent"
+        );
+        let old = std::fs::read_to_string(agents.join("old.md")).unwrap();
+        assert!(old.contains(ON_SENTENCE) && old.contains("re_kb is ON again"), "{old}");
+        // Hand-edit one block: --check goes red and names it.
+        let gw = agents.join("gw-engineer.md");
+        let text = std::fs::read_to_string(&gw).unwrap().replace("stay OFF", "stay ON");
+        std::fs::write(&gw, text).unwrap();
+        let (report, ok) = install_team(&home, &check).unwrap();
+        assert!(
+            !ok && report.contains("DRIFT") && report.contains("gw-engineer.md: block differs"),
+            "{report}"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

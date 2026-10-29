@@ -136,8 +136,18 @@ enum Command {
     },
     /// Check registry, templates, secrets and profile.
     Doctor,
-    /// Install team/gw-*.md into ~/.claude/agents.
-    InstallTeam,
+    /// Install team/gw-*.md into ~/.claude/agents. --stamp puts the one shared Groundworks block into
+    /// every agent there (replacing the 2026-09-22 OFF sentence); --check reports any agent whose block
+    /// drifts from the template and exits non-zero.
+    InstallTeam {
+        #[arg(long)]
+        stamp: bool,
+        #[arg(long)]
+        check: bool,
+        /// The agents directory (default ~/.claude/agents). Tests use a copy.
+        #[arg(long)]
+        agents_dir: Option<PathBuf>,
+    },
     /// Ingest a project (or --all) into the store, by kind and by expert area.
     Intake {
         project: Option<String>,
@@ -667,7 +677,18 @@ async fn dispatch(command: Command) -> Result<bool> {
             let store = open_store(&home).await.map_err(|e| format!("{e:#}"));
             ops::doctor(&home, store).await?
         }
-        Command::InstallTeam => (ops::install_team(&home)?, true),
+        Command::InstallTeam {
+            stamp,
+            check,
+            agents_dir,
+        } => ops::install_team(
+            &home,
+            &ops::InstallTeam {
+                stamp,
+                check,
+                agents_dir,
+            },
+        )?,
         Command::Intake {
             project,
             all,
