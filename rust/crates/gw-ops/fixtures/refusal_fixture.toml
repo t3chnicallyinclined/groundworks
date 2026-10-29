@@ -1,0 +1,59 @@
+# gw-security's refusal fixture (JOURNAL-REFUSALS.md): the patterns, the entropy threshold and the
+# must-accept samples. The must-refuse samples are not in this file: refusal::must_refuse() builds them
+# at run time from fragments and fresh random bytes, so no key-shaped string is committed to this
+# public repo. For the same reason a few pattern strings spell one character as a TOML \u escape; the
+# regex each one parses to is byte-identical to gw-security's.
+
+entropy_threshold = 4.2
+
+must_accept = [
+  "Groundworks coverage audit 2026-10-29: 112 live facts over 18 projects; recorded_in_window 0; machine 'unknown'.",
+  "decision 1itizcerhaj5x1mjfyj2 and b312bl7vjqjoeofbs2sc (owner go cgilrpv6ynkwmvu3u929)",
+  "installed binary b151d28, branch at b3a9d72, rebased on b151d28",
+  "sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 of the empty file",
+  "git SHA 0c559620f3a1b2c4d5e6f708192a3b4c5d6e7f80 in the worktree",
+  "session 7c9e6679-7425-40de-944b-e07fc1f90ae7 started 2026-10-29T20:25:25Z",
+  "receipt:3f9a2b1c0d8e7f6a5b4c3d2e1f0a9b8c and fact:n0wix31m7bs35oechth0",
+  "store.rs#L1169-1182 keeps only the first 16 distinct words (store::query_words)",
+  "SELECT over ask_packet and fact on 127.0.0.1:8004 (root, read-only) 2026-10-27",
+  "the admin password is in bw:rise3 server#root password; never print it",
+  "password: bw:rise3 server#root password",
+  "CLOUDFLARE_API_TOKEN=$CF_API_TOKEN is set by groundworks run from env:CF_API_TOKEN",
+  "curl -H \"Authorization: Bearer $CF_API_TOKEN\" https://api.cloudflare.com/client/v4/zones",
+  "Authorization: Bearer <token> is the header shape; the value comes from the registry",
+  "BW_SESSION is never in the agent env; bw unlock is denied by rule bw-read",
+  "never kubectl get secret -o yaml (estate.md); use describe secret",
+  "password = REDACTED in the log excerpt; token=<redacted>; secret: none",
+  "the default password is changeme in the chart README",
+  "docker login --password-stdin ghcr.io < /run/secrets/ghcr",
+  "kubectl create secret generic db --from-env-file=/run/secrets/db.env --dry-run=client -o yaml",
+  "the deny token is 'tool_uses' and the json key is \"journal_writes_since_start\"",
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGQ7Fk2xPq9vR3mN8tL1wY6hJ4bC0dE5fG7hI9jK2lM agent@THERIGXD",
+  "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----",
+  "PACKET_CAP_BYTES_DEFAULT_V1_FOR_THE_TICKETS_PROJECT and cache_creation_input_tokens_total_v2",
+  "C:/Users/trist/projects/groundworks-successor/rust/crates/gw-ops/src/store.rs",
+  "https://github.com/t3chnicallyinclined/groundworks/commit/0c559620f3a1b2c4d5e6f708192a3b4c5d6e7f80",
+  "token = the one in Bitwarden (see estate.md)",
+  "secret_shaped_text_refusal is the function name; private_key_custody is the lane",
+  "r11 cost 22.92 for 66 questions; tokens per turn 17.4k; ToolSearch 78, ask 72, answer 69, grep 52",
+  "LocalPasswordAuthenticationProvider2 is the class that failed; see auth.rs:88",
+  "access_key_id rotation is the owner's step; passwd -S deploy shows the account state",
+  "user:pass@host is the shape; https://user:$PASS@host is how to write it",
+  "the error field was capped at 200 chars with the redaction regex Bearer \\S+|[A-Za-z0-9_\\-]{32,}",
+]
+
+[patterns]
+"pem-private-key" = "-----BEGIN (?:[A-Z0-9]+ )*PRIVATE\u0020KEY(?: BLOCK)?-----"
+"stripe-key" = "\\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}\\b|\\bwhsec_[A-Za-z0-9]{20,}\\b"
+"github-token" = "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\\b|\\bgithub\u005Fpat_[A-Za-z0-9_]{20,}\\b"
+"aws-access-key" = "\\b(?:\u0041KIA|\u0041SIA)[0-9A-Z]{16}\\b"
+"openai-anthropic-key" = "\\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}\\b"
+"slack-token" = "\\bxox[abpres]-[A-Za-z0-9-]{10,}\\b"
+"google-api-key" = "\\b\u0041Iza[0-9A-Za-z_-]{35}\\b"
+"gitlab-token" = "\\bgl\u0070at-[A-Za-z0-9_-]{20,}\\b"
+"age-secret-key" = "\\bAGE-SECRET-KEY-1[A-Z0-9]{50,}\\b"
+"jwt" = "\\bey\u004A[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"
+"bearer" = "(?i)\\bBearer\\s+[A-Za-z0-9_\\-.=+/]{16,}"
+"basic-auth" = "(?i)\\bAuthorization:\\s*Basic\\s+[A-Za-z0-9+/=]{12,}"
+"url-credential" = "://[^\\s/:@]+:[^\\s/@$<]{4,}@"
+"kv-secret" = "(?i)\\b[\\w.-]*(?:password|passwd|pass|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential)s?\\b[\\x22\\x27]?(?:\\s+is)?\\s*[=:]\\s*[\\x22\\x27]?([^\\s\\x22\\x27$<{\\[(][^\\s\\x22\\x27]{5,})"

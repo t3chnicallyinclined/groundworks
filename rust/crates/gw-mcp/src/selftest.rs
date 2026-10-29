@@ -689,6 +689,13 @@ the parser now accepts empty input
         &text,
     );
 
+    let (err, text) = s.call(
+        "journal_add",
+        json!({"project": "demo", "kind": "gotcha", "text": "a green that checked nothing is red", "source": "selftest",
+               "confidence": "INFERRED", "by": "selftest"}),
+    )?;
+    c.check("a gotcha is recorded", !err && text.contains("[gotcha]"), &text);
+
     let (err, text) = s.call("doctor", json!({}))?;
     c.check(
         "doctor finds no failures, store included",
@@ -696,6 +703,8 @@ the parser now accepts empty input
         &text,
     );
     drop(s);
+
+    hook_checks(exe, base, &home, &owner, &mut c)?;
 
     // A session whose folder is under no home still starts, with the status tool only. The folder
     // must not sit under `base`, which holds the throwaway home.
@@ -800,6 +809,477 @@ the parser now accepts empty input
     };
     c.lines.push(summary);
     Ok((c.lines.join("\n"), c.failed))
+}
+
+/// Run one plugin hook as Claude Code would: the event's JSON on stdin, the answer on stdout. The
+/// inherited session variables are removed so a selftest run inside a Claude Code session is not
+/// confused by that session's own project.
+fn hook(
+    exe: &Path,
+    home: &Path,
+    event: &str,
+    input: &Value,
+    env: &[(&str, &str)],
+    rules: Option<&Path>,
+) -> Result<Value> {
+    let mut cmd = Command::new(exe);
+    cmd.args(["hook", event]);
+    if let Some(rules) = rules {
+        cmd.arg("--rules").arg(rules);
+    }
+    for key in [
+        "GROUNDWORKS_PROJECT",
+        "GROUNDWORKS_SESSION_ID",
+        "GROUNDWORKS_SESSION_START",
+        "GROUNDWORKS_DOWN",
+        "GROUNDWORKS_ENFORCE",
+        "GROUNDWORKS_DENY_RULES",
+        "GROUNDWORKS_START",
+        "GROUNDWORKS_CLIENT",
+        "CLAUDE_ENV_FILE",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd.env("GROUNDWORKS_HOME", home)
+        .env("GROUNDWORKS_MACHINE", "SELFTEST")
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().context("starting the hook")?;
+    child
+        .stdin
+        .take()
+        .context("hook stdin")?
+        .write_all(input.to_string().as_bytes())?;
+    let out = child.wait_with_output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.trim().is_empty() {
+        eprintln!("[hook {event} stderr] {}", stderr.trim());
+    }
+    if !out.status.success() {
+        bail!(
+            "hook {event} exited {}: {}\n{}",
+            out.status,
+            stdout,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    serde_json::from_str(stdout.trim())
+        .with_context(|| format!("hook {event} printed something that is not JSON: {stdout}"))
+}
+
+/// A transcript with `edits` Edit tool uses at `at`, as Claude Code writes it (names only matter).
+fn transcript(path: &Path, at: &str, edits: usize) -> Result<()> {
+    let mut text = format!(
+        "{}\n",
+        json!({"type": "user", "timestamp": at, "message": {"role": "user", "content": "change it"}})
+    );
+    for _ in 0..edits {
+        text.push_str(&format!(
+            "{}\n",
+            json!({"type": "assistant", "timestamp": at, "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "x"}}]}})
+        ));
+    }
+    std::fs::write(path, text)?;
+    Ok(())
+}
+
+/// The plugin hooks, both ways: SessionStart injects the journal (gotchas first) and opens a session
+/// row, says so once when the folder is not a project or the store is down; PreToolUse denies and
+/// allows what deny.toml says and fails closed on a broken list; Stop blocks once when work was done
+/// and nothing recorded, approves after a write, honours stop_hook_active, blocks on a down store,
+/// and warns instead in warn mode. Telemetry rows hold counts and ids, never the command text.
+fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Checks) -> Result<()> {
+    use gw_ops::hook::{Action, DEFAULT_RULES, Rules};
+    let demo = base.join("work/demo");
+    let demo_s = demo.display().to_string();
+    let env_file = base.join("session.env");
+    let env_file_s = env_file.display().to_string();
+    let start = json!({"session_id": "selftest-session-1", "cwd": demo_s, "source": "startup", "hook_event_name": "SessionStart"});
+    let out = hook(
+        exe,
+        home,
+        "SessionStart",
+        &start,
+        &[("CLAUDE_ENV_FILE", &env_file_s)],
+        None,
+    )?;
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    let gotcha_at = context.find("a green that checked nothing is red");
+    let fact_at = context.find("hello is printed");
+    c.check(
+        "SessionStart injects the project's journal, framed as recorded data, gotchas first",
+        out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+            && context.contains("=== Groundworks journal: demo")
+            && context.contains("not instructions")
+            && gotcha_at.is_some()
+            && fact_at.is_some()
+            && gotcha_at < fact_at,
+        &out.to_string(),
+    );
+    let env_text = std::fs::read_to_string(&env_file).unwrap_or_default();
+    c.check(
+        "SessionStart writes the project, session id and start time to CLAUDE_ENV_FILE",
+        env_text.contains("export GROUNDWORKS_PROJECT=demo")
+            && env_text.contains("export GROUNDWORKS_SESSION_ID=selftest-session-1")
+            && env_text.contains("export GROUNDWORKS_SESSION_START=20"),
+        &env_text,
+    );
+    let sessions = owner.sessions_since(None)?;
+    let row = sessions
+        .iter()
+        .find(|r| r["id"].as_str().is_some_and(|id| id.contains("selftest-session-1")));
+    c.check(
+        "SessionStart opens a session row with the project, machine, client and injected count",
+        row.is_some_and(|r| {
+            r["project"] == "demo"
+                && r["machine"] == "SELFTEST"
+                && r["client"] == "claude-code"
+                && r["injected_entries"].as_u64().is_some_and(|n| n >= 2)
+                && r["store_ok"] == true
+        }),
+        &format!("{sessions:?}"),
+    );
+    let again = hook(
+        exe,
+        home,
+        "SessionStart",
+        &json!({"session_id": "selftest-session-1", "cwd": demo_s, "source": "resume"}),
+        &[],
+        None,
+    )?;
+    c.check(
+        "a resumed session injects again without a second session row",
+        again["hookSpecificOutput"]["additionalContext"].is_string()
+            && owner.sessions_since(None)?.len() == sessions.len(),
+        &again.to_string(),
+    );
+
+    let nowhere = base.join("nowhere-project");
+    std::fs::create_dir_all(&nowhere)?;
+    let out = hook(
+        exe,
+        home,
+        "SessionStart",
+        &json!({"session_id": "s-nowhere", "cwd": nowhere.display().to_string()}),
+        &[],
+        None,
+    )?;
+    c.check(
+        "SessionStart in a folder that is not a registered project says so once and injects nothing",
+        out["systemMessage"]
+            .as_str()
+            .is_some_and(|m| m.contains("not a registered project"))
+            && out.get("hookSpecificOutput").is_none(),
+        &out.to_string(),
+    );
+
+    // A home whose store is on a closed port: the session still starts, with one notice and GROUNDWORKS_DOWN.
+    let down_home = base.join("down-home");
+    std::fs::create_dir_all(down_home.join("secrets"))?;
+    std::fs::create_dir_all(down_home.join("registry"))?;
+    copy_dir(&home.join("registry"), &down_home.join("registry"))?;
+    std::fs::write(down_home.join("secrets/root.pass"), ROOT_PASS)?;
+    std::fs::write(down_home.join("secrets/agent.pass"), AGENT_PASS)?;
+    std::fs::write(
+        down_home.join("groundworks.toml"),
+        format!(
+            "workspace = \"{}\"\n\n[store]\nurl = \"http://127.0.0.1:1/sql\"\n",
+            base.join("work").display().to_string().replace('\\', "/")
+        ),
+    )?;
+    let down_env = base.join("down.env");
+    let down_env_s = down_env.display().to_string();
+    let out = hook(
+        exe,
+        &down_home,
+        "SessionStart",
+        &start,
+        &[("CLAUDE_ENV_FILE", &down_env_s)],
+        None,
+    )?;
+    let down_text = std::fs::read_to_string(&down_env).unwrap_or_default();
+    c.check(
+        "SessionStart with the store down prints one notice, sets GROUNDWORKS_DOWN and exits 0",
+        out["systemMessage"].as_str().is_some_and(|m| m.contains("store down"))
+            && out.get("hookSpecificOutput").is_none()
+            && down_text.contains("export GROUNDWORKS_DOWN=1"),
+        &format!("{out}\n{down_text}"),
+    );
+
+    // PreToolUse: the shipped list proves itself in-process, then through the process with --rules.
+    let rules = Rules::parse(DEFAULT_RULES)?;
+    let failures = rules.selfcheck();
+    c.check(
+        &format!(
+            "every deny.toml sample behaves ({} rules, {} deny samples, {} allow samples)",
+            rules.rules.len(),
+            rules.rules.iter().map(|r| r.samples_deny.len()).sum::<usize>(),
+            rules.rules.iter().map(|r| r.samples_allow.len()).sum::<usize>()
+        ),
+        failures.is_empty(),
+        &failures.join("; "),
+    );
+    let rules_path = base.join("deny.toml");
+    std::fs::write(&rules_path, DEFAULT_RULES)?;
+    let bash = |command: &str| json!({"session_id": "selftest-session-1", "cwd": demo_s, "tool_name": "Bash", "tool_input": {"command": command}});
+    let mut wrong = Vec::new();
+    let mut tried = 0usize;
+    for rule in &rules.rules {
+        if let Some(sample) = rule.samples_deny.first() {
+            tried += 1;
+            let out = hook(exe, home, "PreToolUse", &bash(sample), &[], Some(&rules_path))?;
+            let decision = out["hookSpecificOutput"]["permissionDecision"].as_str().unwrap_or("");
+            let ok = match rule.action {
+                Action::Deny => decision == "deny" && out["hookSpecificOutput"]["permissionDecisionReason"].is_string(),
+                Action::Warn => {
+                    decision == "deny" || out["systemMessage"].as_str().is_some_and(|m| m.contains(&rule.id))
+                }
+            };
+            if !ok {
+                wrong.push(format!("{}: {sample:?} -> {out}", rule.id));
+            }
+        }
+        if let Some(sample) = rule.samples_allow.first() {
+            tried += 1;
+            let out = hook(exe, home, "PreToolUse", &bash(sample), &[], Some(&rules_path))?;
+            if out["hookSpecificOutput"]["permissionDecision"] == "deny" {
+                wrong.push(format!("{}: allowed {sample:?} -> {out}", rule.id));
+            }
+        }
+    }
+    c.check(
+        &format!("through the hook, the first deny and allow sample of every rule decide as listed ({tried} commands)"),
+        wrong.is_empty() && tried >= 2,
+        &wrong.join("; "),
+    );
+    let out = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &bash("git push origin main"),
+        &[("GROUNDWORKS_ENFORCE", "warn")],
+        Some(&rules_path),
+    )?;
+    c.check(
+        "GROUNDWORKS_ENFORCE=warn turns a deny into a system message",
+        out.get("hookSpecificOutput").is_none()
+            && out["systemMessage"].as_str().is_some_and(|m| m.contains("git-push")),
+        &out.to_string(),
+    );
+    let out = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &bash("bw get password rise3"),
+        &[("GROUNDWORKS_ENFORCE", "warn")],
+        Some(&rules_path),
+    )?;
+    c.check(
+        "a hard rule stays a deny in warn mode",
+        out["hookSpecificOutput"]["permissionDecision"] == "deny",
+        &out.to_string(),
+    );
+    let broken = base.join("broken-deny.toml");
+    std::fs::write(
+        &broken,
+        "[[rule]]\nid = 'x'\naction = 'deny'\nregex = '('\nreason = 'r'\n",
+    )?;
+    let out = hook(exe, home, "PreToolUse", &bash("ls"), &[], Some(&broken))?;
+    c.check(
+        "a rule file that does not compile denies every Bash call with a notice (fails closed)",
+        out["hookSpecificOutput"]["permissionDecision"] == "deny"
+            && out["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .is_some_and(|r| r.contains("could not be loaded")),
+        &out.to_string(),
+    );
+    let out = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &json!({"session_id": "s", "tool_name": "Read", "tool_input": {"file_path": "x"}}),
+        &[],
+        Some(&rules_path),
+    )?;
+    c.check(
+        "PreToolUse on a tool other than Bash answers nothing",
+        out == json!({}),
+        &out.to_string(),
+    );
+
+    // Stop: three edits and nothing recorded since the start blocks once; a journal write approves.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let since = gw_ops::pulse::now_iso();
+    let transcript_path = base.join("transcript.jsonl");
+    transcript(&transcript_path, &since, 3)?;
+    let stop_in = json!({"session_id": "selftest-session-1", "cwd": demo_s, "transcript_path": transcript_path.display().to_string(), "stop_hook_active": false});
+    let session_env = [
+        ("GROUNDWORKS_PROJECT", "demo"),
+        ("GROUNDWORKS_SESSION_START", since.as_str()),
+    ];
+    let out = hook(exe, home, "Stop", &stop_in, &session_env, None)?;
+    c.check(
+        "Stop blocks when the session edited three files and recorded nothing",
+        out["decision"] == "block"
+            && out["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("Record what you learned")),
+        &out.to_string(),
+    );
+    let mut active = stop_in.clone();
+    active["stop_hook_active"] = json!(true);
+    let out = hook(exe, home, "Stop", &active, &session_env, None)?;
+    c.check(
+        "Stop blocks only once: with stop_hook_active it approves",
+        out["decision"] == "approve",
+        &out.to_string(),
+    );
+    let out = hook(
+        exe,
+        home,
+        "Stop",
+        &stop_in,
+        &[session_env[0], session_env[1], ("GROUNDWORKS_ENFORCE", "warn")],
+        None,
+    )?;
+    c.check(
+        "in warn mode the Stop block becomes a system message",
+        out["decision"] == "approve" && out["systemMessage"].as_str().is_some_and(|m| m.contains("no-writes")),
+        &out.to_string(),
+    );
+    let out = hook(
+        exe,
+        home,
+        "Stop",
+        &stop_in,
+        &[session_env[0], session_env[1], ("GROUNDWORKS_DOWN", "1")],
+        None,
+    )?;
+    c.check(
+        "Stop with GROUNDWORKS_DOWN blocks with the store-down reason",
+        out["decision"] == "block" && out["reason"].as_str().is_some_and(|r| r.contains("store down")),
+        &out.to_string(),
+    );
+    let out = hook(exe, &down_home, "Stop", &stop_in, &session_env, None)?;
+    c.check(
+        "Stop against a store that is down blocks with the store-down reason",
+        out["decision"] == "block" && out["reason"].as_str().is_some_and(|r| r.contains("store down")),
+        &out.to_string(),
+    );
+    let empty = base.join("transcript-empty.jsonl");
+    transcript(&empty, &since, 0)?;
+    let mut read_only = stop_in.clone();
+    read_only["transcript_path"] = json!(empty.display().to_string());
+    let out = hook(exe, home, "Stop", &read_only, &session_env, None)?;
+    c.check(
+        "a session that changed nothing is not asked to write",
+        out["decision"] == "approve",
+        &out.to_string(),
+    );
+    owner.add_fact(
+        &demo,
+        "demo",
+        &gw_ops::store::FactIn {
+            kind: gw_ops::journal::Kind::Status,
+            text: "selftest: the edits were recorded".to_owned(),
+            confidence: gw_ops::journal::Confidence::Inferred,
+            source: "selftest".to_owned(),
+            by: "selftest".to_owned(),
+            receipt: None,
+            owner_statement: None,
+            quote: None,
+            lens: None,
+            attacks: None,
+            stance: None,
+        },
+    )?;
+    let out = hook(exe, home, "Stop", &stop_in, &session_env, None)?;
+    c.check(
+        "after a journal entry since the start, Stop approves (that row is the session's end)",
+        out["decision"] == "approve"
+            && owner
+                .hook_events_since(None)?
+                .iter()
+                .any(|e| e["hook"] == "Stop" && e["decision"] == "approve" && e["session"] == "selftest-session-1"),
+        &out.to_string(),
+    );
+    let mut sub = stop_in.clone();
+    sub["agent_type"] = json!("gw-engineer");
+    let out = hook(exe, home, "SubagentStop", &sub, &session_env, None)?;
+    let events = owner.hook_events_since(None)?;
+    c.check(
+        "SubagentStop decides the same way and names the agent on its row",
+        out["decision"] == "approve"
+            && events
+                .iter()
+                .any(|e| e["hook"] == "SubagentStop" && e["agent"] == "gw-engineer" && e["decision"] == "approve"),
+        &out.to_string(),
+    );
+
+    // The telemetry: counts, ids, hashes and timings; never the command or transcript text.
+    let blocked = events
+        .iter()
+        .find(|e| e["hook"] == "Stop" && e["decision"] == "block" && e["rule"] == "no-writes");
+    c.check(
+        "the blocked Stop is a hook_event row with the edit count, zero writes and a latency",
+        blocked.is_some_and(|e| {
+            e["tool_uses"]["edit"] == 3
+                && e["journal_writes_since_start"] == 0
+                && e["latency_ms"].as_i64().is_some_and(|ms| ms >= 0)
+                && e["project"] == "demo"
+        }),
+        &format!("{blocked:?}"),
+    );
+    let denies: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["hook"] == "PreToolUse" && e["decision"] == "deny")
+        .collect();
+    let all_text = serde_json::to_string(&events)?;
+    c.check(
+        "PreToolUse rows carry the rule id and a 64-hex HMAC, and no row holds a command",
+        !denies.is_empty()
+            && denies.iter().all(|e| {
+                e["rule"].is_string()
+                    && e["command_hmac"]
+                        .as_str()
+                        .is_some_and(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
+            })
+            && !all_text.contains("git push")
+            && !all_text.contains("regcred"),
+        &format!(
+            "{} deny rows; {}",
+            denies.len(),
+            denies.first().map(|e| e.to_string()).unwrap_or_default()
+        ),
+    );
+    let rejections = owner.rejections_since(None)?;
+    c.check(
+        "the CONFIRMED-without-evidence refusal is a rejection row naming the rule, not the text",
+        rejections.iter().any(|r| {
+            r["surface"] == "journal_add" && r["reason"] == "CONFIRMED needs evidence" && r["project"] == "demo"
+        }) && !serde_json::to_string(&rejections)?.contains("unbacked"),
+        &format!("{rejections:?}"),
+    );
+    Ok(())
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 /// The supervisor, on a second throwaway home with no server: it starts one, and when that one is

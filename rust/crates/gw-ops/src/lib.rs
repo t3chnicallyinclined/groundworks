@@ -8,6 +8,7 @@ pub mod eval_router;
 pub mod eval_run;
 pub mod exec;
 pub mod home;
+pub mod hook;
 pub mod intake;
 pub mod journal;
 pub mod knowledge;

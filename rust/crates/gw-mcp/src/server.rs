@@ -330,6 +330,7 @@ impl Groundworks {
                 &home,
                 &store,
                 ops::Note {
+                    surface: "journal_add",
                     project: &a.project,
                     kind: a.kind,
                     text: &a.text,

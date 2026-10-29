@@ -254,6 +254,18 @@ enum Command {
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
+    /// A Claude Code plugin hook: reads the hook's JSON on stdin, prints the hook's JSON on stdout.
+    /// SessionStart injects the project's journal (gotchas first) and opens a session row; PreToolUse
+    /// (Bash) applies deny.toml, failing closed; Stop and SubagentStop ask once for a journal entry when
+    /// tools changed something and nothing was recorded. Always exits 0; a session is never blocked
+    /// from starting.
+    Hook {
+        /// SessionStart, PreToolUse, Stop or SubagentStop.
+        event: String,
+        /// The rule file for PreToolUse (default: GROUNDWORKS_DENY_RULES, else the compiled-in deny.toml).
+        #[arg(long)]
+        rules: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -484,6 +496,15 @@ async fn dispatch(command: Command) -> Result<bool> {
         println!("{report}");
         return Ok(failed == 0);
     }
+    if let Command::Hook { event, rules } = &command {
+        let event: gw_ops::hook::Event = event.parse()?;
+        let mut input = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+        let rules = rules.clone();
+        let out = store::blocking(move || Ok(gw_ops::hook::run(event, &input, rules.as_deref()))).await?;
+        println!("{out}");
+        return Ok(true);
+    }
     if matches!(command, Command::Serve) {
         // The plugin starts this in every session; outside any home it must still start.
         match Home::discover() {
@@ -514,7 +535,7 @@ async fn dispatch(command: Command) -> Result<bool> {
     }
     let home = Arc::new(Home::discover()?);
     let (text, ok) = match command {
-        Command::Serve | Command::Selftest => unreachable!("handled above"),
+        Command::Serve | Command::Selftest | Command::Hook { .. } => unreachable!("handled above"),
         Command::Projects => (ops::projects(&home)?, true),
         Command::Show { project, limit, since } => {
             let store = open_store(&home).await.ok();
@@ -595,6 +616,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                     &home,
                     &store,
                     ops::Note {
+                        surface: "note",
                         project: &project,
                         kind,
                         text: &text,

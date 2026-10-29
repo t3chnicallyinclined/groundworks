@@ -1,0 +1,818 @@
+# deny.toml -- PreToolUse rule list for the Bash tool (Groundworks enforcement, Layer 2)
+# Owner of this file: gw-security. Drafted 2026-10-29 for decision 1itizcerhaj5x1mjfyj2 (owner go cgilrpv6ynkwmvu3u929).
+# Engineer: copy into the plugin as-is; the selftest must run every samples_deny through its rule
+# (expect a match) and every samples_allow (expect no match), and must be able to go red (principle 6).
+#
+# HOW TO EVALUATE (engineer's hook)
+#   1. Take the Bash tool's `command` string verbatim (no shell expansion, no alias resolution).
+#   2. Test every rule with action = "deny". First match -> permissionDecision = "deny", reason = rule.reason, log rule.id.
+#   3. Otherwise test every rule with action = "warn". First match -> allow, systemMessage = rule.reason, log rule.id.
+#   4. Otherwise allow silently.
+#   5. If the rule file fails to parse or a regex fails to compile: DENY every Bash call with a visible notice
+#      (principle 8: guards fail closed). Do not fall through to allow.
+#   6. Mode GROUNDWORKS_ENFORCE=warn downgrades "deny" to "warn" for everything EXCEPT rules with
+#      hard = true (the secret-exfiltration rules). Those stay deny in every mode.
+#
+# REGEX DIALECT
+#   Rust `regex` crate. No lookahead, no lookbehind, no backreferences are used anywhere below, so the
+#   same patterns run identically under Python `re` (which is what tests/test_deny.py uses).
+#   Known divergences, all avoided here: Python `$` also matches before a trailing "\n" (Rust needs (?m));
+#   Python supports (?<=...) / (?!...) / \1 (Rust does not); Rust `\b` is Unicode by default (Python 3 str
+#   patterns too, so no difference on these inputs). Patterns use \x22 (") and \x27 (') instead of quote
+#   characters so they fit in TOML literal strings.
+#   Every regex is matched with "search" semantics (match anywhere in the command string).
+#
+# WHAT THIS IS AND IS NOT
+#   This list is a GUARD RAIL, not a security boundary. A regex over a command string is evaded by:
+#   quoting and escapes (kube""ctl, k\ubectl), $VAR expansion (CMD=apply; kubectl $CMD), aliases and
+#   functions, scripts (bash deploy.sh), heredocs, base64 | sh, python -c, xargs, env -S, a second hop
+#   (ssh rise3 then an interactive command), and a different tool (Write a file then ssh ... < file).
+#   It stops the honest, hurried path: an agent that types the obvious command. It also makes every stop
+#   point at the sanctioned path (`groundworks run <project> <env> ...`, which gives a receipt and, on a
+#   protected env, repeats the owner's go with --confirm; principle 14).
+#   The ACTUAL boundary is: who holds the ssh key for rise3 (the owner's agent / key file), who holds a
+#   kubeconfig that reaches the prod cluster, the Bitwarden session (BW_SESSION is never in the agent's
+#   environment), Cloudflare/npm/crates/Expo tokens living only in the registry as references resolved by
+#   `groundworks run`, and `confirm` on protected envs. If those are in the agent's reach, this file is
+#   advisory. If they are not, this file is mostly a UX layer that names the right path.
+#
+# KNOWN OVER-REACH (accepted): `git push --help` is denied (use `man git-push`); `kubectl create` and
+#   `kubectl exec` warn even when read-only; `helm upgrade --dry-run` and `cargo publish --dry-run` are
+#   denied (use helm template / cargo package --list). Each is cheaper than the regex that would exempt it.
+#
+# HOST NAMES
+#   The prod host is matched as the ssh alias `rise3` (knowledge/estate.md). UNKNOWN: whether rise3 is ever
+#   addressed by FQDN or IP in agent commands. If it is, add those spellings to the `rise3` alternations
+#   (grep this file for \brise3\b). dev0ps is DECOMMISSIONED (estate.md): any ssh to it is denied.
+#
+# FIELDS
+#   id            stable identifier logged in hook_event.rule_id (never the command text)
+#   regex         Rust regex, search semantics
+#   action        "deny" | "warn"
+#   hard          true = stays deny even in GROUNDWORKS_ENFORCE=warn mode (secret exfiltration only)
+#   reason        one sentence shown to the agent; names the groundworks run alternative where one exists
+#   samples_deny  >= 2 strings that must match
+#   samples_allow >= 2 strings that must not match (realistic reads or near-misses)
+
+version = 1
+owner = "gw-security"
+drafted = "2026-10-29"
+
+# READER EXEMPTION (evaluated before any rule)
+#   A command whose FIRST word is one of `reader_exempt.commands` and which contains none of
+#   `reader_exempt.forbidden_chars` is allowed without consulting the rules. This is what lets
+#   `grep -rn "kubectl apply" docs/` through while `echo "kubectl apply" | ssh rise3` (has a pipe) and
+#   `ssh rise3 "grep x" ; kubectl apply` (has a semicolon) still reach the rules. The first word is the
+#   command after stripping leading whitespace and any `VAR=value` assignments; a leading `cd X &&` is
+#   NOT stripped (it contains &&, so the command goes to the rules, which is the intended behaviour).
+[reader_exempt]
+commands = ["grep", "rg", "cat", "head", "tail", "less", "wc", "stat", "file", "echo", "printf", "man", "type", "which", "ls", "tree", "find", "fd", "diff", "jq", "yq", "awk", "cut", "sort", "uniq", "tr"]
+forbidden_chars = ["|", ";", "&", "`", "$(", ">", "<", "\u000A", "\u000D"]
+samples_allow = [
+  'grep -rn "kubectl apply" docs/',
+  'grep -rn "docker push" .github/',
+  'rg "git push" plugin/',
+  'cat scripts/deploy.sh',
+  'echo kubectl apply -f x.yaml',
+]
+samples_not_exempt = [
+  'echo "kubectl apply -f x" | ssh rise3',
+  'grep x file; kubectl apply -f x.yaml',
+  'cat deploy.sh | ssh rise3 bash',
+  'cd rust && git push',
+  'echo ssh-ed25519 AAAA agent >> ~/.ssh/authorized_keys',
+  'FOO=1 kubectl apply -f x',
+]
+
+# ---------------------------------------------------------------------------------------------------
+# A. Secret exfiltration (hard = true; these are the ones that cost a key rotation, 2026-09-19)
+# ---------------------------------------------------------------------------------------------------
+
+[[rule]]
+id = "kubectl-secret-read"
+action = "deny"
+hard = true
+regex = '(?i)(?:\bkubectl\b|\bmicrok8s(?:\.kubectl|\s+kubectl)\b)[^|;&\n]*\bget\b(?:[^|;&\n]*\bsecrets?\b[^|;&\n]*(?:-o\s*=?\s*|--output\s*[= ]\s*|--template\s*[= ])(?:yaml|json|jsonpath|go-template|custom-columns|template|\x22|\x27|\{)|[^|;&\n]*(?:-o\s*=?\s*|--output\s*[= ]\s*)(?:yaml|json|jsonpath|go-template|custom-columns|template)\S*[^|;&\n]*\bsecrets?\b)|\bkubectl\s+view-secret\b'
+reason = "Never read Secret values (estate.md; principle 13): kubectl get secret -o yaml|json|jsonpath prints them into the transcript; inspect metadata with `kubectl get secret X` / `kubectl describe secret X`, and consume the value only through `groundworks run <project> <env> ...`."
+samples_deny = [
+  'kubectl get secret regcred -n default -o yaml',
+  'kubectl get secrets -A -o json',
+  "kubectl get secret db-creds -o jsonpath='{.data.password}' | base64 -d",
+  'microk8s kubectl get secret cf-token -ojson',
+  'kubectl -n mail get -o yaml secret stalwart-admin',
+  'ssh rise3 "microk8s kubectl get secret tls-cert -n ingress -o yaml"',
+  'kubectl get secret x --output=json',
+  'kubectl get secret x --template={{.data.pw}}',
+  'kubectl view-secret db-creds password',
+]
+samples_allow = [
+  'kubectl get secrets -n default',
+  'kubectl get secret regcred -o wide',
+  'kubectl describe secret regcred -n default',
+  'kubectl get configmap app-config -o yaml',
+  'kubectl get pods -A -o json',
+  'ssh rise3 "microk8s kubectl get secret -A"',
+  'kubectl get secret x -o name',
+  'kubectl get deploy stalwart -o yaml',
+]
+
+[[rule]]
+id = "kubectl-secret-literal"
+action = "deny"
+hard = true
+regex = '(?i)--from-literal\s*=\s*[\w.\-]+\s*=\s*[^$\s\x22\x27]|--from-literal\s*=\s*[\w.\-]+\s*=\s*[\x22\x27][^$\x22\x27]'
+reason = "A secret value on the command line lands in the transcript (principle 13, the 2026-09-19 rotation): write it to a file the agent cannot read back, or use --from-env-file / --from-file under `groundworks run <project> <env> ...` where the registry resolves the bw: reference."
+samples_deny = [
+  'kubectl create secret generic db --from-literal=password=hunter2 --dry-run=client -o yaml',
+  "kubectl create secret generic api --from-literal=token='sk\u005Flive_abc123def456' -n app",
+  "kubectl create secret generic x --from-literal=KEY=\"\u0041KIAIOSFODNN7EXAMPLE\"",
+]
+samples_allow = [
+  'kubectl create secret generic db --from-literal=password="$DB_PASS" --dry-run=client -o yaml',
+  "kubectl create secret generic db --from-literal=password=$DB_PASS",
+  'kubectl create secret generic db --from-env-file=/run/secrets/db.env --dry-run=client -o yaml',
+  'kubectl create secret generic db --from-file=password=/run/secrets/db.pw',
+]
+
+[[rule]]
+id = "bw-read"
+action = "deny"
+hard = true
+regex = '(?i)\bbw\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:get\s+(?:item|password|username|totp|notes|uri|attachment|exposed)\b|list\s+items\b|export\b|unlock\b|login\b|serve\b|share\b|generate\b)|\brbw\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:get|code|edit|add|generate|unlock|login)\b'
+reason = "Bitwarden values never pass through the agent (principle 13): reference them as bw:ITEM#FIELD in the registry and use them through `groundworks run <project> <env> ...`; look item names up in the vault UI, not with bw list items (its JSON carries every password)."
+samples_deny = [
+  'bw get password "rise3 root"',
+  'bw get item 3f2c1a-rise3 --raw',
+  'bw list items --search cloudflare | jq -r ".[].login.password"',
+  'bw export --format json --output vault.json',
+  'bw --session "$BW_SESSION" get totp github',
+  'bw unlock --raw',
+  'rbw get rise3',
+  'bw list items | jq -r ".[].name"',
+]
+samples_allow = [
+  'bw status',
+  'bw sync',
+  'bw list folders',
+  'bw list collections --pretty',
+  'bw get fingerprint',
+  'bw lock',
+  'bw --version',
+  'cat README.md | grep -i "bw:"',
+  'echo "see bw:rise3 server#root password"',
+]
+
+[[rule]]
+id = "literal-token-on-cmdline"
+action = "deny"
+hard = true
+regex = '(?i)(?:\b(?:BW_SESSION|CLOUDFLARE_API_TOKEN|CF_API_TOKEN|CF_API_KEY|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|CARGO_REGISTRY_TOKEN|AWS_SECRET_ACCESS_KEY|EXPO_TOKEN|EAS_TOKEN|GROUNDWORKS_OWNER_PASS|GROUNDWORKS_DB_PASS|KUBE_TOKEN|DOCKER_PASSWORD)\s*=\s*[\x22\x27]?[A-Za-z0-9_\-./+=]{16,}|Authorization:\s*(?:Bearer|Basic|token)\s+[A-Za-z0-9_\-./+=]{20,}|\b(?:sk_live|sk_test|ghp|github_pat|glpat|xox[abpr])_[A-Za-z0-9_\-]{10,}|\b\x41KIA[0-9A-Z]{16}\b|\bey\x4A[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|--password\s*(?:=|\s)\s*[^$\s\x22\x27-][^\s]*|-p\s*[^$\s\x22\x27-][^\s]{6,}\s+(?:-h|--host|-u|--user))'
+reason = "A literal token or password in a command line is a secret in the transcript (principle 13, the 2026-09-19 rotation): pass it as $VAR from the registry via `groundworks run <project> <env> ...`, never as a value."
+samples_deny = [
+  'export CLOUDFLARE_API_TOKEN=aB3dEfGhIjKlMnOpQrStUvWxYz012345',
+  'curl -H "Authorization: Bearer v1.0abcdefghijklmnopqrstuvwxyz0123456789" https://api.cloudflare.com/client/v4/zones',
+  "echo gh\u0070_abcdefghijklmnopqrstuvwxyz0123456789 | gh auth login --with-token",
+  'docker login -u deploy --password hunter2hunter2 ghcr.io',
+  'BW_SESSION="aGVsbG8gd29ybGQgdGhpcyBpcyBhIHNlc3Npb24=" bw sync',
+  "aws configure set aws_access_key_id \u0041KIAIOSFODNN7EXAMPLE",
+  "curl -H \"Authorization: Bearer ey\u004AhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey\u004AzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\" https://x.test",
+]
+samples_allow = [
+  'curl -H "Authorization: Bearer $CF_API_TOKEN" https://api.cloudflare.com/client/v4/zones',
+  'export CLOUDFLARE_API_TOKEN="$(cat /run/secrets/cf)"',
+  'BW_SESSION="$BW_SESSION" bw sync',
+  'docker login -u deploy --password-stdin ghcr.io < /run/secrets/ghcr',
+  'grep -rn "GITHUB_TOKEN" .github/workflows/',
+  'echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}"',
+  'mysql -h localhost -u root -p',
+  'git log --oneline -p',
+]
+
+# ---------------------------------------------------------------------------------------------------
+# B. Production host (ssh rise3): mutations denied, reads pass with a notice
+# ---------------------------------------------------------------------------------------------------
+
+[[rule]]
+id = "ssh-dev0ps"
+action = "deny"
+regex = '(?i)\b(?:ssh|scp|rsync|sftp)\b[^|;&\n]*\bdev0ps\b'
+reason = "dev0ps (Hetzner) is DECOMMISSIONED (knowledge/estate.md): never ssh to it; prod is rise3 and its commands go through `groundworks run <project> prod ...`."
+samples_deny = [
+  'ssh dev0ps uptime',
+  'ssh root@dev0ps "df -h"',
+  'scp backup.tgz dev0ps:/root/',
+]
+samples_allow = [
+  'ssh rise3 uptime',
+  'grep -rn dev0ps knowledge/estate.md',
+  'echo "dev0ps is decommissioned"',
+]
+
+[[rule]]
+id = "ssh-rise3-any"
+action = "warn"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b'
+reason = "rise3 is PROD (estate.md): read-only commands are fine; anything that changes state goes through `groundworks run <project> prod ...` after the owner's go (principle 14)."
+samples_deny = [
+  'ssh rise3 df -h',
+  'ssh -t rise3 "microk8s kubectl get pods -A"',
+  'ssh root@rise3 journalctl -u snap.microk8s.daemon-kubelite --since "1 hour ago"',
+]
+samples_allow = [
+  'ssh-keygen -l -f ~/.ssh/id_ed25519.pub',
+  'grep -rn rise3 knowledge/estate.md',
+  'ssh localhost uptime',
+]
+
+[[rule]]
+id = "ssh-rise3-stdin-script"
+action = "deny"
+regex = '(?i)(?:\|\s*ssh\b[^|;&\n]*\brise3\b|\bssh\b[^|;&\n]*\brise3\b[^|;&\n]*(?:<<|<\s*(?:[^/\s<&]|/(?:[^d\s]|d[^e\s]|de[^v\s]|dev[^/\s]|dev/[^n\s])))|\bssh\b[^|;&\n]*\brise3\b[^|;&\n]*\b(?:bash|sh|zsh)\s+-s\b)'
+reason = "Piping or redirecting a script into ssh rise3 runs unreviewed commands on PROD: put the script in the repo and run it with `groundworks run <project> prod -- bash <script>` after the owner's go."
+samples_deny = [
+  'cat deploy.sh | ssh rise3 bash',
+  'ssh rise3 bash -s < scripts/rotate.sh',
+  "ssh rise3 'sudo tee /etc/x' < local.conf",
+  'ssh rise3 bash <<EOF',
+  "ssh rise3 bash <<'EOF'",
+  'echo "kubectl apply -f x" | ssh rise3',
+  'ssh rise3 "bash -s" -- arg',
+]
+samples_allow = [
+  'ssh rise3 "cat /etc/hosts" < /dev/null',
+  'ssh -n rise3 uptime',
+  'ssh rise3 "df -h" | tee df.txt',
+  'ssh rise3 "journalctl -u sshd -n 50" | grep -i failed',
+  'ssh rise3 "ls -la /var/log"',
+]
+
+[[rule]]
+id = "ssh-rise3-rm"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*\b(?:rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive|--force)\b|rmdir\s|find\b[^|;&\n]*\s-delete\b|find\b[^|;&\n]*-exec\s+rm\b|shred\b|truncate\s+-s\s*0|:\s*>\s*/|unlink\s)'
+reason = "Deleting on PROD is the owner's call (principles 14 and 15): show what and how big first, then `groundworks run <project> prod -- rm ...` after the owner's go."
+samples_deny = [
+  "ssh rise3 'rm -rf /tmp/build'",
+  'ssh rise3 "sudo rm -r /var/lib/docker/tmp"',
+  'ssh rise3 rm -f /etc/nginx/conf.d/old.conf',
+  'ssh rise3 "find /var/log -name *.gz -delete"',
+  "ssh rise3 'find /tmp -mtime +7 -exec rm {} \\;'",
+  'ssh rise3 "truncate -s 0 /var/log/syslog"',
+]
+samples_allow = [
+  'ssh rise3 "du -sh /var/lib/docker"',
+  'ssh rise3 "find /var/log -name *.gz -mtime +7 | head"',
+  'ssh rise3 "ls -la /tmp/build"',
+  'rm -rf target/debug',
+  'ssh rise3 "docker image ls --format {{.Repository}}"',
+]
+
+[[rule]]
+id = "ssh-rise3-systemctl"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*(?:\bsystemctl\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:restart|stop|start|reload|reload-or-restart|try-restart|disable|enable|mask|unmask|kill|daemon-reload|daemon-reexec|isolate|edit|set-property|revert|reset-failed|poweroff|reboot|halt)\b|\bservice\s+[\w.@-]+\s+(?:restart|stop|start|reload|force-reload)\b)'
+reason = "Service lifecycle on PROD is the owner's call (principle 14): check with systemctl status / is-active / journalctl, and restart only via `groundworks run <project> prod -- systemctl restart <unit>` after the owner's go."
+samples_deny = [
+  'ssh rise3 "sudo systemctl restart snap.microk8s.daemon-kubelite"',
+  "ssh rise3 'systemctl stop docker'",
+  'ssh rise3 sudo systemctl --no-block restart sshd',
+  'ssh rise3 "sudo service ssh restart"',
+  'ssh rise3 "sudo systemctl daemon-reload"',
+]
+samples_allow = [
+  'ssh rise3 systemctl is-active snap.microk8s.daemon-kubelite',
+  'ssh rise3 "systemctl status docker --no-pager"',
+  'ssh rise3 "systemctl list-units --failed"',
+  'ssh rise3 "systemctl is-enabled sshd"',
+  'ssh rise3 "journalctl -u sshd --since today"',
+  'systemctl --user restart gpg-agent',
+]
+
+[[rule]]
+id = "ssh-rise3-firewall"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*(?:\b(?:iptables|ip6tables|iptables-restore|ip6tables-restore)\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:(?-i:-[AIDFPXNERZ])\b|--(?:append|insert|delete|flush|policy|delete-chain|new-chain|rename-chain|replace|zero)\b)|\biptables-restore\b|\bufw\b(?:\s+-{1,2}[\w-]+)*\s+(?:allow|deny|reject|delete|enable|disable|reset|default|limit|insert|prepend|route)\b|\bnft\b(?:\s+-{1,2}[\w-]+)*\s+(?:add|delete|flush|insert|replace|destroy|create|rename|-f\b|--file\b)|\bfirewall-cmd\b[^|;&\n]*--(?:add|remove|set|reload|permanent|new|delete)|\bfail2ban-client\s+(?:stop|unban|set|reload|restart|start)\b)'
+reason = "Firewall changes on PROD can lock everyone out and are the owner's call (principle 14): read with iptables -S / ufw status / nft list ruleset, change only via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  'ssh rise3 "sudo iptables -A INPUT -p tcp --dport 25 -j ACCEPT"',
+  "ssh rise3 'sudo ufw allow 2222/tcp'",
+  'ssh rise3 "sudo nft add rule inet filter input tcp dport 8080 accept"',
+  'ssh rise3 "sudo ufw disable"',
+  'ssh rise3 "sudo iptables -F"',
+  'ssh rise3 "sudo iptables-restore < /etc/iptables/rules.v4"',
+]
+samples_allow = [
+  'ssh rise3 "sudo iptables -S"',
+  'ssh rise3 "sudo iptables -L -n -v"',
+  'ssh rise3 "sudo ufw status verbose"',
+  'ssh rise3 "sudo nft list ruleset"',
+  'ssh rise3 "sudo fail2ban-client status sshd"',
+  'ssh rise3 "sudo iptables -t nat -L -n"',
+]
+
+[[rule]]
+id = "ssh-rise3-sshd-and-keys"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*(?:(?:\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)\b[^|;&\n]*|>>?\s*|\btee\s+(?:-a\s+)?|\b(?:vi|vim|nvim|nano|ed|ex)\s+|\b(?:cp|mv|install|ln)\s+(?:-\S+\s+)*\S+\s+|\bch(?:mod|own|attr)\s+(?:-\S+\s+)*\S+\s+|\btruncate\b[^|;&\n]*\s)(?:/etc/ssh/sshd_config|/etc/ssh/ssh_config|/etc/ssh/\S*|\S*/\.ssh/authorized_keys\S*|\S*\.ssh/authorized_keys\S*|\S*/\.ssh/\S*|/etc/sudoers\S*|/etc/pam\.d/\S*)|\becho\b[^|;&\n]*\bssh-(?:ed25519|rsa|ecdsa)\b)|\bssh-copy-id\b[^|;&\n]*\brise3\b'
+reason = "sshd config, authorized_keys and sudoers ARE the access boundary on PROD; edits lock people out or let them in, and are the owner's call (principle 14): read them with cat / sshd -T, change only via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  "ssh rise3 'sudo sed -i \"s/^#PermitRootLogin.*/PermitRootLogin no/\" /etc/ssh/sshd_config'",
+  'ssh rise3 "echo ssh-ed25519 AAAAC3Nz... agent@box >> ~/.ssh/authorized_keys"',
+  'ssh rise3 "sudo tee /etc/ssh/sshd_config.d/99-hardening.conf"',
+  'ssh rise3 "sudo nano /etc/ssh/sshd_config"',
+  'ssh rise3 "sudo cp sshd_config.new /etc/ssh/sshd_config"',
+  'ssh-copy-id -i ~/.ssh/id_ed25519.pub rise3',
+  'ssh rise3 "sudo chmod 600 /root/.ssh/authorized_keys"',
+  'ssh rise3 "echo \"deploy ALL=(ALL) NOPASSWD:ALL\" | sudo tee /etc/sudoers.d/deploy"',
+]
+samples_allow = [
+  'ssh rise3 "cat /etc/ssh/sshd_config"',
+  'ssh rise3 "sudo sshd -T | grep -i permitrootlogin"',
+  'ssh rise3 "grep -n PasswordAuthentication /etc/ssh/sshd_config"',
+  'ssh rise3 "cat ~/.ssh/authorized_keys | wc -l"',
+  'ssh rise3 "ls -la /etc/ssh/"',
+  'ssh rise3 "sudo cat /etc/sudoers.d/deploy"',
+  'sed -i "s/foo/bar/" README.md',
+]
+
+[[rule]]
+id = "ssh-rise3-write-system-path"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*(?:>>?\s*|\btee\s+(?:-a\s+)?|\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)\b[^|;&\n]*\s|\b(?:cp|mv|install|ln)\s+(?:-\S+\s+)*\S+\s+|\b(?:vi|vim|nvim|nano)\s+(?:-\S+\s+)*)/(?:etc|usr|var/lib|var/snap|root|home|opt|srv|boot|snap|bin|sbin|lib|lib64)/'
+reason = "Writing under /etc, /usr, /var/lib, /root, /home, /opt, /srv or /boot on PROD is a change, not a check (principle 14): write to /tmp to stage, and land it via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  'ssh rise3 "echo nameserver 1.1.1.1 | sudo tee /etc/resolv.conf"',
+  "ssh rise3 'sudo cp app.service /etc/systemd/system/'",
+  'ssh rise3 "sudo sed -i s/x/y/ /etc/hosts"',
+  'ssh rise3 "cat cfg > /opt/app/config.toml"',
+  'ssh rise3 "sudo mv /tmp/new.conf /etc/nginx/nginx.conf"',
+]
+samples_allow = [
+  'ssh rise3 "cat /etc/hosts"',
+  'ssh rise3 "df -h > /tmp/df.txt"',
+  'ssh rise3 "ls /etc/systemd/system | grep app"',
+  'ssh rise3 "sudo cat /var/lib/snapd/state.json | head"',
+  'ssh rise3 "cp /etc/hosts /tmp/hosts.bak"',
+  'ssh rise3 "tar czf /tmp/etc.tgz /etc/nginx"',
+]
+
+[[rule]]
+id = "ssh-rise3-power"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*(?:(?:\bsudo\s+|[\x22\x27;&|(]\s*|\brise3\s+|\s-c\s+)(?:reboot|shutdown|poweroff|halt|init\s+[06]|telinit\s+[06])\b|\bsystemctl\s+(?:reboot|poweroff|halt|kexec|suspend|hibernate)\b|\becho\s+[bcos]\s*>\s*/proc/sysrq-trigger)'
+reason = "Rebooting or powering off PROD is the owner's call every time (principle 14): never from an agent; if it must happen, the owner runs it or `groundworks run <project> prod -- sudo reboot` after his explicit go."
+samples_deny = [
+  'ssh rise3 "sudo reboot"',
+  "ssh rise3 'sudo shutdown -r now'",
+  'ssh rise3 sudo systemctl poweroff',
+  'ssh rise3 "sudo init 6"',
+]
+samples_allow = [
+  'ssh rise3 uptime',
+  'ssh rise3 "last reboot | head -3"',
+  'ssh rise3 "journalctl --list-boots"',
+  'ssh rise3 "who -b"',
+]
+
+[[rule]]
+id = "ssh-rise3-packages-and-microk8s"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*\b(?:(?:apt|apt-get|aptitude|dpkg|yum|dnf)\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:install|remove|purge|upgrade|dist-upgrade|full-upgrade|autoremove|reinstall|-i\b|--install|-r\b|--remove|-P\b|--purge)|\bsnap\b(?:\s+-{1,2}[\w-]+)*\s+(?:install|remove|refresh|revert|disable|enable|set|unset|connect|disconnect|start|stop|restart)\b|\bmicrok8s\b(?:\s+-{1,2}[\w-]+)*\s+(?:stop|start|reset|disable|enable|refresh-certs|remove-node|join|leave|add-node|addons\s+(?:enable|disable))\b|\bpip3?\s+(?:install|uninstall)\b|\bnpm\s+(?:i|install|uninstall)\s+-g\b|\bcargo\s+install\b)'
+reason = "Package and MicroK8s lifecycle changes on PROD can take the cluster down and are the owner's call (principle 14): read with microk8s status / snap list / apt list --installed, change only via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  'ssh rise3 "sudo apt-get install -y jq"',
+  "ssh rise3 'sudo snap refresh microk8s'",
+  'ssh rise3 "sudo microk8s stop"',
+  'ssh rise3 "microk8s enable ingress"',
+  'ssh rise3 "sudo apt upgrade -y"',
+  'ssh rise3 "sudo dpkg -i package.deb"',
+  'ssh rise3 "sudo snap remove docker"',
+]
+samples_allow = [
+  'ssh rise3 "microk8s status --wait-ready"',
+  'ssh rise3 "snap list"',
+  'ssh rise3 "apt list --installed 2>/dev/null | grep -i docker"',
+  'ssh rise3 "dpkg -l | grep nginx"',
+  'ssh rise3 "microk8s kubectl get nodes"',
+  'ssh rise3 "apt-cache policy docker-ce"',
+]
+
+[[rule]]
+id = "ssh-rise3-docker-mutate"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*\bdocker\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:(?:container\s+)?(?:rm|kill|stop|restart|pause|unpause|update|prune|rename)\b|(?:image\s+)?(?:rmi|prune)\b|(?:volume|network|system|builder|buildx)\s+(?:rm|prune|create|remove)\b|compose\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:down|up|restart|stop|rm|kill|pull|push)\b|(?:swarm|service|stack|node|secret|config)\s+(?:init|leave|join|update|rm|remove|deploy|create|scale|promote|demote)\b|login\b|logout\b)'
+reason = "Containers, images, volumes and compose stacks on PROD stay as the owner left them (estate.md: build-only docker checks are fine); stop/rm/prune/compose down only via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  'ssh rise3 "docker rm -f supergun-build"',
+  "ssh rise3 'docker system prune -af'",
+  'ssh rise3 "docker compose -f /opt/app/compose.yml down"',
+  'ssh rise3 "docker stop stalwart"',
+  'ssh rise3 "docker rmi $(docker images -q)"',
+  'ssh rise3 "docker volume rm app_data"',
+]
+samples_allow = [
+  'ssh rise3 "docker ps -a"',
+  'ssh rise3 "docker build -t test:local /tmp/ctx"',
+  'ssh rise3 "docker images --format {{.Repository}}:{{.Tag}}"',
+  'ssh rise3 "docker logs --tail 100 stalwart"',
+  'ssh rise3 "docker inspect stalwart | jq .[0].State"',
+  'ssh rise3 "docker compose -f /opt/app/compose.yml ps"',
+  'ssh rise3 "docker system df"',
+]
+
+[[rule]]
+id = "ssh-rise3-accounts-cron"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*\b(?:useradd|userdel|usermod|adduser|deluser|groupadd|groupdel|groupmod|passwd\s+(?:-\S+\s+)*\S+|chpasswd|visudo|crontab\s+(?:-[a-zA-Z]*[er][a-zA-Z]*\b|\S+\.cron|/\S+)|hostnamectl\s+set|timedatectl\s+set|sysctl\s+-w|sysctl\s+\S+=\S+|setenforce|update-alternatives\s+--(?:set|install|remove))\b'
+reason = "Accounts, sudo, cron and kernel parameters on PROD are the owner's call (principle 14): read with id / getent / crontab -l / sysctl <key>, change only via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  'ssh rise3 "sudo useradd -m deploy"',
+  "ssh rise3 'sudo crontab -e'",
+  'ssh rise3 "crontab /tmp/new.cron"',
+  'ssh rise3 "sudo sysctl -w net.ipv4.ip_forward=1"',
+  'ssh rise3 "sudo passwd root"',
+  'ssh rise3 "sudo usermod -aG docker agent"',
+]
+samples_allow = [
+  'ssh rise3 "crontab -l"',
+  'ssh rise3 "sudo crontab -l -u root"',
+  'ssh rise3 "getent passwd | cut -d: -f1"',
+  'ssh rise3 "sysctl net.ipv4.ip_forward"',
+  'ssh rise3 "id deploy"',
+  'ssh rise3 "hostnamectl status"',
+]
+
+[[rule]]
+id = "ssh-rise3-disk"
+action = "deny"
+regex = '(?i)\bssh\b[^|;&\n]*\brise3\b.*\b(?:mkfs(?:\.\w+)?|mkswap|wipefs|fdisk\s+(?:-[^l\s]\S*\s+)*/dev|sfdisk\s+(?:-[^ld\s]\S*\s+)*/dev|parted\b[^|;&\n]*\b(?:mkpart|rm|mklabel|resizepart)\b|dd\s+[^|;&\n]*\bof=/dev/|lvremove|lvreduce|vgremove|pvremove|zpool\s+(?:destroy|remove|detach)|zfs\s+destroy|umount\s+/(?:var|home|opt|srv|data|mnt/\S+)|mount\s+-o\s+remount|resize2fs|xfs_growfs|e2fsck|fsck)\b'
+reason = "Disk and filesystem operations on PROD are irreversible and the owner's call (principle 14): read with df / lsblk / fdisk -l, change only via `groundworks run <project> prod ...` after the owner's go."
+samples_deny = [
+  'ssh rise3 "sudo mkfs.ext4 /dev/sdb1"',
+  "ssh rise3 'sudo dd if=/dev/zero of=/dev/sdb bs=1M'",
+  'ssh rise3 "sudo wipefs -a /dev/sdb"',
+  'ssh rise3 "sudo fdisk /dev/sdb"',
+  'ssh rise3 "sudo parted /dev/sdb rm 1"',
+]
+samples_allow = [
+  'ssh rise3 "df -h"',
+  'ssh rise3 "lsblk -f"',
+  'ssh rise3 "sudo fdisk -l"',
+  'ssh rise3 "sudo dd if=/dev/sda of=/tmp/mbr.bin bs=512 count=1"',
+  'ssh rise3 "mount | grep /var"',
+  'ssh rise3 "free -m"',
+]
+
+[[rule]]
+id = "scp-rsync-to-rise3"
+action = "deny"
+regex = '(?i)\b(?:scp|rsync|sftp)\b[^|;&\n]*\s(?:\S+@)?rise3:\S*\s*(?:(?m:$)|[|;&])'
+reason = "Copying files onto PROD is a deploy, not a check (principle 14): stage under the repo and land it with `groundworks run <project> prod ...` after the owner's go; copying FROM rise3 (rise3:/path ./local) is allowed."
+samples_deny = [
+  'scp deploy.tgz rise3:/tmp/',
+  'rsync -avz --delete ./dist/ rise3:/opt/app/',
+  'scp -r k8s/ root@rise3:/root/k8s/',
+  'rsync -e "ssh -p 22" build/ rise3:/srv/www/',
+]
+samples_allow = [
+  'scp rise3:/var/log/syslog ./syslog.rise3',
+  'rsync -av rise3:/etc/nginx/ ./nginx-backup/',
+  'scp -r root@rise3:/root/k8s ./k8s-prod-copy',
+  'ssh rise3 "ls /tmp"',
+]
+
+# ---------------------------------------------------------------------------------------------------
+# C. Cluster mutations (host-agnostic: a local kubeconfig can point at prod)
+# ---------------------------------------------------------------------------------------------------
+
+[[rule]]
+id = "kubectl-mutate"
+action = "deny"
+regex = '(?i)(?:\bkubectl\b|\bmicrok8s(?:\.kubectl|\s+kubectl)\b|\bkubectl\.exe\b)(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:apply|delete|replace|patch|edit|scale|autoscale|drain|cordon|uncordon|taint|label|annotate|set|expose|run|rollout\s+(?:restart|undo|pause|resume)|certificate\s+(?:approve|deny)|auth\s+reconcile)\b'
+reason = "Cluster writes (apply/delete/replace/patch/scale/rollout restart/drain) are the owner's call (principle 14, estate.md): check with kubectl get / describe / diff / rollout status, change only via `groundworks run <project> <env> -- kubectl ...` which carries the receipt and repeats the go on a protected env."
+samples_deny = [
+  'kubectl apply -f k8s/stalwart.yaml',
+  'kubectl -n mail delete pod stalwart-0',
+  'microk8s kubectl rollout restart deployment/api -n app',
+  'kubectl patch svc web -p "{\"spec\":{\"type\":\"NodePort\"}}"',
+  'kubectl scale deploy api --replicas=0',
+  'ssh rise3 "microk8s kubectl apply -f /tmp/x.yaml"',
+  'kubectl --kubeconfig ~/.kube/rise3 apply -k overlays/prod',
+  'kubectl drain rise3 --ignore-daemonsets',
+  'kubectl apply --server-side -f secret.yaml',
+  'kubectl replace -f -',
+  'kubectl edit deploy api',
+  'kubectl set image deploy/api api=ghcr.io/x/api:v2',
+]
+samples_allow = [
+  'kubectl get pods -A',
+  'kubectl -n mail describe pod stalwart-0',
+  'kubectl rollout status deploy/api -n app',
+  'kubectl rollout history deploy/api',
+  'kubectl diff -f k8s/stalwart.yaml',
+  'kubectl get events -n app --sort-by=.lastTimestamp',
+  'kubectl logs -n app deploy/api --tail=200',
+  'kubectl top pods -A',
+  'kubectl get pods -n apply-ns',
+  'kubectl explain deployment.spec.replicas',
+  'kubectl auth can-i delete pods',
+]
+
+[[rule]]
+id = "kubectl-create"
+action = "warn"
+regex = '(?i)(?:\bkubectl\b|\bmicrok8s(?:\.kubectl|\s+kubectl)\b)(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+create\b'
+reason = "kubectl create writes to the cluster unless --dry-run=client is present; the estate's Secret pattern is `kubectl create ... --dry-run=client -o yaml | kubectl replace -f -` (estate.md), and the replace half runs through `groundworks run <project> <env> ...` after the owner's go."
+samples_deny = [
+  'kubectl create namespace staging',
+  'kubectl create secret generic x --from-env-file=/run/secrets/x.env --dry-run=client -o yaml',
+  'microk8s kubectl create -f job.yaml',
+]
+samples_allow = [
+  'kubectl get ns',
+  'kubectl api-resources | grep -i create',
+  'helm create chart-skeleton',
+]
+
+[[rule]]
+id = "kubectl-exec-cp"
+action = "warn"
+regex = '(?i)(?:\bkubectl\b|\bmicrok8s(?:\.kubectl|\s+kubectl)\b)(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:exec|cp|debug|attach|port-forward|proxy)\b'
+reason = "kubectl exec/cp/debug run arbitrary commands or write files inside PROD pods; reads (cat, ls, ps) are fine, anything that changes state goes through `groundworks run <project> <env> ...` after the owner's go."
+samples_deny = [
+  'kubectl exec -n mail stalwart-0 -- cat /opt/stalwart/etc/config.toml',
+  'kubectl cp ./fix.toml mail/stalwart-0:/opt/stalwart/etc/config.toml',
+  'kubectl debug node/rise3 -it --image=busybox',
+]
+samples_allow = [
+  'kubectl get pods -n mail',
+  'kubectl logs -n mail stalwart-0',
+  'kubectl describe node rise3',
+]
+
+[[rule]]
+id = "helm-mutate"
+action = "deny"
+regex = '(?i)\bhelm3?\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:install|upgrade|uninstall|delete|rollback|plugin\s+(?:install|uninstall|update))\b'
+reason = "helm install/upgrade/uninstall/rollback change the cluster and are the owner's call (principle 14): preview with helm template / helm diff upgrade / helm get values, apply only via `groundworks run <project> <env> -- helm ...` after the owner's go."
+samples_deny = [
+  'helm upgrade --install stalwart ./charts/stalwart -n mail -f values.prod.yaml',
+  'helm uninstall cert-manager -n cert-manager',
+  'helm -n app rollback api 3',
+  'helm upgrade api ./chart --dry-run',
+  'ssh rise3 "microk8s helm3 install x ./chart"',
+]
+samples_allow = [
+  'helm list -A',
+  'helm status stalwart -n mail',
+  'helm get values stalwart -n mail',
+  'helm template stalwart ./charts/stalwart -f values.prod.yaml',
+  'helm diff upgrade stalwart ./charts/stalwart -n mail',
+  'helm history api -n app',
+  'helm repo update',
+  'helm search repo cert-manager',
+]
+
+# ---------------------------------------------------------------------------------------------------
+# D. Outward-facing publishes (principle 14: deploy, publish, push wait for the owner's go)
+# ---------------------------------------------------------------------------------------------------
+
+[[rule]]
+id = "git-push"
+action = "deny"
+regex = '(?i)\bgit\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+push\b|\bgit\s+svn\s+dcommit\b'
+reason = "git push (any remote, any flags) is outward-facing and waits for the owner's explicit go each time (principle 14; worktree rule: no push): commit locally, report the branch and SHA, and push only in the session where the owner says so, via `groundworks run <project> <env> -- git push ...` for the receipt."
+samples_deny = [
+  'git push',
+  'git push origin enforcement-metrics',
+  'git push --force-with-lease origin rust-successor',
+  'git -C C:/Users/trist/projects/groundworks-successor push -u origin HEAD',
+  'git push --tags',
+  'git push --dry-run origin main',
+  'git -c http.sslVerify=false push',
+  'cd rust && cargo test && git push',
+]
+samples_allow = [
+  'git status -sb',
+  'git log --oneline -5',
+  'git fetch --all --prune',
+  'git commit -m "hook: push decision to log"',
+  'git remote -v',
+  'git pull --rebase',
+  'git log --grep push',
+  'git diff origin/main...HEAD --stat',
+  'git stash push -m wip',
+]
+
+[[rule]]
+id = "gh-mutate"
+action = "deny"
+regex = '(?i)\bgh\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:pr\s+(?:merge|close)|release\s+(?:create|delete|upload|edit)|repo\s+(?:delete|create|rename|archive|edit|fork|sync)|secret\s+(?:set|delete|remove)|variable\s+(?:set|delete)|workflow\s+(?:run|enable|disable)|run\s+(?:cancel|rerun|delete)|api\s+(?:-X|--method)\s*(?:POST|PUT|PATCH|DELETE)|api\s+[^|;&\n]*\s(?:-f|-F|--field|--raw-field|--input)\s)'
+reason = "gh pr merge / release create / repo delete / secret set are outward-facing and wait for the owner's go (principle 14): `gh pr create`, `gh pr view`, `gh run view` are fine; merges and releases happen in the owner's session."
+samples_deny = [
+  'gh pr merge 42 --squash',
+  'gh release create v0.3.0 dist/*.tgz',
+  'gh repo delete t3chnicallyinclined/old-repo --yes',
+  'gh secret set CF_TOKEN < token.txt',
+  'gh api -X DELETE repos/t3chnicallyinclined/x/releases/1',
+  'gh workflow run deploy.yml',
+]
+samples_allow = [
+  'gh pr create --title "enforcement hooks" --body-file pr.md',
+  'gh pr view 42 --json state,mergeable',
+  'gh run list --limit 5',
+  'gh api repos/t3chnicallyinclined/groundworks/releases/latest',
+  'gh pr checks 42',
+  'gh release list',
+]
+
+[[rule]]
+id = "docker-push"
+action = "deny"
+regex = '(?i)\bdocker\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:(?:image\s+)?push\b|compose\b[^|;&\n]*\spush\b|(?:buildx\s+)?build\b[^|;&\n]*--push\b|manifest\s+push\b)|\b(?:podman|nerdctl|crane|skopeo)\s+(?:push|copy)\b'
+reason = "Pushing an image to a registry is outward-facing and waits for the owner's go (principle 14; estate.md: build-only checks on rise3 are fine, never push): build and tag locally, push only via `groundworks run <project> <env> -- docker push ...` after the owner's go."
+samples_deny = [
+  'docker push ghcr.io/t3chnicallyinclined/api:latest',
+  'docker image push registry.local/x:1',
+  'docker buildx build --push -t ghcr.io/x/api:v2 .',
+  'docker compose -f compose.yml push',
+  'ssh rise3 "docker push ghcr.io/x/api:v2"',
+  'crane push image.tar ghcr.io/x/api:v2',
+]
+samples_allow = [
+  'docker build -t api:test .',
+  'docker images | grep api',
+  'docker pull ghcr.io/x/api:v2',
+  'docker compose -f compose.yml pull',
+  'docker tag api:test ghcr.io/x/api:v2',
+]
+
+[[rule]]
+id = "cargo-publish"
+action = "deny"
+regex = '(?i)\bcargo\b(?:\s+\+\S+)?(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:publish|yank|owner\s+(?:--add|--remove|-a\b|-r\b)|login)\b'
+reason = "cargo publish/yank is irreversible on crates.io and waits for the owner's go (principle 14): `cargo package --list` and `cargo publish --dry-run` are NOT exempted here on purpose; publish via `groundworks run <project> <env> -- cargo publish` after the owner's go."
+samples_deny = [
+  'cargo publish -p gw-core',
+  'cargo publish --dry-run',
+  'cargo +stable publish --allow-dirty',
+  'cargo yank --version 0.2.0 gw-mcp',
+  'cargo login',
+]
+samples_allow = [
+  'cargo package --list -p gw-core',
+  'cargo build --release',
+  'cargo test -p gw-mcp',
+  'cargo install --path rust/crates/gw-mcp',
+  'cargo search groundworks',
+  'cd rust && cargo clippy --all-targets -- -D warnings',
+]
+
+[[rule]]
+id = "npm-publish"
+action = "deny"
+regex = '(?i)\b(?:npm|pnpm|yarn|bun)\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:publish|unpublish|deprecate|dist-tag\s+(?:add|rm)|owner\s+(?:add|rm)|access\s+(?:public|restricted|grant|revoke)|token\s+(?:create|revoke)|login|adduser|npm\s+publish)\b|\b(?:twine|flit|poetry|uv)\s+(?:upload|publish)\b|\bgem\s+push\b|\bgoreleaser\s+release\b'
+reason = "Publishing a package is outward-facing and (for npm/crates/PyPI) effectively irreversible; it waits for the owner's go (principle 14): `npm pack` and `npm publish --dry-run` are the previews; publish via `groundworks run <project> <env> -- npm publish` after the owner's go."
+samples_deny = [
+  'npm publish --access public',
+  'pnpm publish -r',
+  'yarn publish --new-version 1.2.0',
+  'npm unpublish @scope/pkg@1.0.0',
+  'npm deprecate @scope/pkg@1.0.0 "use 2.x"',
+  'twine upload dist/*',
+  'npm publish --dry-run',
+]
+samples_allow = [
+  'npm pack',
+  'npm install',
+  'npm run build',
+  'npm view @scope/pkg versions',
+  'pnpm test',
+  'yarn why react',
+  'npm ci && npm test',
+]
+
+[[rule]]
+id = "eas-submit-update"
+action = "deny"
+regex = '(?i)\beas\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:(?:submit|update)(?:[^:\w]|(?m:$))|channel\s+(?:create|edit|delete|rollout)\b|branch\s+delete\b|build\b[^|;&\n]*--auto-submit\b|credentials\b|metadata\s+push\b|env\s+(?:create|update|delete|push)\b)'
+reason = "eas submit (App Store) and eas update (OTA to installed phones) reach users and wait for the owner's go (principle 14; Punchable: TestFlight-only): `eas build` and `eas build:list` are fine; submit via `groundworks run <project> <env> -- eas submit ...` after the owner's go."
+samples_deny = [
+  'eas submit -p ios --latest',
+  'eas update --branch production --message "fix"',
+  'eas build -p ios --profile production --auto-submit',
+  'npx eas submit --platform ios',
+  'eas channel edit production --branch v2',
+]
+samples_allow = [
+  'eas build -p ios --profile preview',
+  'eas build:list --limit 3',
+  'eas whoami',
+  'eas update:list --branch production',
+  'npx expo-doctor',
+  'eas build:view',
+]
+
+# ---------------------------------------------------------------------------------------------------
+# E. Cloudflare (DNS/edge/R2 are production for every lane; estate.md)
+# ---------------------------------------------------------------------------------------------------
+
+[[rule]]
+id = "cloudflare-api-mutate"
+action = "deny"
+regex = '(?i)(?:\bcurl\b[^|;&\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)\b|--request\s*[= ]\s*(?:POST|PUT|PATCH|DELETE)\b|\s-(?:d|F|T|G?[a-zA-Z]*[dFT])\s|--(?:data|data-raw|data-binary|data-urlencode|data-ascii|form|form-string|json|upload-file)\b)[^|;&\n]*api\.cloudflare\.com|\bcurl\b[^|;&\n]*api\.cloudflare\.com[^|;&\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)\b|--request\s*[= ]\s*(?:POST|PUT|PATCH|DELETE)\b|\s-(?:d|F|T|G?[a-zA-Z]*[dFT])\s|--(?:data|data-raw|data-binary|data-urlencode|data-ascii|form|form-string|json|upload-file)\b)|\bwget\b[^|;&\n]*(?:--method\s*[= ]\s*(?:POST|PUT|PATCH|DELETE)|--post-data|--post-file|--body-data|--body-file)[^|;&\n]*api\.cloudflare\.com|\bhttps?\s+(?:POST|PUT|PATCH|DELETE)\s+\S*api\.cloudflare\.com)'
+reason = "Writes to the Cloudflare API (DNS, zones, R2, Workers, rules) are production for every lane (estate.md) and wait for the owner's go (principle 14): GET reads are fine; mutate only via `groundworks run <project> <env> -- curl ...` after the owner's go, with the token as $CF_API_TOKEN, never literal."
+samples_deny = [
+  'curl -X POST -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records -d @rec.json',
+  'curl -s https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records -H "Authorization: Bearer $CF_API_TOKEN" -d "{\"type\":\"A\"}"',
+  'curl --request DELETE "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records/$ID" -H "Authorization: Bearer $CF_API_TOKEN"',
+  "curl -XPUT https://api.cloudflare.com/client/v4/zones/$ZONE/settings/ssl -d '{\"value\":\"strict\"}'",
+  'curl --json @rec.json https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records',
+  'curl -sS -X PATCH https://api.cloudflare.com/client/v4/accounts/$ACC/r2/buckets/x -d {}',
+  'wget --method=DELETE https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records/$ID',
+  'http DELETE https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records/$ID',
+]
+samples_allow = [
+  'curl -s -H "Authorization: Bearer $CF_API_TOKEN" https://api.cloudflare.com/client/v4/zones | jq .result[].name',
+  'curl -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records?type=MX" -H "Authorization: Bearer $CF_API_TOKEN"',
+  'curl -s https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $CF_API_TOKEN"',
+  'curl -X POST https://httpbin.org/post -d x=1',
+  'curl -sI https://api.cloudflare.com/client/v4',
+  'curl -sS -o /tmp/zones.json https://api.cloudflare.com/client/v4/zones -H "Authorization: Bearer $CF_API_TOKEN"',
+  'grep -rn api.cloudflare.com scripts/',
+]
+
+[[rule]]
+id = "cloudflare-cli-mutate"
+action = "deny"
+regex = '(?i)\bwrangler\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:deploy|publish|delete|rollback|versions\s+(?:deploy|upload)|deployments\s+rollback|r2\s+object\s+(?:delete|put)|r2\s+bucket\s+(?:delete|create|update|lifecycle|cors|domain|notification|sippy)|kv:?\s*(?:key|bulk|namespace)\s+(?:delete|put|create|rename)|secret\s+(?:put|delete|bulk)|secrets?\s+(?:put|delete|bulk)|pages\s+(?:deploy|publish|deployment\s+(?:delete|rollback)|project\s+(?:create|delete))|d1\s+(?:create|delete|migrations\s+apply|execute\b[^|;&\n]*--remote)|queues\s+(?:create|delete|purge)|hyperdrive\s+(?:create|delete|update)|vectorize\s+(?:create|delete|insert|upsert)|dispatch-namespace\s+(?:create|delete)|triggers\s+deploy|cert\s+(?:upload|delete)|login|logout)\b|\bcloudflared\s+tunnel\b(?:\s+-{1,2}[\w-]+(?:\s*[= ]\s*\S+)?)*\s+(?:create|delete|route|cleanup|token)\b|\bflarectl\b[^|;&\n]*\b(?:create|update|delete|purge|set)\b|\brclone\s+(?:delete|purge|deletefile|rmdir|rmdirs|move|moveto|sync|copy|copyto|cleanup)\b[^|;&\n]*\b(?:r2|cloudflare)\S*:'
+reason = "wrangler deploy/publish/delete, R2 object delete, KV key delete and cloudflared tunnel changes are production edge changes (estate.md) and wait for the owner's go (principle 14): `wrangler dev`, `wrangler tail`, `r2 object get`, `kv key list|get` are fine; deploy via `groundworks run <project> <env> -- wrangler deploy` after the owner's go."
+samples_deny = [
+  'wrangler deploy',
+  'npx wrangler publish --env production',
+  'wrangler r2 object delete supergun-telemetry/2026/10/match.jsonl',
+  'wrangler kv:key delete --namespace-id abc123 config',
+  'wrangler kv key delete --binding CFG config',
+  'wrangler secret put CF_TOKEN',
+  'wrangler pages deploy ./dist --project-name crewcut',
+  'wrangler d1 execute crewcut --remote --command "DELETE FROM clips"',
+  'cloudflared tunnel delete rise3-mail',
+  'rclone sync ./dist r2:supergun-web/ --delete-excluded',
+  'wrangler rollback',
+  'bunx wrangler versions deploy',
+]
+samples_allow = [
+  'wrangler dev',
+  'wrangler tail sg-telemetry',
+  'wrangler r2 object get supergun-telemetry/2026/10/match.jsonl --file /tmp/m.jsonl',
+  'wrangler r2 bucket list',
+  'wrangler kv key list --binding CFG',
+  'wrangler kv:key get --namespace-id abc123 config',
+  'wrangler deployments list',
+  'wrangler whoami',
+  'wrangler d1 execute crewcut --local --command "SELECT count(*) FROM clips"',
+  'cloudflared tunnel list',
+  'cloudflared tunnel info rise3-mail',
+  'rclone ls r2:supergun-telemetry/2026/10/',
+  'rclone size r2:supergun-web',
+]
+
+# ---------------------------------------------------------------------------------------------------
+# F. Groundworks' own gate (cannot be side-stepped from inside the agent)
+# ---------------------------------------------------------------------------------------------------
+
+[[rule]]
+id = "groundworks-confirm-on-cmdline"
+action = "warn"
+regex = '(?i)\bgroundworks(?:\.exe)?\b[^|;&\n]*\brun\b[^|;&\n]*--confirm\b'
+reason = "--confirm on a protected env repeats the owner's go; it never replaces it (principle 14): only pass --confirm in the same turn the owner said go, and say so in the journal entry that carries the receipt."
+samples_deny = [
+  'groundworks run supergun prod --confirm yes -- kubectl apply -f k8s/',
+  'C:/Users/trist/.cargo/bin/groundworks.exe run mail prod --confirm 2026-10-29 -- helm upgrade stalwart ./chart',
+]
+samples_allow = [
+  'groundworks run supergun dev -- cargo test',
+  'groundworks show supergun --limit 10',
+  'groundworks run mail prod -- kubectl get pods -n mail',
+]
+
+[[rule]]
+id = "hook-selfedit"
+action = "deny"
+regex = '(?i)(?:>>?\s*|\btee\s+(?:-a\s+)?|\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)\b[^|;&\n]*\s|\b(?:rm|mv|cp)\s+(?:\S+\s+)*)\S*(?:/plugins/cache/groundworks/\S*(?:hooks\.json|deny\.toml|hooks/\S+)|\.claude/settings(?:\.local)?\.json|\.claude/hooks/\S+|/\.groundworks/secrets/\S+|/\.groundworks/groundworks\.toml)|\bGROUNDWORKS_ENFORCE\s*=\s*(?:warn|off|0|false)\b'
+reason = "The hooks, the deny list, the HMAC key and settings.json are the enforcement mechanism; an agent editing them is the bypass this layer exists to stop; the owner changes them in his own session (principle 14)."
+samples_deny = [
+  'echo "{}" > ~/.claude/plugins/cache/groundworks/groundworks/0.3.0/hooks/hooks.json',
+  'sed -i "s/deny/warn/" ~/.claude/plugins/cache/groundworks/groundworks/0.3.0/deny.toml',
+  'rm ~/.claude/plugins/cache/groundworks/groundworks/0.3.0/hooks/pretooluse.sh',
+  'GROUNDWORKS_ENFORCE=warn claude',
+  'cp new-settings.json ~/.claude/settings.json',
+  'cat key > C:/Users/trist/projects/.groundworks/secrets/hook_hmac.key',
+]
+samples_allow = [
+  'cat ~/.claude/plugins/cache/groundworks/groundworks/0.3.0/hooks/hooks.json',
+  'cat ~/.claude/settings.json | jq .hooks',
+  'grep -n GROUNDWORKS_ENFORCE C:/Users/trist/projects/.groundworks/groundworks.toml',
+  'ls -la C:/Users/trist/projects/.groundworks/secrets/',
+  'sed -i "s/foo/bar/" rust/crates/gw-mcp/src/hooks.rs',
+]

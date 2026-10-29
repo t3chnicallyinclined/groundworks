@@ -22,6 +22,60 @@ pub struct Config {
     pub scan: ScanConfig,
     #[serde(default)]
     pub store: StoreConfig,
+    #[serde(default)]
+    pub enforce: EnforceConfig,
+}
+
+/// How the plugin's hooks act (`[enforce]` in groundworks.toml). `GROUNDWORKS_ENFORCE=warn|block` in the
+/// environment overrides both for one session; rules marked `hard` in deny.toml deny in every mode.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnforceConfig {
+    /// Stop and SubagentStop: `block` (default) asks once for a journal entry; `warn` only says so.
+    #[serde(default)]
+    pub stop: StopMode,
+    /// PreToolUse on Bash: `deny` (default) refuses a listed command; `warn` lets it through with a message.
+    #[serde(default)]
+    pub pretooluse: ToolMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StopMode {
+    #[default]
+    Block,
+    Warn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolMode {
+    #[default]
+    Deny,
+    Warn,
+}
+
+/// What a hook does with a decision that would block or deny.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnforceMode {
+    Block,
+    Warn,
+}
+
+impl EnforceConfig {
+    pub fn stop_mode(&self) -> EnforceMode {
+        match self.stop {
+            StopMode::Block => EnforceMode::Block,
+            StopMode::Warn => EnforceMode::Warn,
+        }
+    }
+
+    pub fn tool_mode(&self) -> EnforceMode {
+        match self.pretooluse {
+            ToolMode::Deny => EnforceMode::Block,
+            ToolMode::Warn => EnforceMode::Warn,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

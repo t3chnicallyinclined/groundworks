@@ -87,6 +87,20 @@ impl Store {
         Self::with_launcher(Launcher::for_home(home)?, &read_secret(home, "agent")?)
     }
 
+    /// The home's store only if its server answers now: None when it is down. The hooks use this so a
+    /// session never waits on a server start and a down store is reported, not hidden.
+    pub fn open_if_up(home: &Home) -> Result<Option<Self>> {
+        let url = store_url(home);
+        if !gw_store::healthy(&url) {
+            return Ok(None);
+        }
+        Ok(Some(Self::connect(
+            &url,
+            &read_secret(home, "root")?,
+            &read_secret(home, "agent")?,
+        )))
+    }
+
     /// A store that starts its server through `launcher` now if needed, and again if it stops.
     pub fn with_launcher(launcher: Launcher, agent_master: &str) -> Result<Self> {
         launcher.ensure()?;
@@ -1049,6 +1063,168 @@ impl Store {
         Ok(rows[0].as_array().cloned().unwrap_or_default())
     }
 
+    // ---- hook telemetry (global; counts, ids and timings only; see schema 0014) ----------------------
+
+    /// Whether a session row with this id exists (a resumed session starts again without a new row).
+    pub fn session_exists(&self, id: &str) -> Result<bool> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("id", id);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE id FROM ONLY type::record('session', $id);",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(!rows[0].is_null())
+    }
+
+    /// Open a session row (SessionStart). The id is the client's session id.
+    pub fn session_start(&self, s: &SessionIn) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default()
+            .set("id", s.id.as_str())
+            .set("project", s.project.as_str())
+            .set("machine", s.machine.as_str())
+            .set("client", s.client.as_str())
+            .set("agent", s.agent.as_str())
+            .set("started_at", rfc3339(&s.started_at)?)
+            .set("cwd", s.cwd.as_str())
+            .set("injected_entries", s.injected_entries)
+            .set("store_ok", s.store_ok)
+            .set("hook_latency_ms", s.hook_latency_ms);
+        self.retrying(|| {
+            global.query(
+                "CREATE type::record('session', $id) SET project = $project, machine = $machine, client = $client, \
+                 agent = $agent, started_at = <datetime>$started_at, cwd = $cwd, injected_entries = $injected_entries, \
+                 store_ok = $store_ok, hook_latency_ms = $hook_latency_ms RETURN VALUE id;",
+                &vars.0,
+                Some(1),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// When a session row started, if there is one.
+    pub fn session_started_at(&self, id: &str) -> Result<Option<String>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("id", id);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE <string> started_at FROM ONLY type::record('session', $id);",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_str().map(seconds))
+    }
+
+    /// One hook run. Append-only.
+    pub fn hook_event(&self, e: &HookEventIn) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let mut sql = String::from(
+            "CREATE hook_event SET session = $sid, agent = $agent, hook = $hook, decision = $decision, \
+             tool_uses = $tool_uses, journal_writes_since_start = $writes, latency_ms = $latency_ms",
+        );
+        // `$session` is a variable SurrealDB reserves; the field keeps its name, the binding does not.
+        let mut vars = Vars::default()
+            .set("sid", e.session.as_str())
+            .set("agent", e.agent.as_str())
+            .set("hook", e.hook)
+            .set("decision", e.decision)
+            .set("tool_uses", e.tool_uses.clone())
+            .set("writes", e.journal_writes_since_start)
+            .set("latency_ms", e.latency_ms);
+        if let Some(p) = &e.project {
+            sql.push_str(", project = $project");
+            vars = vars.set("project", p.as_str());
+        }
+        if let Some(r) = &e.rule {
+            sql.push_str(", rule = $rule");
+            vars = vars.set("rule", r.as_str());
+        }
+        if let Some(err) = &e.error {
+            sql.push_str(", error = $error");
+            vars = vars.set("error", err.chars().take(200).collect::<String>());
+        }
+        if let Some(h) = &e.command_hmac {
+            sql.push_str(", command_hmac = $command_hmac");
+            vars = vars.set("command_hmac", h.as_str());
+        }
+        // RETURN VALUE id, not RETURN NONE: an empty result reads as a refusal (gw-core db.rs).
+        sql.push_str(" RETURN VALUE id;");
+        self.retrying(|| {
+            global.query(&sql, &vars.0, Some(1))?;
+            Ok(())
+        })
+    }
+
+    /// A write the store refused, by surface (`note`, `journal_add`, ...). Append-only; the reason is
+    /// the refusal's first clause only, redacted, never the text that was refused.
+    pub fn record_rejection(&self, surface: &str, project: Option<&str>, by: Option<&str>, reason: &str) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let mut sql = String::from("CREATE rejection SET surface = $surface, reason = $reason");
+        let reason: String = reason.chars().take(400).collect();
+        let mut vars = Vars::default().set("surface", surface).set("reason", reason);
+        if let Some(p) = project {
+            sql.push_str(", project = $project");
+            vars = vars.set("project", p);
+        }
+        if let Some(b) = by {
+            sql.push_str(", by = $by");
+            vars = vars.set("by", b);
+        }
+        // RETURN VALUE id, not RETURN NONE: an empty result reads as a refusal (gw-core db.rs).
+        sql.push_str(" RETURN VALUE id;");
+        self.retrying(|| {
+            global.query(&sql, &vars.0, Some(1))?;
+            Ok(())
+        })
+    }
+
+    /// Session rows started in the last `days` (all when None), oldest first.
+    pub fn sessions_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
+        self.telemetry_rows(
+            "SELECT <string> id AS id, project, machine, client, agent, <string> started_at AS started_at, \
+             cwd, injected_entries, store_ok, hook_latency_ms FROM session",
+            "started_at",
+            days,
+        )
+    }
+
+    /// Hook events in the last `days` (all when None), oldest first.
+    pub fn hook_events_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
+        self.telemetry_rows(
+            "SELECT session, project, agent, hook, <string> at AS at, decision, rule, tool_uses, \
+             journal_writes_since_start, latency_ms, error, command_hmac FROM hook_event",
+            "at",
+            days,
+        )
+    }
+
+    /// Store rejections in the last `days` (all when None), oldest first.
+    pub fn rejections_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
+        self.telemetry_rows(
+            "SELECT <string> at AS at, surface, project, by, reason FROM rejection",
+            "at",
+            days,
+        )
+    }
+
+    fn telemetry_rows(&self, select: &str, time_field: &str, days: Option<u64>) -> Result<Vec<Value>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let (filter, vars) = match days {
+            Some(d) => (
+                format!(" WHERE {time_field} > time::now() - <duration>$d"),
+                Vars::default().set("d", format!("{d}d")),
+            ),
+            None => (String::new(), Vars::default()),
+        };
+        let sql = format!("{select}{filter} ORDER BY {time_field};");
+        let rows = self.retrying(|| Ok(global.query(&sql, &vars.0, Some(1))?))?;
+        Ok(rows[0].as_array().cloned().unwrap_or_default())
+    }
+
     /// Record the expert directory in `global`: each expert's name, summary and definition file.
     pub fn upsert_experts(&self, experts: &[crate::intake::Expert]) -> Result<()> {
         let global = self.agent(GLOBAL_NS)?;
@@ -1245,6 +1421,37 @@ pub struct ReceiptIn {
     /// What `output_hash` covers, in words, so a reader knows what the receipt proves.
     pub hash_of: &'static str,
     pub commit: Option<String>,
+}
+
+/// A session row (schema 0014): who started where, and what the SessionStart hook did for it.
+#[derive(Debug, Clone)]
+pub struct SessionIn {
+    pub id: String,
+    pub project: String,
+    pub machine: String,
+    pub client: String,
+    pub agent: String,
+    pub started_at: String,
+    pub cwd: String,
+    pub injected_entries: u64,
+    pub store_ok: bool,
+    pub hook_latency_ms: i64,
+}
+
+/// One hook run (schema 0014). Counts and ids only; `error` is already redacted and capped.
+#[derive(Debug, Clone)]
+pub struct HookEventIn {
+    pub session: String,
+    pub project: Option<String>,
+    pub agent: String,
+    pub hook: &'static str,
+    pub decision: &'static str,
+    pub rule: Option<String>,
+    pub tool_uses: Value,
+    pub journal_writes_since_start: u64,
+    pub latency_ms: i64,
+    pub error: Option<String>,
+    pub command_hmac: Option<String>,
 }
 
 #[derive(Debug, Clone)]
