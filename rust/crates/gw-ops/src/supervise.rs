@@ -341,6 +341,15 @@ pub fn run(store: &Store, opts: &Options) -> Result<()> {
                                     Ok(line) => log.line(&line),
                                     Err(e) => log.line(&format!("pulse NOT TAKEN: {e:#}")),
                                 }
+                                // Telemetry retention, as root (members cannot delete; TELEMETRY-POLICY.md).
+                                match store.prune_telemetry() {
+                                    Ok([events, sessions, rejections]) => log.line(&format!(
+                                        "telemetry pruned: {events} hook_event, {sessions} session (older than {} days),                                          {rejections} rejection (older than {} days)",
+                                        crate::store::TELEMETRY_DAYS,
+                                        crate::store::REJECTION_DAYS
+                                    )),
+                                    Err(e) => log.line(&format!("telemetry NOT PRUNED: {e:#}")),
+                                }
                             }
                         }
                         Err(e) => log.line(&format!("export failed: {e:#}; next try in an hour")),

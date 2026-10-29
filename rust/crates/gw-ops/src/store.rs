@@ -27,6 +27,10 @@ use crate::home::{Home, machine};
 use crate::journal::{Confidence, Kind};
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8004/sql";
+/// Days a hook_event or session row is kept (TELEMETRY-POLICY.md); the pulse folds them into counters.
+pub const TELEMETRY_DAYS: u64 = 90;
+/// Days a rejection row is kept: the record of what almost leaked.
+pub const REJECTION_DAYS: u64 = 365;
 pub(crate) const AGENT: &str = "agent";
 const OWNER: &str = "owner";
 const START_TIMEOUT: Duration = Duration::from_secs(20);
@@ -1082,25 +1086,28 @@ impl Store {
     /// Open a session row (SessionStart). The id is the client's session id.
     pub fn session_start(&self, s: &SessionIn) -> Result<()> {
         let global = self.agent(GLOBAL_NS)?;
-        let vars = Vars::default()
+        let mut sql = String::from(
+            "CREATE type::record('session', $id) SET machine = $machine, client = $client, agent = $agent, \
+             started_at = <datetime>$started_at, cwd_class = $cwd_class, injected_entries = $injected_entries, \
+             store_ok = $store_ok, hook_latency_ms = $hook_latency_ms",
+        );
+        let mut vars = Vars::default()
             .set("id", s.id.as_str())
-            .set("project", s.project.as_str())
             .set("machine", s.machine.as_str())
             .set("client", s.client.as_str())
             .set("agent", s.agent.as_str())
             .set("started_at", rfc3339(&s.started_at)?)
-            .set("cwd", s.cwd.as_str())
+            .set("cwd_class", s.cwd_class.as_str())
             .set("injected_entries", s.injected_entries)
             .set("store_ok", s.store_ok)
             .set("hook_latency_ms", s.hook_latency_ms);
+        if let Some(p) = &s.project {
+            sql.push_str(", project = $project");
+            vars = vars.set("project", p.as_str());
+        }
+        sql.push_str(" RETURN VALUE id;");
         self.retrying(|| {
-            global.query(
-                "CREATE type::record('session', $id) SET project = $project, machine = $machine, client = $client, \
-                 agent = $agent, started_at = <datetime>$started_at, cwd = $cwd, injected_entries = $injected_entries, \
-                 store_ok = $store_ok, hook_latency_ms = $hook_latency_ms RETURN VALUE id;",
-                &vars.0,
-                Some(1),
-            )?;
+            global.query(&sql, &vars.0, Some(1))?;
             Ok(())
         })
     }
@@ -1139,17 +1146,21 @@ impl Store {
             sql.push_str(", project = $project");
             vars = vars.set("project", p.as_str());
         }
-        if let Some(r) = &e.rule {
-            sql.push_str(", rule = $rule");
-            vars = vars.set("rule", r.as_str());
+        if let Some(r) = &e.rule_id {
+            sql.push_str(", rule_id = $rule_id");
+            vars = vars.set("rule_id", r.as_str());
         }
-        if let Some(err) = &e.error {
-            sql.push_str(", error = $error");
-            vars = vars.set("error", err.chars().take(200).collect::<String>());
+        if let Some(code) = e.error_code {
+            sql.push_str(", error_code = $error_code");
+            vars = vars.set("error_code", code);
         }
-        if let Some(h) = &e.command_hmac {
-            sql.push_str(", command_hmac = $command_hmac");
-            vars = vars.set("command_hmac", h.as_str());
+        if let Some(exit) = e.error_exit {
+            sql.push_str(", error_exit = $error_exit");
+            vars = vars.set("error_exit", exit);
+        }
+        if let Some(len) = e.error_len {
+            sql.push_str(", error_len = $error_len");
+            vars = vars.set("error_len", len);
         }
         // RETURN VALUE id, not RETURN NONE: an empty result reads as a refusal (gw-core db.rs).
         sql.push_str(" RETURN VALUE id;");
@@ -1160,19 +1171,31 @@ impl Store {
     }
 
     /// A write the store refused, by surface (`note`, `journal_add`, ...). Append-only; the reason is
-    /// the refusal's first clause only, redacted, never the text that was refused.
-    pub fn record_rejection(&self, surface: &str, project: Option<&str>, by: Option<&str>, reason: &str) -> Result<()> {
+    /// a code (pattern id or store rule), never the text that was refused. The schema refuses anything
+    /// else, so a caller that slipped text in would be refused here too.
+    pub fn record_rejection(&self, r: &RejectionIn<'_>) -> Result<()> {
         let global = self.agent(GLOBAL_NS)?;
         let mut sql = String::from("CREATE rejection SET surface = $surface, reason = $reason");
-        let reason: String = reason.chars().take(400).collect();
-        let mut vars = Vars::default().set("surface", surface).set("reason", reason);
-        if let Some(p) = project {
+        let mut vars = Vars::default().set("surface", r.surface).set("reason", r.reason);
+        if let Some(p) = r.project {
             sql.push_str(", project = $project");
             vars = vars.set("project", p);
         }
-        if let Some(b) = by {
+        if let Some(b) = r.by {
             sql.push_str(", by = $by");
-            vars = vars.set("by", b);
+            vars = vars.set("by", crate::hook::plain_name(b));
+        }
+        if let Some(f) = r.field {
+            sql.push_str(", field = $field");
+            vars = vars.set("field", f);
+        }
+        if let Some(o) = r.offset {
+            sql.push_str(", offset = $offset");
+            vars = vars.set("offset", o);
+        }
+        if let Some(n) = r.match_len {
+            sql.push_str(", match_len = $match_len");
+            vars = vars.set("match_len", n);
         }
         // RETURN VALUE id, not RETURN NONE: an empty result reads as a refusal (gw-core db.rs).
         sql.push_str(" RETURN VALUE id;");
@@ -1186,7 +1209,7 @@ impl Store {
     pub fn sessions_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
         self.telemetry_rows(
             "SELECT <string> id AS id, project, machine, client, agent, <string> started_at AS started_at, \
-             cwd, injected_entries, store_ok, hook_latency_ms FROM session",
+             cwd_class, injected_entries, store_ok, hook_latency_ms FROM session",
             "started_at",
             days,
         )
@@ -1195,8 +1218,8 @@ impl Store {
     /// Hook events in the last `days` (all when None), oldest first.
     pub fn hook_events_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
         self.telemetry_rows(
-            "SELECT session, project, agent, hook, <string> at AS at, decision, rule, tool_uses, \
-             journal_writes_since_start, latency_ms, error, command_hmac FROM hook_event",
+            "SELECT session, project, agent, hook, <string> at AS at, decision, rule_id, tool_uses, \
+             journal_writes_since_start, latency_ms, error_code, error_exit, error_len FROM hook_event",
             "at",
             days,
         )
@@ -1205,10 +1228,34 @@ impl Store {
     /// Store rejections in the last `days` (all when None), oldest first.
     pub fn rejections_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
         self.telemetry_rows(
-            "SELECT <string> at AS at, surface, project, by, reason FROM rejection",
+            "SELECT <string> at AS at, surface, project, by, reason, field, offset, match_len FROM rejection",
             "at",
             days,
         )
+    }
+
+    /// Retention (TELEMETRY-POLICY.md): root deletes hook_event and session rows older than
+    /// [`TELEMETRY_DAYS`] and rejection rows older than [`REJECTION_DAYS`]. Members cannot delete, so this
+    /// runs in the supervisor only. Returns the rows removed per table (hook_event, session, rejection).
+    pub fn prune_telemetry(&self) -> Result<[u64; 3]> {
+        let root = self.root(GLOBAL_NS)?;
+        let vars = Vars::default()
+            .set("t", format!("{TELEMETRY_DAYS}d"))
+            .set("r", format!("{REJECTION_DAYS}d"));
+        let rows = self.retrying(|| {
+            Ok(root.query(
+                "RETURN count(SELECT VALUE id FROM hook_event WHERE at < time::now() - <duration>$t);\
+                 RETURN count(SELECT VALUE id FROM session WHERE started_at < time::now() - <duration>$t);\
+                 RETURN count(SELECT VALUE id FROM rejection WHERE at < time::now() - <duration>$r);\
+                 DELETE hook_event WHERE at < time::now() - <duration>$t RETURN NONE;\
+                 DELETE session WHERE started_at < time::now() - <duration>$t RETURN NONE;\
+                 DELETE rejection WHERE at < time::now() - <duration>$r RETURN NONE;",
+                &vars.0,
+                Some(6),
+            )?)
+        })?;
+        let at = |i: usize| rows.get(i).and_then(Value::as_u64).unwrap_or(0);
+        Ok([at(0), at(1), at(2)])
     }
 
     fn telemetry_rows(&self, select: &str, time_field: &str, days: Option<u64>) -> Result<Vec<Value>> {
@@ -1423,22 +1470,23 @@ pub struct ReceiptIn {
     pub commit: Option<String>,
 }
 
-/// A session row (schema 0014): who started where, and what the SessionStart hook did for it.
+/// A session row (schema 0014): who started where (as a class, never a path), and what the
+/// SessionStart hook did for it.
 #[derive(Debug, Clone)]
 pub struct SessionIn {
     pub id: String,
-    pub project: String,
+    pub project: Option<String>,
     pub machine: String,
     pub client: String,
     pub agent: String,
     pub started_at: String,
-    pub cwd: String,
+    pub cwd_class: crate::hook::CwdClass,
     pub injected_entries: u64,
     pub store_ok: bool,
     pub hook_latency_ms: i64,
 }
 
-/// One hook run (schema 0014). Counts and ids only; `error` is already redacted and capped.
+/// One hook run (schema 0014). Codes, counts and ids only.
 #[derive(Debug, Clone)]
 pub struct HookEventIn {
     pub session: String,
@@ -1446,12 +1494,26 @@ pub struct HookEventIn {
     pub agent: String,
     pub hook: &'static str,
     pub decision: &'static str,
-    pub rule: Option<String>,
+    pub rule_id: Option<String>,
     pub tool_uses: Value,
     pub journal_writes_since_start: u64,
     pub latency_ms: i64,
-    pub error: Option<String>,
-    pub command_hmac: Option<String>,
+    pub error_code: Option<&'static str>,
+    pub error_exit: Option<i64>,
+    pub error_len: Option<u64>,
+}
+
+/// A refused write, as the rejection table keeps it: codes and numbers, never the text.
+#[derive(Debug, Clone, Default)]
+pub struct RejectionIn<'a> {
+    pub surface: &'a str,
+    pub project: Option<&'a str>,
+    pub by: Option<&'a str>,
+    /// A JOURNAL-REFUSALS pattern id or a store rule code (`[a-z0-9-]{1,40}`).
+    pub reason: &'a str,
+    pub field: Option<&'a str>,
+    pub offset: Option<u64>,
+    pub match_len: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

@@ -13,6 +13,13 @@ use gw_ops::store::Store;
 use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 use serde_json::{Value, json};
 
+/// The canary every hook input carries in the selftest (a cwd, a command, a tool input, a transcript
+/// line); it must appear in no telemetry row, env file or hook stderr afterwards (TELEMETRY-POLICY.md).
+const CANARY: &str = "CANARY-5e1f9a";
+
+/// Everything the hooks wrote to stderr during the selftest, for the canary check.
+static HOOK_STDERR: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
 /// The tools a session with a home must see, exactly.
 pub const TOOLS: [&str; 27] = [
     "answer",
@@ -215,10 +222,11 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
     std::fs::write(
         home.join("groundworks.toml"),
         format!(
-            "workspace = \"{}\"\n\n[store]\nurl = \"{url}\"\n",
+            "workspace = \"{}\"\n\n[store]\nurl = \"{url}\"\n\n[scan]\nlocal_only = [\"*fenced*\"]\n",
             toml_path(&workspace)
         ),
     )?;
+    std::fs::create_dir_all(workspace.join("fenced-matter"))?;
     std::fs::write(home.join("secrets/root.pass"), ROOT_PASS)?;
     std::fs::write(home.join("secrets/agent.pass"), AGENT_PASS)?;
     std::fs::write(home.join("knowledge/principles.md"), "# Principles\n\nTools first.\n")?;
@@ -857,6 +865,7 @@ fn hook(
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !stderr.trim().is_empty() {
         eprintln!("[hook {event} stderr] {}", stderr.trim());
+        HOOK_STDERR.lock().expect("stderr log").push_str(&stderr);
     }
     if !out.status.success() {
         bail!(
@@ -874,12 +883,13 @@ fn hook(
 fn transcript(path: &Path, at: &str, edits: usize) -> Result<()> {
     let mut text = format!(
         "{}\n",
-        json!({"type": "user", "timestamp": at, "message": {"role": "user", "content": "change it"}})
+        json!({"type": "user", "timestamp": at, "message": {"role": "user", "content": format!("change {CANARY}")}})
     );
     for _ in 0..edits {
         text.push_str(&format!(
             "{}\n",
-            json!({"type": "assistant", "timestamp": at, "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "x"}}]}})
+            json!({"type": "assistant", "timestamp": at, "message": {"content": [{"type": "tool_use", "name": "Edit",
+                   "input": {"file_path": format!("{CANARY}.txt"), "command": format!("echo {CANARY}")}}]}})
         ));
     }
     std::fs::write(path, text)?;
@@ -934,11 +944,13 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         .iter()
         .find(|r| r["id"].as_str().is_some_and(|id| id.contains("selftest-session-1")));
     c.check(
-        "SessionStart opens a session row with the project, machine, client and injected count",
+        "SessionStart opens a session row with the project, machine, client, cwd class and injected count",
         row.is_some_and(|r| {
             r["project"] == "demo"
                 && r["machine"] == "SELFTEST"
                 && r["client"] == "claude-code"
+                && r["cwd_class"] == "registered"
+                && r.get("cwd").is_none()
                 && r["injected_entries"].as_u64().is_some_and(|n| n >= 2)
                 && r["store_ok"] == true
         }),
@@ -959,6 +971,28 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         &again.to_string(),
     );
 
+    let fenced = base.join("work/fenced-matter").join(CANARY);
+    std::fs::create_dir_all(&fenced)?;
+    let out = hook(
+        exe,
+        home,
+        "SessionStart",
+        &json!({"session_id": "s-fenced", "cwd": fenced.display().to_string()}),
+        &[],
+        None,
+    )?;
+    let fenced_row = owner
+        .sessions_since(None)?
+        .into_iter()
+        .find(|r| r["id"].as_str().is_some_and(|id| id.contains("s-fenced")));
+    c.check(
+        "a session under a scan.local_only folder is recorded as local-only with no project and nothing of the path",
+        out["systemMessage"].is_string()
+            && fenced_row.as_ref().is_some_and(|r| {
+                r["cwd_class"] == "local-only" && r["project"].is_null() && !r.to_string().contains(CANARY)
+            }),
+        &format!("{out}\n{fenced_row:?}"),
+    );
     let nowhere = base.join("nowhere-project");
     std::fs::create_dir_all(&nowhere)?;
     let out = hook(
@@ -970,11 +1004,19 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         None,
     )?;
     c.check(
-        "SessionStart in a folder that is not a registered project says so once and injects nothing",
+        "SessionStart in a folder that is not a registered project says so once (no path), injects nothing, and records the class",
         out["systemMessage"]
             .as_str()
-            .is_some_and(|m| m.contains("not a registered project"))
-            && out.get("hookSpecificOutput").is_none(),
+            .is_some_and(|m| m.contains("not a registered project") && !m.contains("nowhere"))
+            && out.get("hookSpecificOutput").is_none()
+            && owner
+                .sessions_since(None)?
+                .iter()
+                .any(|r| {
+                    r["id"].as_str().is_some_and(|id| id.contains("s-nowhere"))
+                        && r["cwd_class"] == "outside-workspace"
+                        && r["project"].is_null()
+                }),
         &out.to_string(),
     );
 
@@ -1061,6 +1103,19 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         exe,
         home,
         "PreToolUse",
+        &bash(&format!("echo {CANARY} && git push")),
+        &[],
+        Some(&rules_path),
+    )?;
+    c.check(
+        "a denied command is refused with the rule's static reason, not an echo of the command",
+        out["hookSpecificOutput"]["permissionDecision"] == "deny" && !out.to_string().contains(CANARY),
+        &out.to_string(),
+    );
+    let out = hook(
+        exe,
+        home,
+        "PreToolUse",
         &bash("git push origin main"),
         &[("GROUNDWORKS_ENFORCE", "warn")],
         Some(&rules_path),
@@ -1117,7 +1172,8 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
     let since = gw_ops::pulse::now_iso();
     let transcript_path = base.join("transcript.jsonl");
     transcript(&transcript_path, &since, 3)?;
-    let stop_in = json!({"session_id": "selftest-session-1", "cwd": demo_s, "transcript_path": transcript_path.display().to_string(), "stop_hook_active": false});
+    let stop_cwd = demo.join(CANARY).display().to_string();
+    let stop_in = json!({"session_id": "selftest-session-1", "cwd": stop_cwd, "transcript_path": transcript_path.display().to_string(), "stop_hook_active": false});
     let session_env = [
         ("GROUNDWORKS_PROJECT", "demo"),
         ("GROUNDWORKS_SESSION_START", since.as_str()),
@@ -1221,10 +1277,10 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         &out.to_string(),
     );
 
-    // The telemetry: counts, ids, hashes and timings; never the command or transcript text.
+    // The telemetry: codes, counts, ids and timings; never a command, a path or transcript text.
     let blocked = events
         .iter()
-        .find(|e| e["hook"] == "Stop" && e["decision"] == "block" && e["rule"] == "no-writes");
+        .find(|e| e["hook"] == "Stop" && e["decision"] == "block" && e["rule_id"] == "no-writes");
     c.check(
         "the blocked Stop is a hook_event row with the edit count, zero writes and a latency",
         blocked.is_some_and(|e| {
@@ -1239,18 +1295,17 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         .iter()
         .filter(|e| e["hook"] == "PreToolUse" && e["decision"] == "deny")
         .collect();
-    let all_text = serde_json::to_string(&events)?;
     c.check(
-        "PreToolUse rows carry the rule id and a 64-hex HMAC, and no row holds a command",
+        "PreToolUse rows carry the rule id, and the broken-list run carries an error code, not the error",
         !denies.is_empty()
-            && denies.iter().all(|e| {
-                e["rule"].is_string()
-                    && e["command_hmac"]
-                        .as_str()
-                        .is_some_and(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
-            })
-            && !all_text.contains("git push")
-            && !all_text.contains("regcred"),
+            && denies
+                .iter()
+                .all(|e| e["rule_id"].is_string() && e.get("error").is_none())
+            && denies.iter().any(|e| {
+                e["rule_id"] == "rules-unloadable"
+                    && e["error_code"] == "regex_compile"
+                    && e["error_len"].as_u64().is_some_and(|n| n > 0)
+            }),
         &format!(
             "{} deny rows; {}",
             denies.len(),
@@ -1259,13 +1314,119 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
     );
     let rejections = owner.rejections_since(None)?;
     c.check(
-        "the CONFIRMED-without-evidence refusal is a rejection row naming the rule, not the text",
+        "the CONFIRMED-without-evidence refusal is a rejection row with a code, not the text",
         rejections.iter().any(|r| {
-            r["surface"] == "journal_add" && r["reason"] == "CONFIRMED needs evidence" && r["project"] == "demo"
+            r["surface"] == "journal_add" && r["reason"] == "confirmed-needs-evidence" && r["project"] == "demo"
         }) && !serde_json::to_string(&rejections)?.contains("unbacked"),
         &format!("{rejections:?}"),
     );
+
+    // The canary went into a cwd, a command, a tool input and a transcript line; it comes out nowhere.
+    let mut sources: Vec<(String, String)> = vec![
+        (
+            "session rows".into(),
+            serde_json::to_string(&owner.sessions_since(None)?)?,
+        ),
+        ("hook_event rows".into(), serde_json::to_string(&events)?),
+        ("rejection rows".into(), serde_json::to_string(&rejections)?),
+        ("hook stderr".into(), HOOK_STDERR.lock().expect("stderr log").clone()),
+        (
+            "session.env".into(),
+            std::fs::read_to_string(&env_file).unwrap_or_default(),
+        ),
+        (
+            "down.env".into(),
+            std::fs::read_to_string(&down_env).unwrap_or_default(),
+        ),
+    ];
+    for dir in ["metrics", "journal"] {
+        if let Ok(entries) = std::fs::read_dir(home.join(dir)) {
+            for entry in entries.flatten() {
+                sources.push((
+                    format!("{dir}/{}", entry.file_name().to_string_lossy()),
+                    std::fs::read_to_string(entry.path()).unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    let hits = canary_hits(&sources);
+    c.check(
+        &format!(
+            "the canary from cwd, command, tool input and transcript is in none of {} places",
+            sources.len()
+        ),
+        hits.is_empty() && sources.len() >= 6,
+        &hits.join(", "),
+    );
+
+    // The gate lives in the datastore: a member cannot store a free-text error, a path as an agent name,
+    // a text reason on a rejection, or delete a row.
+    let agent_db = gw_store::connect_member(
+        owner.url(),
+        gw_store::GLOBAL_NS,
+        "agent",
+        &owner.agent_pass(gw_store::GLOBAL_NS),
+    )?;
+    let none = serde_json::Map::new();
+    let bogus_error = agent_db.query(
+        "CREATE hook_event SET session = 's', hook = 'Stop', decision = 'approve', error_code = 'bogus' RETURN VALUE id;",
+        &none,
+        Some(1),
+    );
+    let path_agent = agent_db.query(
+        "CREATE hook_event SET session = 's', hook = 'Stop', decision = 'approve', agent = 'C:/Users/x' RETURN VALUE id;",
+        &none,
+        Some(1),
+    );
+    let text_reason = agent_db.query(
+        "CREATE rejection SET surface = 'note', reason = 'password=hunter2 was refused' RETURN VALUE id;",
+        &none,
+        Some(1),
+    );
+    let bad_class = agent_db.query(
+        "CREATE session:canary SET machine = 'm', client = 'claude-code', cwd_class = 'C:/Users/x' RETURN VALUE id;",
+        &none,
+        Some(1),
+    );
+    c.check(
+        "the datastore refuses an unknown error code, a path as an agent name, a text reason and a path as a cwd class",
+        bogus_error.is_err() && path_agent.is_err() && text_reason.is_err() && bad_class.is_err(),
+        &format!("{bogus_error:?} {path_agent:?} {text_reason:?} {bad_class:?}"),
+    );
+    let before = owner.hook_events_since(None)?.len();
+    let _ = agent_db.query("DELETE hook_event;", &none, None);
+    let _ = agent_db.query("UPDATE hook_event SET decision = 'allow';", &none, None);
+    let after = owner.hook_events_since(None)?;
+    c.check(
+        "a member's DELETE and UPDATE on hook_event change nothing",
+        after.len() == before && before > 0 && after.iter().any(|e| e["decision"] == "block"),
+        &format!("{before} before, {} after", after.len()),
+    );
+
+    // Retention: root prunes rows older than the window and nothing newer.
+    let root_db = gw_store::connect_root(owner.url(), gw_store::GLOBAL_NS, "root", ROOT_PASS)?;
+    root_db.query(
+        "CREATE hook_event SET session = 'old', hook = 'Stop', decision = 'approve', at = <datetime>'2020-01-01T00:00:00Z' RETURN VALUE id;",
+        &none,
+        Some(1),
+    )?;
+    let pruned = owner.prune_telemetry()?;
+    let left = owner.hook_events_since(None)?;
+    c.check(
+        "prune_telemetry removes the hook_event row older than the window and keeps every newer one",
+        pruned == [1, 0, 0] && left.len() == before && !left.iter().any(|e| e["session"] == "old"),
+        &format!("pruned {pruned:?}; {} rows left of {before}", left.len()),
+    );
     Ok(())
+}
+
+/// The sources (name, text) that hold the canary. Empty means the hooks kept nothing they were given.
+fn canary_hits(sources: &[(String, String)]) -> Vec<String> {
+    sources
+        .iter()
+        .filter(|(_, text)| text.contains(CANARY))
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
@@ -1394,7 +1555,18 @@ fn kill_pid(pid: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::receipt_in;
+    use super::{CANARY, canary_hits, receipt_in};
+
+    #[test]
+    fn the_canary_check_goes_red_when_a_source_holds_it() {
+        let clean = vec![("rows".to_owned(), r#"{"cwd_class":"registered"}"#.to_owned())];
+        assert!(canary_hits(&clean).is_empty());
+        let leaked = vec![
+            ("rows".to_owned(), "ok".to_owned()),
+            ("stderr".to_owned(), format!("reading C:/x/{CANARY}/t.jsonl failed")),
+        ];
+        assert_eq!(canary_hits(&leaked), ["stderr"]);
+    }
 
     #[test]
     fn finds_the_receipt_id_after_the_label() {

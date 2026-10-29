@@ -23,7 +23,6 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | Rust crate `clap` | MIT OR Apache-2.0 | The groundworks command line | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `flate2` | MIT OR Apache-2.0 | Gzip of the store's daily exports (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `fs2` | MIT OR Apache-2.0 | Free space of the store's volume, read by the supervisor (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
-| Rust crate `hmac` | MIT OR Apache-2.0 | HMAC-SHA256 of a denied command in hook telemetry (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `getrandom` | MIT OR Apache-2.0 | Store credentials from OS randomness | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `regex` | MIT OR Apache-2.0 | Config parsing (gw-core), estate scan globs (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `rmcp` | Apache-2.0 | The Rust MCP SDK: the groundworks MCP server | Compiled into binaries built from `rust/`; no binary is distributed |

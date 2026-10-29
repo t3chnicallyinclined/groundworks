@@ -1,7 +1,8 @@
 //! The plugin's hooks (`groundworks hook <event>`): Claude Code calls this binary at SessionStart,
-//! PreToolUse (Bash), Stop and SubagentStop with the hook's JSON on stdin, and reads the hook's JSON
-//! from stdout (decision 1itizcerhaj5x1mjfyj2, 2026-10-29). Each run is one process, so everything here
-//! is blocking and quick: no model, one store round trip or two, and never a server start.
+//! PreToolUse, Stop and SubagentStop with the hook's JSON on stdin, and reads the hook's JSON from
+//! stdout (decision 1itizcerhaj5x1mjfyj2, 2026-10-29; shape reviewed in team/security REVIEW.md and
+//! TELEMETRY-POLICY.md). Each run is one process, so everything here is blocking and quick: no model,
+//! one store round trip or two, and never a server start.
 //!
 //! What the hooks hold to:
 //! - A session always starts. SessionStart prints one visible notice when the store is down or the
@@ -10,21 +11,22 @@
 //! - Stop blocks once (it honours `stop_hook_active`) when the session used tools that change things
 //!   and recorded nothing in the project's journal since it started; `[enforce] stop = "warn"` in
 //!   groundworks.toml, or `GROUNDWORKS_ENFORCE=warn`, turns the block into a system message.
-//! - Telemetry is counts, ids and timings (`hook_event`, `session` in the global namespace). No command
-//!   text, no tool input, no transcript text, no file contents. A command is identified only by an HMAC
-//!   keyed with `<home>/secrets/hook_hmac.key`.
+//! - The transcript is read for COUNTS ONLY: the `type` and `name` of tool_use blocks and the row
+//!   timestamps. No `input`, `content`, `text` or `result` is ever dereferenced, and the transcript path
+//!   (which encodes the working directory) is opened and written nowhere.
+//! - Telemetry is codes, counts, ids and timestamps (`hook_event`, `session` in the global namespace,
+//!   schema 0014). No command text, no path, no tool input, no error text: a hook's own failure is an
+//!   `error_code` from a fixed list plus the length of the text that was not stored. Stderr carries the
+//!   same codes, never the text, because on a non-zero exit stderr is fed back to the model.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
-use hmac::{Hmac, Mac};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::Sha256;
 
 use crate::home::{EnforceMode, Home, find_home};
 use crate::registry::Registry;
@@ -39,9 +41,6 @@ pub const NO_WRITES_REASON: &str = "Record what you learned in the project journ
                                     status/decision/gotcha/eliminated), or record one status entry saying nothing new was learned.";
 /// What the Stop hook says when the store was down for the whole session.
 pub const STORE_DOWN_REASON: &str = "store down: nothing this session was recorded";
-
-/// The error text kept on a hook_event row is cut here, after redaction.
-const ERROR_CAP: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -73,6 +72,41 @@ impl std::str::FromStr for Event {
             "SubagentStop" => Event::SubagentStop,
             other => bail!("unknown hook event {other:?} (SessionStart, PreToolUse, Stop, SubagentStop)"),
         })
+    }
+}
+
+/// A hook's own failure, as the code the row keeps (TELEMETRY-POLICY.md). The text behind it is
+/// counted (`error_len`) and stored nowhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    StoreDown,
+    BinaryMissing,
+    Timeout,
+    BadHookInput,
+    RegexCompile,
+    RulesFileMissing,
+    TranscriptUnreadable,
+    ShowFailed,
+    EnvFileUnwritable,
+    RefusedSecretShaped,
+    Other,
+}
+
+impl ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorCode::StoreDown => "store_down",
+            ErrorCode::BinaryMissing => "binary_missing",
+            ErrorCode::Timeout => "timeout",
+            ErrorCode::BadHookInput => "bad_hook_input",
+            ErrorCode::RegexCompile => "regex_compile",
+            ErrorCode::RulesFileMissing => "rules_file_missing",
+            ErrorCode::TranscriptUnreadable => "transcript_unreadable",
+            ErrorCode::ShowFailed => "show_failed",
+            ErrorCode::EnvFileUnwritable => "env_file_unwritable",
+            ErrorCode::RefusedSecretShaped => "refused_secret_shaped",
+            ErrorCode::Other => "other",
+        }
     }
 }
 
@@ -131,6 +165,12 @@ impl Rules {
         let mut rules = Vec::with_capacity(file.rule.len());
         for r in file.rule {
             ensure!(seen.insert(r.id.clone()), "deny.toml: rule id {:?} is used twice", r.id);
+            ensure!(
+                r.id.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "deny.toml: rule id {:?} is not [a-z0-9-]",
+                r.id
+            );
             let action = match r.action.as_str() {
                 "deny" => Action::Deny,
                 "warn" => Action::Warn,
@@ -217,49 +257,6 @@ impl Rules {
     }
 }
 
-// ---- redaction and the command HMAC --------------------------------------------------------------
-
-/// Anything that could be a token is replaced before an error text is kept: `Bearer <x>` and any run
-/// of 32 or more identifier characters. The result is cut at [`ERROR_CAP`] characters.
-pub fn redact(text: &str) -> String {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"Bearer \S+|[A-Za-z0-9_\-]{32,}").expect("redaction regex"));
-    re.replace_all(text, "<redacted>").chars().take(ERROR_CAP).collect()
-}
-
-/// The 32-byte HMAC key at `<home>/secrets/hook_hmac.key` (hex), created once and never printed.
-pub fn hmac_key(home: &Home) -> Result<Vec<u8>> {
-    let path = home.path("secrets").join("hook_hmac.key");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        let bytes = unhex(text.trim()).with_context(|| format!("{} is not a hex key", path.display()))?;
-        ensure!(bytes.len() == 32, "{} is not 32 bytes", path.display());
-        return Ok(bytes);
-    }
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
-    std::fs::create_dir_all(home.path("secrets"))?;
-    std::fs::write(&path, crate::store::hex(&bytes))?;
-    Ok(bytes.to_vec())
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect()
-}
-
-/// HMAC-SHA256 of the command under the home's key, as hex: the same command counts the same way, and
-/// nobody without the key can test a guess against the stored value.
-pub fn command_hmac(key: &[u8], command: &str) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes any key length");
-    mac.update(command.as_bytes());
-    crate::store::hex(&mac.finalize().into_bytes())
-}
-
 // ---- the transcript ---------------------------------------------------------------------------------
 
 /// Counts of tool_use blocks in a transcript. Only names are read; inputs never are.
@@ -303,6 +300,7 @@ fn classify(name: &str) -> Option<fn(&mut ToolUses)> {
 
 /// Count the tool_use blocks of assistant messages at or after `since` (RFC 3339, compared to the second).
 /// A line that is not JSON, or has no timestamp, is counted: the hook would rather ask once too often.
+/// Reads `type`, `timestamp` and each block's `type` and `name`; nothing else.
 pub fn count_tool_uses(transcript: &str, since: Option<&str>) -> ToolUses {
     let since = since.map(|s| &s[..s.len().min(19)]);
     let mut t = ToolUses::default();
@@ -358,8 +356,31 @@ pub struct Input {
 /// The decision a hook came to, as the row it logs and the JSON it prints.
 pub struct Outcome {
     pub decision: &'static str,
-    pub rule: Option<String>,
+    pub rule_id: Option<String>,
     pub output: Value,
+}
+
+/// Where a session started, without saying where (TELEMETRY-POLICY.md: `cwd` is never stored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CwdClass {
+    Registered,
+    WorkspaceUnregistered,
+    OutsideWorkspace,
+    /// Under a `scan.local_only` glob: the class is recorded and nothing else about the path.
+    LocalOnly,
+    Home,
+}
+
+impl CwdClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CwdClass::Registered => "registered",
+            CwdClass::WorkspaceUnregistered => "workspace-unregistered",
+            CwdClass::OutsideWorkspace => "outside-workspace",
+            CwdClass::LocalOnly => "local-only",
+            CwdClass::Home => "home",
+        }
+    }
 }
 
 struct Ctx {
@@ -369,7 +390,9 @@ struct Ctx {
     home: Option<Home>,
     store: Option<Store>,
     project: Option<String>,
-    errors: Vec<String>,
+    cwd_class: CwdClass,
+    /// The hook's own failures: the code kept, the text's length counted, the text itself dropped.
+    errors: Vec<(ErrorCode, usize)>,
 }
 
 impl Ctx {
@@ -379,43 +402,61 @@ impl Ctx {
 
     fn agent(&self) -> String {
         match self.event {
-            Event::SubagentStop => self
-                .input
-                .agent_type
-                .clone()
-                .or_else(|| self.input.agent_id.clone())
-                .unwrap_or_else(|| "subagent".to_owned()),
+            Event::SubagentStop => plain_name(
+                self.input
+                    .agent_type
+                    .as_deref()
+                    .or(self.input.agent_id.as_deref())
+                    .unwrap_or("subagent"),
+            ),
             _ => "main".to_owned(),
         }
     }
 
-    fn note_error(&mut self, what: &str, e: &anyhow::Error) {
-        let text = format!("{what}: {e:#}");
-        eprintln!("groundworks hook {}: {text}", self.event.name());
-        self.errors.push(text);
+    /// Keep the code and the length; print the code. The error's text goes nowhere (it can carry a
+    /// path or a command, and stderr reaches the model on a non-zero exit).
+    fn note_error(&mut self, code: ErrorCode, e: &anyhow::Error) {
+        let len = format!("{e:#}").chars().count();
+        eprintln!(
+            "groundworks hook {}: {} ({len} chars of detail not shown)",
+            self.event.name(),
+            code.as_str()
+        );
+        self.errors.push((code, len));
     }
 
-    /// Write the hook_event row; a failure here goes to stderr and nowhere else.
-    fn log(&mut self, outcome: &Outcome, uses: ToolUses, writes: u64, hmac: Option<String>) {
+    /// Write the hook_event row; a failure here goes to stderr as a code and nowhere else.
+    fn log(&mut self, outcome: &Outcome, uses: ToolUses, writes: u64) {
         let Some(store) = &self.store else { return };
-        let error = (!self.errors.is_empty()).then(|| redact(&self.errors.join(" | ")));
         let row = HookEventIn {
-            session: self.input.session_id.clone(),
+            session: self.input.session_id.chars().take(80).collect(),
             project: self.project.clone(),
             agent: self.agent(),
             hook: self.event.name(),
             decision: outcome.decision,
-            rule: outcome.rule.clone(),
+            rule_id: outcome.rule_id.clone(),
             tool_uses: uses.json(),
             journal_writes_since_start: writes,
             latency_ms: self.latency_ms(),
-            error,
-            command_hmac: hmac,
+            error_code: self.errors.first().map(|(c, _)| c.as_str()),
+            error_exit: None,
+            error_len: (!self.errors.is_empty()).then(|| self.errors.iter().map(|(_, n)| *n as u64).sum()),
         };
-        if let Err(e) = store.hook_event(&row) {
-            eprintln!("groundworks hook {}: hook_event not recorded: {e:#}", self.event.name());
+        if store.hook_event(&row).is_err() {
+            eprintln!("groundworks hook {}: hook_event not recorded", self.event.name());
         }
     }
+}
+
+/// A name a row may hold (`session.agent`, `rejection.by`): 1-40 of `[A-Za-z0-9 _-]`, else `other`.
+pub fn plain_name(name: &str) -> String {
+    let name = name.trim();
+    let ok = !name.is_empty()
+        && name.chars().count() <= 40
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-'));
+    if ok { name.to_owned() } else { "other".to_owned() }
 }
 
 /// Run one hook: `input` is stdin's JSON; the returned value is printed to stdout. Never panics on bad
@@ -426,7 +467,8 @@ pub fn run(event: Event, input: &str, rules_path: Option<&Path>) -> Value {
     let input: Input = match serde_json::from_str(input) {
         Ok(v) => v,
         Err(e) => {
-            errors.push(format!("stdin is not hook JSON: {e}"));
+            eprintln!("groundworks hook {}: bad_hook_input", event.name());
+            errors.push((ErrorCode::BadHookInput, e.to_string().len()));
             Input::default()
         }
     };
@@ -434,7 +476,8 @@ pub fn run(event: Event, input: &str, rules_path: Option<&Path>) -> Value {
     let home = match home_for(cwd.as_deref()) {
         Ok(h) => h,
         Err(e) => {
-            errors.push(format!("no home: {e:#}"));
+            eprintln!("groundworks hook {}: other (home)", event.name());
+            errors.push((ErrorCode::Other, format!("{e:#}").len()));
             None
         }
     };
@@ -442,16 +485,29 @@ pub fn run(event: Event, input: &str, rules_path: Option<&Path>) -> Value {
         Some(h) => match Store::open_if_up(h) {
             Ok(s) => s,
             Err(e) => {
-                errors.push(format!("store: {e:#}"));
+                eprintln!("groundworks hook {}: store_down", event.name());
+                errors.push((ErrorCode::StoreDown, format!("{e:#}").len()));
                 None
             }
         },
         None => None,
     };
-    let project = std::env::var("GROUNDWORKS_PROJECT")
-        .ok()
-        .filter(|p| !p.is_empty())
-        .or_else(|| home.as_ref().and_then(|h| project_for(h, cwd.as_deref())));
+    let cwd_class = home
+        .as_ref()
+        .map_or(CwdClass::OutsideWorkspace, |h| classify_cwd(h, cwd.as_deref()));
+    let project = match cwd_class {
+        // A fenced-off folder is never resolved to anything, whatever the environment says.
+        CwdClass::LocalOnly => None,
+        _ => std::env::var("GROUNDWORKS_PROJECT")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .or_else(|| home.as_ref().and_then(|h| project_for(h, cwd.as_deref()))),
+    };
+    let cwd_class = if project.is_some() {
+        CwdClass::Registered
+    } else {
+        cwd_class
+    };
     let mut ctx = Ctx {
         event,
         input,
@@ -459,6 +515,7 @@ pub fn run(event: Event, input: &str, rules_path: Option<&Path>) -> Value {
         home,
         store,
         project,
+        cwd_class,
         errors,
     };
     match event {
@@ -499,6 +556,45 @@ pub fn project_for(home: &Home, cwd: Option<&Path>) -> Option<String> {
         })
         .max()
         .map(|(_, name)| name)
+}
+
+/// Where `cwd` is, as a class: a `scan.local_only` match first (recorded as that and nothing else), the
+/// home itself, inside the workspace, or outside it. Registered projects are decided by the caller.
+pub fn classify_cwd(home: &Home, cwd: Option<&Path>) -> CwdClass {
+    let Some(cwd) = cwd else {
+        return CwdClass::OutsideWorkspace;
+    };
+    let text = cwd.display().to_string();
+    let local_only = home
+        .config
+        .scan
+        .local_only
+        .iter()
+        .map(|g| crate::scan::Glob::new(g))
+        .any(|g| {
+            // The glob names a folder; the session may be in it or below it.
+            cwd.ancestors().any(|a| {
+                g.matches(&a.display().to_string()) || g.matches(&a.file_name().unwrap_or_default().to_string_lossy())
+            })
+        })
+        || home
+            .config
+            .scan
+            .local_only
+            .iter()
+            .any(|g| crate::scan::Glob::new(g).matches(&text));
+    if local_only {
+        return CwdClass::LocalOnly;
+    }
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let cwd = canon(cwd);
+    if cwd.starts_with(canon(&home.root)) {
+        CwdClass::Home
+    } else if cwd.starts_with(canon(&home.workspace)) {
+        CwdClass::WorkspaceUnregistered
+    } else {
+        CwdClass::OutsideWorkspace
+    }
 }
 
 /// The mode for `event`: the environment first, then `[enforce]` in groundworks.toml, then block.
@@ -553,37 +649,55 @@ fn session_start(ctx: &mut Ctx) -> Value {
     let home = ctx.home.take();
     let store = ctx.store.take();
     let Some(home) = home else {
-        let notice = format!(
-            "Groundworks: no home found from {} (no .groundworks/groundworks.toml above it, GROUNDWORKS_HOME unset); nothing recorded.",
-            ctx.input.cwd.as_deref().unwrap_or("?")
-        );
+        let notice = "Groundworks: this folder is under no Groundworks home (no .groundworks/groundworks.toml above \
+                      it and GROUNDWORKS_HOME is unset); nothing is recorded."
+            .to_owned();
         return context_output(Event::SessionStart, None, Some(notice));
     };
+    let session_id = ctx.input.session_id.clone();
+    let resumed = matches!(ctx.input.source.as_deref(), Some("resume" | "compact" | "clear"));
+    let cwd_class = ctx.cwd_class;
+    let row = |project: Option<String>, injected: usize, latency: i64| SessionIn {
+        id: session_id.chars().take(80).collect(),
+        project,
+        machine: crate::home::machine(),
+        client: client_name(),
+        agent: "main".to_owned(),
+        started_at: now.clone(),
+        cwd_class,
+        injected_entries: injected as u64,
+        store_ok: true,
+        hook_latency_ms: latency,
+    };
     let Some(project) = ctx.project.clone() else {
-        let notice = format!(
-            "Groundworks: {} is not a registered project (project_register or /groundworks:init to bring it in); this session is not recorded.",
-            ctx.input.cwd.as_deref().unwrap_or("?")
-        );
+        let notice = "Groundworks: this folder is not a registered project (project_register or /groundworks:init to \
+                      bring it in); this session is not recorded against a project."
+            .to_owned();
+        if let Some(store) = &store {
+            open_session(store, &row(None, 0, ctx.latency_ms()));
+        }
         let outcome = Outcome {
             decision: "noop",
-            rule: Some("not-registered".to_owned()),
+            rule_id: Some("not-registered".to_owned()),
             output: context_output(Event::SessionStart, None, Some(notice)),
         };
-        ctx.log(&outcome, ToolUses::default(), 0, None);
+        ctx.home = Some(home);
+        ctx.store = store;
+        ctx.log(&outcome, ToolUses::default(), 0);
         return outcome.output;
     };
-    let session_id = ctx.input.session_id.clone();
     if let Err(e) = persist_env(&[
         ("GROUNDWORKS_PROJECT", &project),
         ("GROUNDWORKS_SESSION_ID", &session_id),
         ("GROUNDWORKS_SESSION_START", &now),
     ]) {
-        ctx.note_error("CLAUDE_ENV_FILE", &e);
+        ctx.note_error(ErrorCode::EnvFileUnwritable, &e);
     }
     let Some(store) = store else {
         let _ = persist_env(&[("GROUNDWORKS_DOWN", "1")]);
         let notice = format!(
-            "Groundworks: store down at {} for {project}: the journal could not be read and nothing this session will be recorded (start it: groundworks store status).",
+            "Groundworks: store down at {}: the journal of {project} could not be read and nothing this session \
+             will be recorded (check it with: groundworks store status).",
             crate::store::store_url(&home)
         );
         ctx.home = Some(home);
@@ -592,56 +706,56 @@ fn session_start(ctx: &mut Ctx) -> Value {
     let (context, injected) = match crate::ops::session_brief(&home, &store, &project, 10) {
         Ok(pair) => pair,
         Err(e) => {
-            ctx.note_error("journal", &e);
+            ctx.note_error(ErrorCode::ShowFailed, &e);
             (
-                format!("Groundworks: the journal of {project} could not be read ({e:#})."),
+                format!("Groundworks: the journal of {project} could not be read (show_failed)."),
                 0,
             )
         }
     };
-    let row = SessionIn {
-        id: session_id,
-        project: project.clone(),
-        machine: crate::home::machine(),
-        client: client_name(),
-        agent: "main".to_owned(),
-        started_at: now,
-        cwd: ctx.input.cwd.clone().unwrap_or_default(),
-        injected_entries: injected as u64,
-        store_ok: true,
-        hook_latency_ms: ctx.latency_ms(),
-    };
-    let resumed = matches!(ctx.input.source.as_deref(), Some("resume" | "compact" | "clear"));
-    match store.session_exists(&row.id) {
-        Ok(true) => {}
-        Ok(false) => {
-            if let Err(e) = store.session_start(&row) {
-                ctx.note_error("session row", &e);
-            }
-        }
-        Err(e) => ctx.note_error("session lookup", &e),
+    if !resumed {
+        open_session(&store, &row(Some(project.clone()), injected, ctx.latency_ms()));
     }
     let notice = ctx
         .errors
         .first()
-        .map(|e| format!("Groundworks: {} (the session continues)", redact(e)));
+        .map(|(code, _)| format!("Groundworks: {} (the session continues)", code.as_str()));
     let outcome = Outcome {
         decision: if resumed { "noop" } else { "allow" },
-        rule: None,
+        rule_id: None,
         output: context_output(Event::SessionStart, Some(context), notice),
     };
     ctx.home = Some(home);
     ctx.store = Some(store);
-    ctx.log(&outcome, ToolUses::default(), 0, None);
+    ctx.log(&outcome, ToolUses::default(), 0);
     outcome.output
 }
 
-/// Which client runs this session: `GROUNDWORKS_CLIENT`, else Claude Code's own entrypoint variable.
+/// Create the session row unless one with this id exists (a resumed session starts again).
+fn open_session(store: &Store, row: &SessionIn) {
+    match store.session_exists(&row.id) {
+        Ok(true) => {}
+        Ok(false) => {
+            if store.session_start(row).is_err() {
+                eprintln!("groundworks hook SessionStart: session row not recorded");
+            }
+        }
+        Err(_) => eprintln!("groundworks hook SessionStart: session lookup failed"),
+    }
+}
+
+/// Which client runs this session, from the fixed list: `GROUNDWORKS_CLIENT` when it names one, else
+/// Claude Code's own entrypoint variable, else `claude-code` (the hook only runs under Claude Code).
 fn client_name() -> String {
+    const KNOWN: [&str; 4] = ["claude-code", "copilot", "vscode", "cli"];
     if let Ok(c) = std::env::var("GROUNDWORKS_CLIENT")
         && !c.is_empty()
     {
-        return c;
+        return if KNOWN.contains(&c.as_str()) {
+            c
+        } else {
+            "other".to_owned()
+        };
     }
     match std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref() {
         Some(e) if e.contains("vscode") => "vscode".to_owned(),
@@ -659,46 +773,44 @@ fn pre_tool_use(ctx: &mut Ctx, rules_path: Option<&Path>) -> Value {
         .as_ref()
         .and_then(|t| t["command"].as_str())
         .unwrap_or("");
-    let hmac = ctx.home.as_ref().and_then(|h| match hmac_key(h) {
-        Ok(key) => Some(command_hmac(&key, command)),
-        Err(e) => {
-            eprintln!("groundworks hook PreToolUse: no HMAC key: {e:#}");
-            None
-        }
-    });
     let mode = mode(ctx.home.as_ref(), Event::PreToolUse);
     let outcome = match Rules::load(rules_path) {
         Err(e) => {
             // Fail closed: a guard that cannot read its rules blocks (principle 8).
-            ctx.note_error("rules", &e);
+            let code = if format!("{e:#}").contains("regex") {
+                ErrorCode::RegexCompile
+            } else {
+                ErrorCode::RulesFileMissing
+            };
+            ctx.note_error(code, &e);
             Outcome {
                 decision: "deny",
-                rule: Some("rules-unloadable".to_owned()),
+                rule_id: Some("rules-unloadable".to_owned()),
                 output: deny_output(&format!(
                     "Groundworks: the deny list could not be loaded ({}); every Bash call is refused until it is fixed.",
-                    redact(&format!("{e:#}"))
+                    code.as_str()
                 )),
             }
         }
         Ok(rules) => match rules.check(command) {
             None => Outcome {
                 decision: "allow",
-                rule: None,
+                rule_id: None,
                 output: json!({}),
             },
             Some(rule) if rule.action == Action::Deny && (mode == EnforceMode::Block || rule.hard) => Outcome {
                 decision: "deny",
-                rule: Some(rule.id.clone()),
+                rule_id: Some(rule.id.clone()),
                 output: deny_output(&rule.reason),
             },
             Some(rule) => Outcome {
                 decision: "warn",
-                rule: Some(rule.id.clone()),
+                rule_id: Some(rule.id.clone()),
                 output: json!({"systemMessage": format!("Groundworks ({}): {}", rule.id, rule.reason)}),
             },
         },
     };
-    ctx.log(&outcome, ToolUses::default(), 0, hmac);
+    ctx.log(&outcome, ToolUses::default(), 0);
     outcome.output
 }
 
@@ -730,18 +842,23 @@ fn stop(ctx: &mut Ctx) -> Value {
     let Some(project) = ctx.project.clone() else {
         let outcome = Outcome {
             decision: "noop",
-            rule: Some("not-registered".to_owned()),
+            rule_id: Some("not-registered".to_owned()),
             output: json!({"decision": "approve"}),
         };
-        ctx.log(&outcome, ToolUses::default(), 0, None);
+        ctx.log(&outcome, ToolUses::default(), 0);
         return outcome.output;
     };
-    let transcript = ctx
-        .input
-        .transcript_path
-        .as_deref()
-        .map(|p| std::fs::read_to_string(p).unwrap_or_default())
-        .unwrap_or_default();
+    // The transcript is opened for counts only (names and timestamps); its path is written nowhere.
+    let transcript = match ctx.input.transcript_path.as_deref() {
+        Some(p) => match std::fs::read_to_string(p) {
+            Ok(text) => text,
+            Err(e) => {
+                ctx.note_error(ErrorCode::TranscriptUnreadable, &anyhow::Error::from(e));
+                String::new()
+            }
+        },
+        None => String::new(),
+    };
     let start = std::env::var("GROUNDWORKS_SESSION_START")
         .ok()
         .filter(|s| !s.is_empty())
@@ -757,7 +874,7 @@ fn stop(ctx: &mut Ctx) -> Value {
         (Some(store), Some(start)) => match store.facts_since(&project, start) {
             Ok(rows) => Some(rows.len() as u64),
             Err(e) => {
-                ctx.note_error("facts_since", &e);
+                ctx.note_error(ErrorCode::StoreDown, &e);
                 None
             }
         },
@@ -765,7 +882,7 @@ fn stop(ctx: &mut Ctx) -> Value {
             // No start known: any entry at all counts, rather than blocking a session that did record.
             Ok(rows) => Some(rows.len() as u64),
             Err(e) => {
-                ctx.note_error("facts", &e);
+                ctx.note_error(ErrorCode::StoreDown, &e);
                 None
             }
         },
@@ -781,25 +898,25 @@ fn stop(ctx: &mut Ctx) -> Value {
     let outcome = match (decision, mode) {
         ("block", EnforceMode::Warn) => Outcome {
             decision: "warn",
-            rule: rule.map(str::to_owned),
+            rule_id: rule.map(str::to_owned),
             output: json!({"decision": "approve", "systemMessage": format!("Groundworks ({}): {reason}", rule.unwrap_or(""))}),
         },
         ("block", EnforceMode::Block) => Outcome {
             decision: "block",
-            rule: rule.map(str::to_owned),
+            rule_id: rule.map(str::to_owned),
             output: json!({"decision": "block", "reason": format!("Groundworks ({}): {reason}", rule.unwrap_or(""))}),
         },
         _ => Outcome {
             decision: "approve",
-            rule: None,
+            rule_id: None,
             output: json!({"decision": "approve"}),
         },
     };
-    ctx.log(&outcome, uses, writes.unwrap_or(0), None);
+    ctx.log(&outcome, uses, writes.unwrap_or(0));
     outcome.output
 }
 
-/// Telemetry read back for the pulse: hook events grouped by session, newest window first.
+/// Telemetry read back for the pulse: hook events grouped by session.
 pub fn events_by_session(rows: &[Value]) -> BTreeMap<String, Vec<&Value>> {
     let mut by: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for r in rows {
@@ -831,7 +948,7 @@ mod tests {
         );
         let hit = rules
             .check("kubectl get secret regcred -n default -o yaml")
-            .expect("the placeholder rule");
+            .expect("the secret-read rule");
         assert_eq!(hit.action, Action::Deny);
         assert!(
             rules
@@ -884,6 +1001,7 @@ samples_allow = ["ls", "cat"]
         assert!(Rules::parse("[[rule]]\nid='a'\naction='deny'\nregex='('\nreason='r'").is_err());
         assert!(Rules::parse("[[rule]]\nid='a'\naction='maybe'\nregex='a'\nreason='r'").is_err());
         assert!(Rules::parse("[[rule]]\nid='a'\naction='deny'\nregex='a'\nreason='r'\nextra=1").is_err());
+        assert!(Rules::parse("[[rule]]\nid='Bad Id'\naction='deny'\nregex='a'\nreason='r'").is_err());
     }
 
     #[test]
@@ -912,25 +1030,13 @@ samples_allow = ["ssh dev", "ls"]
     }
 
     #[test]
-    fn redaction_hides_tokens_and_caps_length() {
-        let key = ["AK", "IAIOSFODNN7EXAMPLE"].concat().repeat(2);
-        let r = redact(&format!("curl -H 'Authorization: Bearer abc.def' x; key={key} ok"));
-        assert_eq!(r, "curl -H 'Authorization: <redacted> x; key=<redacted> ok");
-        assert_eq!(redact(&"a".repeat(31)), "a".repeat(31));
-        assert_eq!(redact(&"a".repeat(32)), "<redacted>");
-        assert_eq!(redact(&"word ".repeat(100)).chars().count(), ERROR_CAP);
-    }
-
-    #[test]
-    fn the_hmac_is_keyed_and_hex() {
-        let a = command_hmac(b"key-one", "git push");
-        let b = command_hmac(b"key-two", "git push");
-        assert_eq!(a.len(), 64);
-        assert_ne!(a, b);
-        assert_eq!(a, command_hmac(b"key-one", "git push"));
-        assert_eq!(unhex("00ff").unwrap(), vec![0, 255]);
-        assert!(unhex("0").is_none());
-        assert!(unhex("zz").is_none());
+    fn names_on_rows_are_plain_or_other() {
+        assert_eq!(plain_name("gw-engineer"), "gw-engineer");
+        assert_eq!(plain_name("main session"), "main session");
+        assert_eq!(plain_name("C:/Users/x"), "other");
+        assert_eq!(plain_name(""), "other");
+        assert_eq!(plain_name(&"a".repeat(41)), "other");
+        assert_eq!(plain_name("x=$(curl evil)"), "other");
     }
 
     const TRANSCRIPT: &str = r#"{"type":"user","timestamp":"2026-10-29T10:00:00.000Z","message":{"role":"user","content":"hi"}}
@@ -990,5 +1096,34 @@ not json at all
     fn events_are_parsed_from_the_cli_name() {
         assert_eq!("Stop".parse::<Event>().unwrap(), Event::Stop);
         assert!("PostToolUse".parse::<Event>().is_err());
+    }
+
+    #[test]
+    fn every_error_code_is_in_the_schema_list() {
+        let schema = include_str!("../../gw-store/schema/0014_global_telemetry.surql");
+        for code in [
+            ErrorCode::StoreDown,
+            ErrorCode::BinaryMissing,
+            ErrorCode::Timeout,
+            ErrorCode::BadHookInput,
+            ErrorCode::RegexCompile,
+            ErrorCode::RulesFileMissing,
+            ErrorCode::TranscriptUnreadable,
+            ErrorCode::ShowFailed,
+            ErrorCode::EnvFileUnwritable,
+            ErrorCode::RefusedSecretShaped,
+            ErrorCode::Other,
+        ] {
+            assert!(schema.contains(&format!("'{}'", code.as_str())), "{}", code.as_str());
+        }
+        for class in [
+            CwdClass::Registered,
+            CwdClass::WorkspaceUnregistered,
+            CwdClass::OutsideWorkspace,
+            CwdClass::LocalOnly,
+            CwdClass::Home,
+        ] {
+            assert!(schema.contains(&format!("'{}'", class.as_str())), "{}", class.as_str());
+        }
     }
 }

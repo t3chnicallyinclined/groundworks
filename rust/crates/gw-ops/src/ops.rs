@@ -174,10 +174,16 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
     let id = match written {
         Ok(id) => id,
         Err(e) => {
-            // The refusal is counted (pulse: store rejections) by its first clause only: never the text.
-            let reason = crate::hook::redact(rejection_reason(&format!("{e:#}")));
-            if let Err(log) = store.record_rejection(note.surface, Some(&project.name), Some(note.by), &reason) {
-                eprintln!("rejection not recorded: {log:#}");
+            // The refusal is counted (pulse: store rejections) as a code: never the text.
+            let row = store::RejectionIn {
+                surface: note.surface,
+                project: Some(&project.name),
+                by: Some(note.by),
+                reason: rejection_code(&format!("{e:#}")),
+                ..store::RejectionIn::default()
+            };
+            if store.record_rejection(&row).is_err() {
+                eprintln!("rejection not recorded");
             }
             return Err(e);
         }
@@ -189,15 +195,23 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
     Ok(format!("recorded {id}: {recorded}"))
 }
 
-/// The first clause of a refusal (`CONFIRMED needs evidence: ...` -> `CONFIRMED needs evidence`), so a
-/// rejection row names the rule that fired and nothing of what was refused.
-fn rejection_reason(error: &str) -> &str {
-    error
-        .split([':', ';', '\n'])
-        .next()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("refused")
+/// The store rule a refusal came from, as the code a rejection row keeps; nothing of what was refused.
+pub fn rejection_code(error: &str) -> &'static str {
+    if error.starts_with("CONFIRMED needs evidence") {
+        "confirmed-needs-evidence"
+    } else if error.starts_with("quote not found word for word") {
+        "quote-not-found"
+    } else if error.contains(" is isolated") {
+        "isolated-project"
+    } else if error.contains("needs stance") || error.contains("needs attacks") {
+        "attack-needs-stance"
+    } else if error.contains("is not a fact id") || error.contains("not a receipt id") {
+        "bad-reference"
+    } else if error.starts_with("a fact needs text") || error.starts_with("a quote needs text") {
+        "empty-text"
+    } else {
+        "other"
+    }
 }
 
 /// What the SessionStart hook injects: the project line, then its journal with gotchas first (the newest
@@ -1050,20 +1064,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_rejection_keeps_the_rule_not_the_text() {
+    fn a_rejection_keeps_a_code_not_the_text() {
         assert_eq!(
-            rejection_reason("CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word"),
-            "CONFIRMED needs evidence"
+            rejection_code("CONFIRMED needs evidence: a receipt from run or gate, a quote found word for word"),
+            "confirmed-needs-evidence"
         );
         assert_eq!(
-            rejection_reason("quote not found word for word at notes.txt:2; the file says: \"secret line\""),
-            "quote not found word for word at notes.txt"
+            rejection_code("quote not found word for word at notes.txt:2; the file says: \"secret line\""),
+            "quote-not-found"
         );
         assert_eq!(
-            rejection_reason("proj_secret is isolated: it has a store of its own"),
-            "proj_secret is isolated"
+            rejection_code("proj_secret is isolated: it has a store of its own"),
+            "isolated-project"
         );
-        assert_eq!(rejection_reason("  "), "refused");
+        assert_eq!(rejection_code("something else entirely"), "other");
+        for code in [
+            "confirmed-needs-evidence",
+            "quote-not-found",
+            "isolated-project",
+            "other",
+        ] {
+            assert!(
+                code.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            );
+        }
     }
 
     #[test]
