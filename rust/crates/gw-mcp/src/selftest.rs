@@ -1044,6 +1044,7 @@ the parser now accepts empty input
     lens_frame_checks(exe, base, &home, &mut c)?;
     survey_checks(exe, base, &home, &server.url(), &mut c)?;
     promotion_checks(exe, base, &home, &mut c)?;
+    ruled_out_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1626,6 +1627,56 @@ fn promotion_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Res
             && report.contains("as INFERRED, not CONFIRMED: its only evidence quotes an agent report")
             && report.contains("[fact] INFERRED The gnu migration"),
         &format!("{said}\n--\n{report}"),
+    );
+    Ok(())
+}
+
+/// A ruled-out claim never reads as true (scholar-architect review, 2026-10-30; the failure DECISIONS.md
+/// fixed for the Python engine): an `eliminated` fact shows in an ask packet as RULED OUT with what ruled it
+/// out, never as a RECORDED FACT, and the session brief marks it RULED OUT too.
+fn ruled_out_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    let demo = base.join("work/demo");
+    let (home_env, experts_env, claude_env) = (
+        home.display().to_string(),
+        base.join("experts").display().to_string(),
+        base.join("claude").display().to_string(),
+    );
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let s = &mut client;
+    let (err, added) = s.call(
+        "journal_add",
+        json!({"project": "demo", "kind": "eliminated", "confidence": "INFERRED", "by": "selftest",
+               "text": "Resimulating every frame in the rollback was tried and ruled out",
+               "source": "measured three times slower on the fixture bench",
+               "quote": {"file": "docs/GUIDE.md", "line": 3, "text": "Rollback netcode resimulates confirmed frames."}}),
+    )?;
+    let (err_a, packet) = s.call(
+        "ask",
+        json!({"question": "resimulating every frame in the rollback", "project": "demo"}),
+    )?;
+    let start = json!({"session_id": "selftest-ruled-out", "cwd": demo.display().to_string(), "source": "startup",
+                       "hook_event_name": "SessionStart"});
+    let out = hook(exe, home, "SessionStart", &start, &[], None)?;
+    let brief = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    c.check(
+        "an eliminated fact reads RULED OUT with what ruled it out, in the ask packet and in the brief, never as a recorded fact",
+        !err && !err_a
+            && packet.contains("RULED OUT (INFERRED): Resimulating every frame in the rollback")
+            && packet.contains("what ruled it out: measured three times slower on the fixture bench")
+            && !packet.contains("RECORDED FACT (INFERRED): Resimulating every frame")
+            && brief.lines().any(|l| l.contains("RULED OUT:") && l.contains("Resimulating every frame")),
+        &format!("{added}\n--\n{packet}\n--\n{brief}"),
     );
     Ok(())
 }

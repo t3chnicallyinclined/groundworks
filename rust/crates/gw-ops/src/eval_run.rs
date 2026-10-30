@@ -611,11 +611,11 @@ fn one(
         })
         .collect();
     let first_gold_call = calls.iter().position(|c| c["gold"] == true);
-    let saw_fact = out["_calls"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|c| c["result"].as_str().is_some_and(|t| t.contains("RECORDED FACT")));
+    let saw_fact = out["_calls"].as_array().into_iter().flatten().any(|c| {
+        c["result"]
+            .as_str()
+            .is_some_and(|t| t.contains("RECORDED FACT") || t.contains("RULED OUT"))
+    });
     Ok(Row {
         id: q.id.clone(),
         arm: arm.to_owned(),

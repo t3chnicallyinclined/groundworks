@@ -279,8 +279,9 @@ pub fn session_brief(home: &Home, store: &Store, name: &str, limit: usize) -> Re
     for f in &entries {
         writeln!(
             body,
-            "- [{}] {}",
+            "- [{}] {}{}",
             f.signer(),
+            if f.kind == "eliminated" { "RULED OUT: " } else { "" },
             truncate_entry(&f.render(), BRIEF_ENTRY_CHARS)
         )?;
     }
@@ -1471,9 +1472,13 @@ pub fn search(home: &Home, store: &Store, q: crate::ask::Query<'_>) -> Result<St
     for h in &found.facts {
         writeln!(
             out,
-            "- RECORDED FACT ({}): {}\n    evidence {}:{}",
-            h.fact_grade.as_deref().unwrap_or("?"),
-            h.fact.as_deref().unwrap_or_default(),
+            "- {}\n    evidence {}:{}",
+            store::fact_heading(
+                h.fact_kind.as_deref(),
+                h.fact_grade.as_deref().unwrap_or("?"),
+                h.fact.as_deref().unwrap_or_default(),
+                h.fact_source.as_deref()
+            ),
             h.project,
             h.locator
         )?;

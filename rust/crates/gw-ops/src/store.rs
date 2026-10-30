@@ -809,7 +809,7 @@ impl Store {
             score, matches, vars, ..
         } = any_word(query)?;
         let sql = format!(
-            "SELECT text AS fact, grade AS fact_grade, ({score}) AS score, \
+            "SELECT text AS fact, grade AS fact_grade, kind AS fact_kind, source AS fact_source, ({score}) AS score, \
              (SELECT record::id(id) AS key, locator, kind, commit, experts, hash, text, changed_at FROM $parent->evidence->unit \
               WHERE present = true) AS units \
              FROM fact WHERE ({matches}) AND status = 'live' ORDER BY score DESC LIMIT $limit;"
@@ -824,6 +824,8 @@ impl Store {
                 hit.score = row["score"].as_f64();
                 hit.fact = row["fact"].as_str().map(str::to_owned);
                 hit.fact_grade = row["fact_grade"].as_str().map(str::to_owned);
+                hit.fact_kind = row["fact_kind"].as_str().map(str::to_owned);
+                hit.fact_source = row["fact_source"].as_str().map(str::to_owned);
                 hits.push(hit);
             }
         }
@@ -1549,6 +1551,28 @@ pub struct Hit {
     pub fact: Option<String>,
     #[serde(default)]
     pub fact_grade: Option<String>,
+    /// The recorded fact's kind (`eliminated` reads RULED OUT) and its source (what ruled it out).
+    #[serde(default)]
+    pub fact_kind: Option<String>,
+    #[serde(default)]
+    pub fact_source: Option<String>,
+}
+
+/// How a recorded fact is shown where it could be taken for an answer (ask packets, search): an eliminated
+/// one as RULED OUT with what ruled it out, never as a recorded fact (scholar-architect review 2026-10-30;
+/// the failure docs/DECISIONS.md 2026-09 fixed in the Python engine).
+pub fn fact_heading(kind: Option<&str>, grade: &str, text: &str, source: Option<&str>) -> String {
+    if kind == Some("eliminated") {
+        format!(
+            "RULED OUT ({grade}): {text}\n    what ruled it out: {}",
+            source
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("(no source recorded)")
+        )
+    } else {
+        format!("RECORDED FACT ({grade}): {text}")
+    }
 }
 
 /// The first line of a `path#Lstart-end` locator.
@@ -2294,6 +2318,28 @@ mod tests {
             !capped("p", &bare, false),
             "no evidence at all: the store's own refusal speaks"
         );
+    }
+
+    #[test]
+    fn a_ruled_out_fact_never_renders_as_a_recorded_fact() {
+        let out = fact_heading(
+            Some("eliminated"),
+            "INFERRED",
+            "Caching the packet",
+            Some("measured slower"),
+        );
+        assert_eq!(
+            out,
+            "RULED OUT (INFERRED): Caching the packet\n    what ruled it out: measured slower"
+        );
+        assert!(!out.contains("RECORDED FACT"));
+        assert!(fact_heading(Some("eliminated"), "INFERRED", "x", Some(" ")).ends_with("(no source recorded)"));
+        for kind in [Some("fact"), Some("decision"), Some("gotcha"), Some("status"), None] {
+            assert_eq!(
+                fact_heading(kind, "CONFIRMED", "x", Some("s")),
+                "RECORDED FACT (CONFIRMED): x"
+            );
+        }
     }
 
     #[test]

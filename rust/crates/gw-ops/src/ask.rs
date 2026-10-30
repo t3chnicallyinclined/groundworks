@@ -653,9 +653,14 @@ pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String
         if let Some(fact) = &h.fact {
             writeln!(
                 body,
-                "\n[{}] RECORDED FACT ({}): {fact}\n    its evidence, {}:{}\n{}",
+                "\n[{}] {}\n    its evidence, {}:{}\n{}",
                 c.n,
-                h.fact_grade.as_deref().unwrap_or("?"),
+                store::fact_heading(
+                    h.fact_kind.as_deref(),
+                    h.fact_grade.as_deref().unwrap_or("?"),
+                    fact,
+                    h.fact_source.as_deref()
+                ),
                 c.project,
                 c.locator,
                 store::numbered(&h.text, &h.locator)
@@ -1194,6 +1199,8 @@ mod tests {
             marks: vec![],
             fact: None,
             fact_grade: None,
+            fact_kind: None,
+            fact_source: None,
         };
         // The big project's index scored its units higher; the small project's note has the words.
         let mut read: Vec<Hit> = (0..30)
