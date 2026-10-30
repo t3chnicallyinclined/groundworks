@@ -177,6 +177,8 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Survey a folder before bringing it in: read-only JSON (what init would bring in); writes nothing.
+    InitSurvey { path: String },
     /// The expert directory: the global experts, or with --project the ones visible in that project.
     Experts {
         #[arg(long)]
@@ -749,6 +751,10 @@ async fn dispatch(command: Command) -> Result<bool> {
             .await?;
             (text, true)
         }
+        Command::InitSurvey { path } => (
+            serde_json::to_string_pretty(&gw_ops::survey::survey(&home, &path)?)?,
+            true,
+        ),
         Command::Experts { project } => (ops::experts(&home, project.as_deref())?, true),
         Command::Grep {
             pattern,

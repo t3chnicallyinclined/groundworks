@@ -96,6 +96,12 @@ pub struct LensArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct InitSurveyArgs {
+    /// The folder to survey: absolute, or relative to the workspace.
+    pub path: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct ExpertListArgs {
     /// List the experts visible in this project: its own (.claude/agents) and the global ones. Without it,
     /// the global experts only.
@@ -641,6 +647,19 @@ impl Groundworks {
                 .name
                 .clone();
             gw_ops::panel::status(&store, &project, &a.panel).map(|(text, _)| text)
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Survey a folder before bringing it in (read-only: writes nothing, never touches the store). Returns JSON: whether it is registered, its git state, build files, a stack guess, gate candidates from its build files, CI and justfile, docs, secret-named files, and its own Claude setup (instruction files, agents, reserved names, disabled folders, skills, commands, memory and session counts). A local-only folder is refused, not walked."
+    )]
+    async fn init_survey(&self, args: Parameters<InitSurveyArgs>) -> Result<String, String> {
+        let a = args.0;
+        let home = Arc::clone(&self.home);
+        store::blocking(move || {
+            gw_ops::survey::survey(&home, &a.path).and_then(|v| Ok(serde_json::to_string_pretty(&v)?))
         })
         .await
         .map_err(fail)

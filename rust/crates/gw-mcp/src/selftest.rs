@@ -21,7 +21,7 @@ const CANARY: &str = "CANARY-5e1f9a";
 static HOOK_STDERR: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 27] = [
+pub const TOOLS: [&str; 28] = [
     "answer",
     "ask",
     "bootstrap",
@@ -31,6 +31,7 @@ pub const TOOLS: [&str; 27] = [
     "expert_list",
     "gate",
     "grep",
+    "init_survey",
     "intake",
     "journal_add",
     "journal_read",
@@ -341,7 +342,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     )?;
     let tools = s.tools()?;
     c.check(
-        "the tool list is exactly the 27 tools",
+        &format!("the tool list is exactly the {} tools", TOOLS.len()),
         tools == TOOLS,
         &format!("{tools:?}"),
     );
@@ -1041,6 +1042,7 @@ the parser now accepts empty input
     project_expert_checks(exe, base, &home, &mut c)?;
     wall_checks(exe, base, &home, &owner, &mut c)?;
     lens_frame_checks(exe, base, &home, &mut c)?;
+    survey_checks(exe, base, &home, &server.url(), &mut c)?;
 
     let total = c
         .lines
@@ -1573,6 +1575,160 @@ fn lens_frame_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Re
         "lens findings are framed as data in the lens view and in an ask through a lens, and a finding cannot close the frame",
         !err && !err_v && !err_a && closed(&view) && closed(&asked),
         &format!("{text}\n--\n{view}\n--\n{asked}"),
+    );
+    Ok(())
+}
+
+/// Every table's row count in `global` and `proj_demo`, as root (nothing hidden by a permission).
+fn store_counts(url: &str) -> Result<Vec<(String, std::collections::BTreeMap<String, i64>)>> {
+    ["global", "proj_demo"]
+        .iter()
+        .map(|ns| {
+            let db = gw_store::connect_root(url, ns, "root", ROOT_PASS)?;
+            Ok((ns.to_string(), gw_ops::supervise::table_counts(&db)?))
+        })
+        .collect()
+}
+
+/// Every file under `dir` with its size and modification time, to show a read changed nothing.
+fn tree_stamp(dir: &Path) -> Vec<(PathBuf, u64, Option<std::time::SystemTime>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            match e.metadata() {
+                Ok(m) if m.is_dir() => stack.push(p),
+                Ok(m) => out.push((p, m.len(), m.modified().ok())),
+                Err(_) => {}
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `init_survey` (the init design's S2, 2026-10-30), both ways: it reports an unregistered folder's git
+/// state, build files, gate candidates (build files, CI, justfile), docs, secret-named files and Claude
+/// setup (a reserved agent named as reserved), names a registered folder's project, refuses a local-only
+/// folder without walking it, and leaves every store table count and every fixture file unchanged.
+fn survey_checks(exe: &Path, base: &Path, home: &Path, url: &str, c: &mut Checks) -> Result<()> {
+    let (home_env, experts_env, claude_env) = (
+        home.display().to_string(),
+        base.join("experts").display().to_string(),
+        base.join("claude").display().to_string(),
+    );
+    let work = base.join("work");
+    let newcomer = work.join("newcomer");
+    let write = |path: PathBuf, text: &str| -> Result<()> {
+        std::fs::create_dir_all(path.parent().context("a parent")?)?;
+        std::fs::write(path, text)?;
+        Ok(())
+    };
+    write(
+        newcomer.join("Cargo.toml"),
+        "[package]\nname = \"newcomer\"\nversion = \"0.1.0\"\n",
+    )?;
+    write(
+        newcomer.join("README.md"),
+        "# Newcomer\n\nA folder not yet brought in.\n",
+    )?;
+    write(newcomer.join("CLAUDE.md"), "# Rules\n\nRun the gate first.\n")?;
+    write(newcomer.join(".env"), "TOKEN=never-read\n")?;
+    write(
+        newcomer.join(".claude/agents/newcomer-expert.md"),
+        "---\nname: newcomer-expert\ndescription: Owns the newcomer.\n---\n",
+    )?;
+    write(
+        newcomer.join(".claude/agents/gw-engineer.md"),
+        "---\nname: gw-engineer\ndescription: A repo's own engineer.\n---\n",
+    )?;
+    write(
+        newcomer.join(".github/workflows/ci.yml"),
+        "jobs:\n  t:\n    steps:\n      - run: cargo test --workspace\n      - run: echo hello\n",
+    )?;
+    write(newcomer.join("justfile"), "test:\n    cargo test\n")?;
+    for args in [
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "https://example.com/x/newcomer.git"],
+    ] {
+        Command::new("git")
+            .arg("-C")
+            .arg(&newcomer)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+    }
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let s = &mut client;
+    let counts_before = store_counts(url)?;
+    let files_before = tree_stamp(&newcomer);
+    let (err_n, new) = s.call("init_survey", json!({"path": "newcomer"}))?;
+    let (err_d, demo) = s.call("init_survey", json!({"path": work.join("demo").display().to_string()}))?;
+    let (err_f, fenced) = s.call("init_survey", json!({"path": "fenced-matter"}))?;
+    let counts_after = store_counts(url)?;
+    let files_after = tree_stamp(&newcomer);
+    let n: Value = serde_json::from_str(&new).unwrap_or(Value::Null);
+    let d: Value = serde_json::from_str(&demo).unwrap_or(Value::Null);
+    let f: Value = serde_json::from_str(&fenced).unwrap_or(Value::Null);
+    let gates: Vec<(String, String)> = n["gate_candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|g| {
+            (
+                g["command"].as_str().unwrap_or_default().to_owned(),
+                g["from"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    let has_gate = |cmd: &str, from: &str| gates.iter().any(|(c, f)| c == cmd && f == from);
+    c.check(
+        "init_survey reports an unregistered folder: git, build files, gate candidates from build files, CI and justfile, docs, secret-named files, its Claude setup with a reserved agent named",
+        !err_n
+            && n["survey_version"] == json!(1)
+            && n["registered"].is_null()
+            && n["writes"] == json!("none")
+            && n["local_only"] == json!(false)
+            && n["git"]["kind"] == json!("git repo")
+            && n["git"]["remotes"] == json!(["example.com/x/newcomer"])
+            && n["build_files"]["cargo"] == json!(["Cargo.toml"])
+            && has_gate("cargo test", "build files")
+            && has_gate("cargo test --workspace", ".github/workflows/ci.yml")
+            && !has_gate("echo hello", ".github/workflows/ci.yml")
+            && has_gate("just test", "justfile")
+            && n["docs"].as_array().is_some_and(|a| a.contains(&json!("README.md")) && a.contains(&json!("CLAUDE.md")))
+            && n["secret_named_files"] == json!([".env"])
+            && n["claude_setup"]["instructions"] == json!(["CLAUDE.md"])
+            && n["claude_setup"]["agents"] == json!(["newcomer-expert"])
+            && n["claude_setup"]["reserved"] == json!([{"name": "gw-engineer", "file": ".claude/agents/gw-engineer.md"}])
+            && !new.contains("never-read"),
+        &new,
+    );
+    c.check(
+        "init_survey names a registered folder's project and refuses a local-only folder without walking it",
+        !err_d
+            && !err_f
+            && d["registered"] == json!("demo")
+            && f["local_only"] == json!(true)
+            && f.get("build_files").is_none()
+            && f.get("claude_setup").is_none(),
+        &format!("{demo}\n--\n{fenced}"),
+    );
+    c.check(
+        "init_survey writes nothing: every store table count and every file in the folder is unchanged",
+        counts_before == counts_after && files_before == files_after && !counts_before.is_empty(),
+        &format!("{counts_before:?}\n--\n{counts_after:?}"),
     );
     Ok(())
 }

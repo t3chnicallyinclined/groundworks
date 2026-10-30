@@ -26,3 +26,4 @@ pub mod scan;
 pub mod secrets;
 pub mod store;
 pub mod supervise;
+pub mod survey;

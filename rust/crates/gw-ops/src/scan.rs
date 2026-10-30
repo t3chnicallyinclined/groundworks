@@ -472,6 +472,16 @@ pub fn scan_root(root: &Path, local_only_globs: &[String]) -> std::io::Result<Ve
     Ok(records)
 }
 
+/// The scan record of one folder, exactly as `scan_root` makes it for each of its children (a local-only
+/// folder gets the short record with `local_only: true` and is not walked). Projects nested beneath it
+/// are not returned.
+pub fn scan_one(root: &Path, local_only_globs: &[String]) -> Option<Value> {
+    let globs: Vec<Glob> = local_only_globs.iter().map(|g| Glob::new(g)).collect();
+    let mut records = Vec::new();
+    scan_tree(root, &globs, &mut records);
+    records.into_iter().next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
