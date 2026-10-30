@@ -82,11 +82,11 @@ footer a{color:#5B9BFF}
   <h2>What it does</h2>
   <p>A small Rust program plus a Claude Code plugin. It keeps a local database next to my projects and gives the agent a few tools and habits.</p>
   <div class="grid">
-    <div class="card"><h3>A journal per project</h3><p>Decisions, gotchas and dead ends get written down. Anything marked confirmed has to point at proof: a command that ran, or a quote from a file.</p></div>
+    <div class="card"><h3>A journal per project</h3><p>Decisions, gotchas and dead ends get written down. Anything marked confirmed has to point at proof: a command that ran, or a quote from a file. Text that looks like a secret is refused.</p></div>
     <div class="card"><h3>Search over my projects</h3><p>Files, docs and commits are indexed so the agent can look things up before re-deriving them. Quotes are checked against the source.</p></div>
     <div class="card"><h3>Receipts</h3><p>Commands and build checks run through Groundworks and leave a record.</p></div>
-    <div class="card"><h3>Hooks</h3><p>A session starts with that project's notes. Risky shell commands get blocked. Before it ends, it's asked to write down what it learned.</p></div>
-    <div class="card"><h3>Housekeeping</h3><p>The database is backed up nightly, and a short report shows whether things are healthy.</p></div>
+    <div class="card"><h3>Hooks</h3><p>A session starts with that project's notes, even in a git worktree. Risky shell commands and edits to Groundworks' own guard files are blocked. A session that changed things can't stop until it writes down what it learned.</p></div>
+    <div class="card"><h3>Housekeeping</h3><p>A supervisor keeps the database running, backs it up nightly and test-restores the backup. A short health report shows whether things are healthy, including work Groundworks didn't see.</p></div>
     <div class="card"><h3>Stays local</h3><p>Your notes and data live in your own folder on your machine, never in the repo.</p></div>
   </div>
 </div></section>
@@ -102,10 +102,10 @@ footer a{color:#5B9BFF}
   <ol class="loop">
     <li><b>A home folder</b> next to my projects holds the registry (projects, environments, and where secrets live, by reference only), the expert agents, and the database.</li>
     <li><b>Intake</b> reads each project's code, docs and commits into small citable pieces called units, each with file, lines, hash and date.</li>
-    <li><b>The store</b> is a local SurrealDB graph. A fact is linked by an <code>evidence</code> edge to the exact units behind it, or to the receipt of the command that proved it. Every row carries its project, so a project's data is easy to find, and later to remove.</li>
+    <li><b>The store</b> is a local SurrealDB graph. A fact is linked by an <code>evidence</code> edge to the exact units behind it, or to the receipt of the command that proved it. Each project's data is kept in its own section of the database, so it's easy to find, and later to remove.</li>
     <li><b>The agent</b> works through tools: look things up before re-deriving them, use <code>run</code> and <code>gate</code> to do and check work, and write to the journal to record what it learned.</li>
-    <li><b>The hooks</b> make that happen without counting on the agent to remember: notes in at the start, a guard on the shell, a nudge to record at the end.</li>
-    <li><b>The supervisor</b> keeps the database running and backed up, and writes a short health report.</li>
+    <li><b>The hooks</b> make that happen without counting on the agent to remember: notes in at the start, a guard on the shell and on Groundworks' own files, and a stop that waits until something is recorded.</li>
+    <li><b>The supervisor</b> keeps the database running, backs it up nightly, test-restores the backup, and writes a short health report.</li>
   </ol>
 </div></section>
 
@@ -131,20 +131,40 @@ footer a{color:#5B9BFF}
 <section><div class="wrap">
   <h2>What I'm working on next</h2>
   <ul class="pain">
-    <li>A desktop app for it, a copy of the open-source <a href="https://github.com/Nimbalyst/nimbalyst">Nimbalyst</a> with Groundworks added.</li>
-    <li>Making the "check your notes first" step automatic.</li>
-    <li>Simple alerts when backups or the database stop working.</li>
-    <li>An easy way to remove a project and all its data.</li>
+    <li>A desktop app I'm building: a private, work-in-progress copy of Nimbalyst with Groundworks built in, where every session runs with the plugin.</li>
+    <li>Making "check your notes first" automatic: a short "already known" note on each prompt, and a heads-up before a web search or handing work to a helper agent.</li>
+    <li>A smaller set of tools per session.</li>
+    <li>Alerts when the database, the backups or the health report stop working.</li>
+    <li>An easy, undoable way to remove a project and its data.</li>
+    <li>Trying sandboxed sessions, so the agent's commands run in an isolated environment while Groundworks stays outside.</li>
+    <li>A side-by-side check against plain Claude Code on a fresh set of tasks.</li>
   </ul>
 </div></section>
 
 <section><div class="wrap">
   <h2>Try it</h2>
-<pre>cargo install --path rust/crates/gw-mcp --locked
+<p>You need Rust (stable, via rustup), SurrealDB 3.x on your PATH (built and tested on 3.1.6), Git, and Claude Code.</p>
+<pre># 1. Build the program
+cargo install --path rust/crates/gw-mcp --locked
+
+# 2. Make a home folder next to your projects
+mkdir -p ~/projects/.groundworks
+echo 'workspace = "/home/you/projects"' &gt; ~/projects/.groundworks/groundworks.toml
+
+# 3. Start the store and create your owner login, once
+#    (type the password yourself; Groundworks never stores it)
+export GROUNDWORKS_OWNER_PASS=...
+cd ~/projects &amp;&amp; groundworks store init
+unset GROUNDWORKS_OWNER_PASS
+
+# 4. Add the plugin to Claude Code
 claude plugin marketplace add &lt;path to the repository&gt;
 claude plugin install groundworks@groundworks
-groundworks selftest</pre>
-  <p>Then open a project in Claude Code and run <code>/groundworks:init</code>.</p>
+
+# 5. Check it
+groundworks selftest
+groundworks doctor</pre>
+  <p>Then open one of your projects in Claude Code and run <code>/groundworks:init</code>.</p>
   <div class="note"><b>If it sounds helpful, give it a fork</b> and make it fit how you work. Issues and ideas are welcome.</div>
 </div></section>
 <section><div class="wrap">

@@ -30,13 +30,17 @@ Groundworks is a small Rust program plus a Claude Code plugin. It keeps a local 
 gives the agent a few tools and habits:
 
 - **A journal per project.** Decisions, gotchas and dead ends get written down. Anything marked as confirmed has
-  to point at proof: a command that was run, or a quote from a file.
+  to point at proof: a command that was run, or a quote from a file. Text that looks like a secret (a key, a
+  token) is refused before it's saved.
 - **Search over my projects.** Files, docs and commits are indexed so the agent can look things up before
   re-deriving them. When it quotes something, a program checks the quote is really there.
 - **Receipts.** Commands and build checks run through Groundworks and leave a record.
-- **Hooks.** When a session starts, it gets that project's notes. Risky shell commands get blocked. Before a
-  session ends, it's asked to write down what it learned.
-- **Housekeeping.** The database is backed up nightly, and a short report shows whether things are healthy.
+- **Hooks.** When a session starts, it gets that project's notes, including in a git worktree of the project.
+  Risky shell commands are blocked, and so are edits to Groundworks' own guard files. A session that changed things
+  can't stop until it writes down what it learned.
+- **Housekeeping.** A supervisor keeps the database running, backs it up nightly and test-restores the backup. A
+  short health report (`groundworks pulse`) shows whether things are healthy, including work that happened without
+  Groundworks seeing it. `groundworks doctor` checks the install.
 
 Everything stays on my machine. Your notes and data live in your own folder, never in this repo.
 
@@ -59,7 +63,7 @@ Groundworks is less one tool and more a harness around each agent session. The p
           |  ask / search / grep     |  journal (write what was learned)  |  run / gate (leave a receipt)
           |                          |                                    |
   +------------------------------ Claude Code + the plugin ------------------------------+
-  |  session start: inject the project's notes       before a shell command: deny list    |
+  |  session start: inject the project's notes       before a command or edit: deny list  |
   |  before stopping: "record what you learned"      agents: architect, engineer, SRE,    |
   |                                                  security, plus any domain experts    |
   +---------------------------------------------------------------------------------------+
@@ -71,12 +75,14 @@ Groundworks is less one tool and more a harness around each agent session. The p
    live, by reference only), the expert agents, and the database.
 2. **Intake** reads each project into small citable pieces called units.
 3. **The store** is a graph. A fact is linked by an `evidence` edge to the exact units behind it, or to the
-   receipt of the command that proved it. Every row carries its project, so a project's data is easy to find, and later to remove.
+   receipt of the command that proved it. Each project's data is kept in its own section of the database, so it's
+   easy to find, and later to remove.
 4. **The agent** works through tools: look things up before re-deriving them, use `run` and `gate` to do and
    check work, and write to the journal to record what it learned.
 5. **The hooks** make that happen without counting on the agent to remember: notes in at the start, a guard on
-   the shell, a nudge to record at the end.
-6. **The supervisor** keeps the database running and backed up, and writes a short health report.
+   the shell and on Groundworks' own files, and a stop that waits until something is recorded.
+6. **The supervisor** keeps the database running, backs it up nightly, test-restores the backup, and writes a
+   short health report.
 
 ## A few choices I made
 
@@ -103,23 +109,46 @@ some parts are rough.
 
 ## What I'm working on next
 
-- A desktop app for it, a copy of the open-source [Nimbalyst](https://github.com/Nimbalyst/nimbalyst) with
-  Groundworks added.
-- Making the "check your notes first" step automatic instead of something the agent has to remember.
-- Simple alerts when backups or the database stop working.
-- An easy way to remove a project and all its data.
+- A desktop app I'm building: a private, work-in-progress copy of Nimbalyst with Groundworks built in, where every
+  session runs with the plugin.
+- Making "check your notes first" automatic: a short "already known" note on each prompt, and a heads-up before a
+  web search or handing work to a helper agent.
+- A smaller set of tools per session.
+- Alerts when the database, the backups or the health report stop working.
+- An easy, undoable way to remove a project and its data.
+- Trying sandboxed sessions, so the agent's commands run in an isolated environment while Groundworks stays outside.
+- A side-by-side check against plain Claude Code on a fresh set of tasks.
 
 ## Try it
 
+You need [Rust](https://rustup.rs) (stable, via rustup), [SurrealDB](https://surrealdb.com/install) 3.x on your
+PATH (built and tested on 3.1.6), Git, and [Claude Code](https://github.com/anthropics/claude-code).
+
 ```bash
+# 1. Build the program
 cargo install --path rust/crates/gw-mcp --locked       # puts `groundworks` on PATH
+
+# 2. Make a home folder next to your projects
+mkdir -p ~/projects/.groundworks
+echo 'workspace = "/home/you/projects"' > ~/projects/.groundworks/groundworks.toml
+
+# 3. Start the store and create your owner login, once.
+#    Type the password yourself in your own terminal; Groundworks never stores or reads it from a file.
+export GROUNDWORKS_OWNER_PASS=...
+cd ~/projects && groundworks store init
+unset GROUNDWORKS_OWNER_PASS
+
+# 4. Add the plugin to Claude Code
 claude plugin marketplace add <path to this repository>
 claude plugin install groundworks@groundworks
-groundworks selftest                                   # checks it works, using throwaway data
+
+# 5. Check it
+groundworks selftest                                   # every rule, on throwaway data
+groundworks doctor                                     # your real setup, including the plugin
 ```
 
-Then open a project in Claude Code and run `/groundworks:init`. More detail is in
-[plugin/README.md](plugin/README.md).
+Then open one of your projects in Claude Code and run `/groundworks:init`. More detail, including PowerShell steps,
+is in [plugin/README.md](plugin/README.md).
 
 **If it sounds helpful, give it a fork** and make it fit how you work. Issues and ideas are welcome.
 
@@ -149,11 +178,16 @@ The logo and mascot art were made with Ideogram and Recraft.
 
 | Path | What |
 |---|---|
-| `rust/` | The Rust code: the `groundworks` program and its pieces |
-| `plugin/` | The Claude Code plugin: hooks, the agent instructions, two setup commands |
-| `docs/` | Design notes, decisions and the roadmap |
+| `rust/` | The Rust code: the `groundworks` program, its store schema and the eval report |
+| `rust/templates/` | Project templates used by `/groundworks:bootstrap` (run through Copier) |
+| `plugin/` | The Claude Code plugin: hooks, the deny list, the Groundworks agent, the init and bootstrap commands |
+| `docs/` | Architecture, decisions, the roadmap, and `METRICS.md` (what the health report measures) |
 | `docs/brand/` | Logo, mascot, icon and colours |
-| `groundworks/`, `instances/` | The original Python version, kept as a reference ([its README](docs/ENGINE-PYTHON-V0.2.md)) |
+| `site/` | The project website |
+| `scripts/` | The privacy scan and license check that run before every commit |
+| `groundworks/`, `instances/`, `tests/` | The original Python version, kept as the reference the Rust port is checked against ([its README](docs/ENGINE-PYTHON-V0.2.md)) |
+| `.claude/` | An agent and two skills for working on the Python version (`scholar-architect`, `design-instance`, `panel`) |
+| `research/`, `notes/`, `evals/` | Background reading, dated design notes and eval sets |
 
 ## License
 

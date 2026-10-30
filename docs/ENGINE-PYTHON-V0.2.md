@@ -296,7 +296,9 @@ MIT. Copyright (c) 2026 t3chnicallyinclined (see [`LICENSE`](../LICENSE)). Adapt
 
 ## Using the expert
 
-Open this repo in Claude Code and ask for the `scholar-architect` agent, for example:
+This section is from the Python version. `scholar-architect` is the agent for designing instances of
+that engine; for the Rust harness, use the Claude Code plugin instead. To use it, open this repo in Claude Code
+and ask for the `scholar-architect` agent, for example:
 - "Design an instance for a systematic review of X: answer the eight questions."
 - "Review this gate change for checks that pass by default."
 - "Run the reading list's first batch through the methods pipeline and report adoptable methods with their evidence rank."
