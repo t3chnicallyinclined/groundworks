@@ -1,5 +1,6 @@
 //! The idea-bridge tools (idea-bridges design 2026-10-30, slices B1-B3), on a router of their own so the
-//! main tool list in `server.rs` stays as it is: `card_add` (B1).
+//! main tool list in `server.rs` stays as it is: `card_add` (B1); `bridge_add`, `bridge_advance`,
+//! `bridge_list` (B2).
 
 use std::sync::Arc;
 
@@ -21,6 +22,40 @@ pub struct CardAddArgs {
     pub by: Option<String>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct BridgeAddArgs {
+    /// The target project: the one with the problem.
+    pub project: String,
+    /// The problem card of the target project (`card:...`).
+    pub target: String,
+    /// The source project: shared, not walled from the target.
+    pub source: String,
+    /// The capability card of the source project (`card:...`).
+    pub card: String,
+    /// The source project's problem card the chain went through, when found that way.
+    pub via: Option<String>,
+    /// How it was found (a bridge_propose arm, or `manual`).
+    pub found_by: Option<String>,
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BridgeAdvanceArgs {
+    pub project: String,
+    /// The bridge (`bridge:...`).
+    pub bridge: String,
+    #[serde(flatten)]
+    pub step: gw_ops::bridge::AdvanceIn,
+    pub by: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BridgeListArgs {
+    pub project: String,
+    /// At most this many of the project's own cards (default 50).
+    pub limit: Option<usize>,
+}
+
 #[tool_router(router = bridge_router, vis = "pub(super)")]
 impl Groundworks {
     #[tool(
@@ -38,5 +73,59 @@ impl Groundworks {
         })
         .await
         .map_err(fail)
+    }
+
+    #[tool(
+        description = "Record a candidate bridge: a capability card of another project (shared, not walled, never private or isolated) as a hypothesis for a problem card of this one. The bridge holds the source as project/card/hash only. Grade INFERRED until supported."
+    )]
+    async fn bridge_add(&self, args: Parameters<BridgeAddArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            gw_ops::bridge::add(
+                &home,
+                &store,
+                &a.project,
+                &a.target,
+                &a.source,
+                &a.card,
+                a.via.as_deref(),
+                a.found_by.as_deref().unwrap_or("manual"),
+                a.by.as_deref().unwrap_or("agent"),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Move a bridge along its gate. to=testable needs checks (one per source assumption: {assumption: index, verdict holds|fails|unknown, quote of THIS project as for a card}), novelty_query (the program runs the search and records it) and test. to=supported needs a receipt from run or gate with ok. to=refuted needs a receipt or a check whose verdict is fails. Reach and the source card are re-checked first."
+    )]
+    async fn bridge_advance(&self, args: Parameters<BridgeAdvanceArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            gw_ops::bridge::advance(
+                &home,
+                &store,
+                &a.project,
+                &a.bridge,
+                &a.step,
+                a.by.as_deref().unwrap_or("agent"),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "A project's idea cards and bridges, each inside a data frame. Reach is re-checked: a bridge whose source is now walled, private or isolated is listed without it."
+    )]
+    async fn bridge_list(&self, args: Parameters<BridgeListArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || gw_ops::bridge::list(&home, &store, &a.project, a.limit.unwrap_or(50)))
+            .await
+            .map_err(fail)
     }
 }

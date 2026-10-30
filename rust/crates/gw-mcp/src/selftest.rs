@@ -24,7 +24,7 @@ const CANARY: &str = "CANARY-5e1f9a";
 static HOOK_STDERR: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 33] = [
+pub const TOOLS: [&str; 36] = [
     "answer",
     "answer_add",
     "ask",
@@ -32,6 +32,9 @@ pub const TOOLS: [&str; 33] = [
     "attack_judge",
     "attack_list",
     "bootstrap",
+    "bridge_add",
+    "bridge_advance",
+    "bridge_list",
     "card_add",
     "doctor",
     "env_show",
@@ -1184,7 +1187,7 @@ the parser now accepts empty input
     owner_signature_checks(exe, base, &home, &mut c)?;
     run_env_checks(exe, base, &home, &mut c)?;
     attack::attack_checks(exe, base, &home, &owner, &mut c)?;
-    bridges::bridge_checks(exe, base, &home, &mut c)?;
+    bridges::bridge_checks(exe, base, &home, &owner, &mut c)?;
 
     let total = c
         .lines

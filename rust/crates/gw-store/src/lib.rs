@@ -101,6 +101,10 @@ pub const SCHEMA: &[(&str, &str)] = &[
         "0019_project_card.surql",
         include_str!("../schema/0019_project_card.surql"),
     ),
+    (
+        "0020_project_bridge.surql",
+        include_str!("../schema/0020_project_bridge.surql"),
+    ),
 ];
 
 /// Created by the migration engine itself, before the first file, so the version can be read on any database.

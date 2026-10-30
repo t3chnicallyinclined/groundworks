@@ -274,14 +274,14 @@ pub fn framed(tag: &str, attrs: &[(&str, &str)], about: &str, body: &str) -> Str
 }
 
 /// What a resolved quote is.
-struct Resolved {
-    unit_key: Option<String>,
-    fact_key: Option<String>,
-    lines: Option<[usize; 2]>,
-    quote: String,
-    cite: String,
-    source_kind: String,
-    fact_grade: Option<String>,
+pub(crate) struct Resolved {
+    pub(crate) unit_key: Option<String>,
+    pub(crate) fact_key: Option<String>,
+    pub(crate) lines: Option<[usize; 2]>,
+    pub(crate) quote: String,
+    pub(crate) cite: String,
+    pub(crate) source_kind: String,
+    pub(crate) fact_grade: Option<String>,
 }
 
 /// Lines `a..=b` (file numbering) of a unit whose locator starts at some line (a unit without file lines
@@ -297,7 +297,7 @@ fn span(unit_text: &str, locator: &str, a: usize, b: usize) -> Option<String> {
     })
 }
 
-fn key_of(id: &str, table: &str) -> Result<String> {
+pub(crate) fn key_of(id: &str, table: &str) -> Result<String> {
     let key = id.strip_prefix(&format!("{table}:")).unwrap_or(id);
     ensure!(
         !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
@@ -306,7 +306,8 @@ fn key_of(id: &str, table: &str) -> Result<String> {
     Ok(key.to_owned())
 }
 
-fn resolve(store: &Store, project: &str, q: &CardQuote) -> Result<Resolved> {
+/// Where a quote is and what it says, copied from the store: refused unless word for word.
+pub(crate) fn resolve(store: &Store, project: &str, q: &CardQuote) -> Result<Resolved> {
     let db = store.agent(&gw_store::project_ns(&store::slug(project)?)?)?;
     if let Some(fact) = &q.fact {
         ensure!(q.unit.is_none(), "give the quote's unit or its fact, not both");

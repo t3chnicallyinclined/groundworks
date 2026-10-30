@@ -4,6 +4,7 @@
 
 pub mod ask;
 pub mod attack;
+pub mod bridge;
 pub mod card;
 pub mod claude_setup;
 pub mod eval;
