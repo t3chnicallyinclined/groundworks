@@ -40,6 +40,8 @@ pub const WRITE_RATE_RED: f64 = 0.5;
 /// A commit is seen when a hook row or a `run`/`gate` receipt of its project lies this close to it, either
 /// side. A commit made through a hooked session's Bash call has its PreToolUse row seconds before it.
 pub const COMMIT_COVER_SECS: i64 = 900;
+/// Red when the Stop hook's p95 latency in the window is above this (A1.4: Stop reads the transcript).
+pub const STOP_P95_RED_MS: i64 = 300;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProjectPulse {
@@ -115,6 +117,9 @@ pub struct UseSection {
     pub per_project: BTreeMap<String, ProjectUse>,
     /// Rejection rows in the week before the window, for the week-on-week comparison.
     pub rejections_previous_week: u64,
+    /// Nearest-rank p95 of `latency_ms` per hook (`SessionStart`, `PreToolUse`, `Stop`, ...) in the window.
+    #[serde(default)]
+    pub hook_p95_ms_by_event: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -147,6 +152,10 @@ pub struct Pulse {
     /// The hooks' telemetry, read back (docs/METRICS.md).
     #[serde(default, rename = "use")]
     pub use_: UseSection,
+    /// The newest `groundworks cost` line (metrics/cost.jsonl), as recorded: the pulse never reads a
+    /// transcript itself.
+    #[serde(default)]
+    pub cost: Option<crate::meter::CostLine>,
 }
 
 impl Pulse {
@@ -205,6 +214,7 @@ pub fn take(home: &Home, store: &Store) -> Result<Pulse> {
         pulse.asks_served_from_knowledge += u64::from(served);
     }
     pulse.use_ = take_use(home, store, &registry, &pulse.at)?;
+    pulse.cost = crate::meter::latest(home);
     Ok(pulse)
 }
 
@@ -288,6 +298,21 @@ fn take_use(home: &Home, store: &Store, registry: &Registry, now: &str) -> Resul
             },
         );
     }
+    let mut by_event: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for e in &events {
+        if let (Some(hook), Some(ms), Some(at)) = (e["hook"].as_str(), e["latency_ms"].as_i64(), e["at"].as_str())
+            && seconds(at) >= window_since
+        {
+            by_event.entry(hook.to_owned()).or_default().push(ms);
+        }
+    }
+    section.hook_p95_ms_by_event = by_event
+        .into_iter()
+        .map(|(hook, mut v)| {
+            v.sort_unstable();
+            (hook, percentile(&v, 95))
+        })
+        .collect();
     section.window = scope(None, Some(&window_since));
     section.all_time = scope(None, None);
     Ok(section)
@@ -530,6 +555,21 @@ pub fn digest(p: &Pulse) -> Vec<String> {
             ));
         }
     }
+    if let Some(stop) = u.hook_p95_ms_by_event.get("Stop")
+        && *stop > STOP_P95_RED_MS
+    {
+        red.push(format!(
+            "RED Stop hook p95 {stop} ms in {}d (above {STOP_P95_RED_MS} ms): the Stop hook reads the whole transcript at every turn end",
+            u.window_days
+        ));
+    }
+    if let Some(cost) = &p.cost {
+        red.extend(
+            cost.red
+                .iter()
+                .map(|r| format!("{r} (cost {} on {})", &cost.at[..cost.at.len().min(10)], cost.machine)),
+        );
+    }
     if u.window.store_rejections > u.rejections_previous_week && u.window.store_rejections > 0 {
         red.push(format!(
             "RED store rejections rising: {} this week vs {} the week before (CONFIRMED without evidence, secret-shaped text, ...)",
@@ -655,6 +695,46 @@ pub fn render(p: &Pulse) -> String {
             "telemetry since {since}; week before this one: {} rejection(s)",
             u.rejections_previous_week
         );
+    }
+    if !u.hook_p95_ms_by_event.is_empty() {
+        let stop = u
+            .hook_p95_ms_by_event
+            .get("Stop")
+            .map_or("n/a".to_owned(), |v| format!("{v} ms"));
+        let others: Vec<String> = u
+            .hook_p95_ms_by_event
+            .iter()
+            .filter(|(k, _)| k.as_str() != "Stop")
+            .map(|(k, v)| format!("{k} {v} ms"))
+            .collect();
+        let _ = writeln!(s, "hook p95 ({}d)  Stop {stop} | {}", u.window_days, others.join(" | "));
+    }
+    match &p.cost {
+        None => s.push_str("cost    none recorded yet (groundworks cost)\n"),
+        Some(c) => {
+            let w = &c.totals.window;
+            let pw = &c.totals.previous_window;
+            let _ = writeln!(
+                s,
+                "cost ({}d, taken {} on {})  tokens per human turn {} (week before {}) | main ctx p90 {} | overhead share {} | asks passed {}/{}, gw tokens per passed {} | re-reads per session median {} | work per Mtok {}",
+                c.window_days,
+                &c.at[..c.at.len().min(16)],
+                c.machine,
+                crate::meter::fmt_n(w.tokens_per_human_turn),
+                crate::meter::fmt_n(pw.tokens_per_human_turn),
+                crate::meter::fmt_n(w.main_ctx_p90 as f64),
+                w.overhead_share
+                    .map_or("off".to_owned(), |v| format!("{:.2}% (est.)", 100.0 * v)),
+                c.asks.passed,
+                c.asks.asks,
+                c.asks
+                    .gw_tokens_per_passed
+                    .map_or("off".to_owned(), crate::meter::fmt_n),
+                w.rereads_per_session_median
+                    .map_or("off".to_owned(), |v| format!("{v:.1}")),
+                w.work_per_mtok.map_or("n/a".to_owned(), |v| format!("{v:.3}")),
+            );
+        }
     }
     let mut rows: Vec<(&String, &ProjectPulse)> = p.per_project.iter().collect();
     rows.sort_by(|a, b| (b.1.facts_live + b.1.facts_stale).cmp(&(a.1.facts_live + a.1.facts_stale)));

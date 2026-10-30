@@ -294,6 +294,130 @@ pub(crate) fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
     Ok(home)
 }
 
+/// `groundworks cost` through the CLI, over a fixture transcripts root (never ~/.claude): demo's session
+/// is metered; the fenced folder, the isolated project's folder and a session that wanders into the fence
+/// are not; nothing written holds text, input or a path; a second run parses nothing; the pulse shows it.
+fn cost_checks(c: &mut Checks, exe: &Path, base: &Path, home: &Path, owner: &Store) -> Result<()> {
+    let work = base.join("work");
+    let root = base.join("transcripts");
+    let now = gw_ops::pulse::now_iso();
+    let slug = |p: &Path| gw_ops::meter::slug_form(&p.display().to_string());
+    let line = |cwd: &Path, v: Value| -> String {
+        let mut v = v;
+        v["cwd"] = json!(cwd.display().to_string());
+        v["timestamp"] = json!(now);
+        format!("{v}\n")
+    };
+    let turn = |cwd: &Path, id: &str, input: u64, content: Value| {
+        line(
+            cwd,
+            json!({"type": "assistant", "requestId": id, "message": {"id": id, "model": "claude-opus-5-5", "content": content,
+                   "usage": {"input_tokens": input, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20, "output_tokens": 5}}}),
+        )
+    };
+    let demo = work.join("demo");
+    let session = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    let mut text = line(
+        &demo,
+        json!({"type": "user", "message": {"role": "user", "content": format!("why {CANARY}")}}),
+    );
+    text += &turn(
+        &demo,
+        "m1",
+        10,
+        json!([{"type": "tool_use", "id": "t1", "name": "mcp__plugin_groundworks_groundworks__ask", "input": {"question": CANARY}}]),
+    );
+    text += &line(
+        &demo,
+        json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": CANARY}]}}),
+    );
+    for (dir, file, body) in [
+        (slug(&demo), session.to_owned(), text),
+        (
+            slug(&work.join("fenced-matter")),
+            "f".to_owned(),
+            turn(&work.join("fenced-matter"), "f1", 7777, json!([])),
+        ),
+        (
+            slug(&work.join("secret")),
+            "s".to_owned(),
+            turn(&work.join("secret"), "s1", 7777, json!([])),
+        ),
+        (
+            slug(&work),
+            "w".to_owned(),
+            turn(&work, "w1", 5000, json!([])) + &turn(&work.join("fenced-matter"), "w2", 6000, json!([])),
+        ),
+    ] {
+        std::fs::create_dir_all(root.join(&dir))?;
+        std::fs::write(root.join(&dir).join(format!("{file}.jsonl")), body)?;
+    }
+    let run = || -> Result<(bool, String)> {
+        let out = Command::new(exe)
+            .args(["cost", "--threads", "2", "--root"])
+            .arg(&root)
+            .env("GROUNDWORKS_HOME", home)
+            .env("GROUNDWORKS_MACHINE", "SELFTEST")
+            .env_remove("GROUNDWORKS_START")
+            .stdin(Stdio::null())
+            .output()?;
+        Ok((
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        ))
+    };
+    let (ok, first) = run()?;
+    let metrics = home.join("metrics");
+    let cost_text = std::fs::read_to_string(metrics.join("cost.jsonl")).unwrap_or_default();
+    let line: Value = cost_text
+        .lines()
+        .last()
+        .and_then(|l| serde_json::from_str(l).ok())
+        .unwrap_or_default();
+    let all = |scope: &Value| scope["all_time"]["tokens"].as_u64();
+    c.check(
+        "cost meters demo by its recorded working directory and never counts the fenced folder, the isolated project or a session that wandered into the fence",
+        ok && all(&line["per_project"]["demo"]) == Some(135)
+            && all(&line["totals"]) == Some(135)
+            && line["totals"]["all_time"]["asks"] == 1
+            && line["totals"]["all_time"]["human_turns"] == 1
+            && line["machine"] == "SELFTEST"
+            && line["per_project"].as_object().is_some_and(|m| m.len() == 1),
+        &format!("{first}\n{cost_text}"),
+    );
+    let cache = std::fs::read_to_string(metrics.join("cost-cache.jsonl")).unwrap_or_default();
+    let written = format!("{first}{cost_text}{cache}");
+    let work_text = work.display().to_string();
+    let leaks: Vec<&str> = [CANARY, "fenced-matter", "secret", work_text.as_str(), "7777"]
+        .into_iter()
+        .filter(|l| written.contains(l))
+        .collect();
+    c.check(
+        "cost writes counts only: no text, tool input, path, fenced folder or isolated project in its output, cost.jsonl or cache",
+        !cache.is_empty() && leaks.is_empty(),
+        &format!("{leaks:?}"),
+    );
+    let (ok, second) = run()?;
+    c.check(
+        "a second cost run parses nothing: every transcript comes from the cache",
+        ok && second.contains("0 parsed (0 resumed, 2 from cache)"),
+        &second,
+    );
+    let pulse_home = gw_ops::home::Home::open(home)?;
+    let pulse = gw_ops::pulse::take(&pulse_home, owner)?;
+    let rendered = gw_ops::pulse::render(&pulse);
+    c.check(
+        "the pulse carries the newest cost line and renders it",
+        pulse.cost.as_ref().is_some_and(|k| k.totals.all_time.tokens == 135) && rendered.contains("cost (7d, taken"),
+        &rendered,
+    );
+    Ok(())
+}
+
 /// The first `receipt:<id>` in `text` (a reply says "receipt: receipt:<id>").
 fn receipt_in(text: &str) -> Option<String> {
     text.match_indices("receipt:").find_map(|(at, _)| {
@@ -990,6 +1114,7 @@ the parser now accepts empty input
         pulse_path.is_file() && history.lines().count() == 2 && history.contains("sessions  wrote  blocks  denies"),
         &history,
     );
+    cost_checks(&mut c, exe, base, &home, &owner)?;
 
     // install-team --stamp / --check through the CLI, on a copy of agent files (never ~/.claude/agents).
     let agents = base.join("agents-copy");

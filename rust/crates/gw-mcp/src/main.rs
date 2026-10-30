@@ -218,6 +218,30 @@ enum Command {
         #[arg(long)]
         digest: bool,
     },
+    /// The meter: tokens per session, per human turn and per project from Claude Code's transcripts
+    /// (counts only; fenced folders never opened), one line appended to metrics/cost.jsonl, which the
+    /// pulse reads. Subcommands port tokenmeter's snapshot / compare / weekly / preload.
+    Cost {
+        #[command(subcommand)]
+        action: Option<CostAction>,
+        /// Byte lengths of Groundworks tool results and of the injected brief (off until gw-security
+        /// signs the read).
+        #[arg(long, global = true)]
+        overhead: bool,
+        /// Read's file_path, hashed in memory and never stored, for re-read counts; Read/Grep/Glob
+        /// result byte lengths (off until gw-security signs the read).
+        #[arg(long, global = true)]
+        rereads: bool,
+        /// Parsing threads (default min(8, cores)).
+        #[arg(long, global = true)]
+        threads: Option<usize>,
+        /// Parse every transcript, and leave metrics/cost-cache.jsonl untouched.
+        #[arg(long, global = true)]
+        no_cache: bool,
+        /// The transcripts root (default <claude dir>/projects).
+        #[arg(long, global = true)]
+        root: Option<std::path::PathBuf>,
+    },
     /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
     /// file of its project, every trap's premise absent.
     EvalCheck { file: std::path::PathBuf },
@@ -448,6 +472,54 @@ async fn store_service(action: &StoreAction) -> Result<Option<String>> {
 }
 
 #[derive(Subcommand)]
+enum CostAction {
+    /// tokenmeter `snapshot`: a window summarized and saved under metrics/cost-snapshots.
+    Snapshot {
+        /// RFC 3339 or YYYY-MM-DD (UTC).
+        #[arg(long)]
+        since: String,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long)]
+        label: String,
+        /// One project (or class label such as "(root)").
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// tokenmeter `compare`: two snapshot files (this meter's or tokenmeter's).
+    Compare {
+        a: std::path::PathBuf,
+        b: std::path::PathBuf,
+    },
+    /// tokenmeter `weekly`: the last 7 days against the baseline snapshot; writes metrics/cost-reports.
+    Weekly {
+        #[arg(long)]
+        baseline: Option<std::path::PathBuf>,
+    },
+    /// tokenmeter `preload`: the first turn's context of each session in the window.
+    Preload {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// The differential's half: totals per transcript folder over the window, keyed by a hash of the
+    /// folder name, written as JSON to --out (no cache; tokenmeter's one-level subagent glob with --flat).
+    Folders {
+        #[arg(long)]
+        since: String,
+        #[arg(long)]
+        until: String,
+        #[arg(long)]
+        out: std::path::PathBuf,
+        #[arg(long)]
+        flat: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum OwnerAction {
     /// Set a scope's isolation level (global, ws_<name> or proj_<slug>).
     Level {
@@ -517,6 +589,99 @@ async fn main() -> ExitCode {
 }
 
 /// Ok(false) means the operation ran and reported a failure (a red gate, a non-zero exit).
+/// `groundworks cost` and its tokenmeter subcommands (blocking: it reads files on its own threads).
+#[allow(clippy::too_many_arguments)]
+fn cost(
+    home: &Home,
+    store: &Store,
+    action: Option<CostAction>,
+    overhead: bool,
+    rereads: bool,
+    threads: Option<usize>,
+    no_cache: bool,
+    root: Option<PathBuf>,
+) -> Result<(String, bool)> {
+    use gw_ops::meter;
+    let mut opts = meter::Options::new(root.unwrap_or_else(meter::default_root));
+    opts.reads = meter::Reads { overhead, rereads };
+    opts.threads = threads.unwrap_or_else(meter::default_threads).max(1);
+    opts.cache = !no_cache;
+    let now = || meter::epoch_ms(&gw_ops::pulse::now_iso()).unwrap_or(0);
+    match action {
+        None => {
+            let line = meter::take(home, store, &opts)?;
+            let path = meter::record(home, &line)?;
+            Ok((format!("{}recorded in {}", meter::render(&line), path.display()), true))
+        }
+        Some(CostAction::Snapshot {
+            since,
+            until,
+            label,
+            project,
+        }) => {
+            let since = meter::arg_time(&since)?;
+            let until = until.as_deref().map(meter::arg_time).transpose()?.unwrap_or_else(now);
+            let corpus = meter::load(home, store, &opts)?;
+            let mut snap = meter::summarize(&corpus, since, until, project.as_deref());
+            snap["label"] = serde_json::json!(label);
+            snap["project_filter"] = serde_json::json!(project);
+            snap["taken"] = serde_json::json!(gw_ops::pulse::now_iso());
+            let path = meter::save_snapshot(home, &snap, &label)?;
+            Ok((
+                format!("{}\nsaved {}", meter::print_report(&snap), path.display()),
+                true,
+            ))
+        }
+        Some(CostAction::Compare { a, b }) => {
+            let read =
+                |p: &PathBuf| -> Result<serde_json::Value> { Ok(serde_json::from_str(&std::fs::read_to_string(p)?)?) };
+            Ok((meter::compare(&read(&a)?, &read(&b)?), true))
+        }
+        Some(CostAction::Weekly { baseline }) => {
+            let corpus = meter::load(home, store, &opts)?;
+            Ok((meter::weekly(home, &corpus, baseline.as_deref())?, true))
+        }
+        Some(CostAction::Preload { since, until, project }) => {
+            let until = until.as_deref().map(meter::arg_time).transpose()?.unwrap_or_else(now);
+            let since = since
+                .as_deref()
+                .map(meter::arg_time)
+                .transpose()?
+                .unwrap_or(until - 3 * 86_400_000);
+            let corpus = meter::load(home, store, &opts)?;
+            Ok((
+                serde_json::to_string_pretty(&meter::preload(&corpus, since, until, project.as_deref()))?,
+                true,
+            ))
+        }
+        Some(CostAction::Folders {
+            since,
+            until,
+            out,
+            flat,
+        }) => {
+            opts.cache = false;
+            opts.flat_subagents = flat;
+            let started = std::time::Instant::now();
+            let (since, until) = (meter::arg_time(&since)?, meter::arg_time(&until)?);
+            let corpus = meter::load(home, store, &opts)?;
+            let totals = meter::folder_totals(&corpus, since, until);
+            std::fs::write(&out, serde_json::to_string_pretty(&totals)?)?;
+            Ok((
+                format!(
+                    "{} folder(s), {} transcript(s), {} ms on {}; written to {}",
+                    totals.len(),
+                    corpus.stats.files,
+                    started.elapsed().as_millis(),
+                    gw_ops::home::machine(),
+                    out.display()
+                ),
+                true,
+            ))
+        }
+    }
+}
+
 async fn open_store(home: &Arc<Home>) -> Result<Arc<Store>> {
     let home = Arc::clone(home);
     Ok(Arc::new(store::blocking(move || Store::open(&home)).await?))
@@ -830,6 +995,18 @@ async fn dispatch(command: Command) -> Result<bool> {
                 })
                 .await?
             }
+        }
+        Command::Cost {
+            action,
+            overhead,
+            rereads,
+            threads,
+            no_cache,
+            root,
+        } => {
+            let store = open_store(&home).await?;
+            let home2 = Arc::clone(&home);
+            store::blocking(move || cost(&home2, &store, action, overhead, rereads, threads, no_cache, root)).await?
         }
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
         Command::EvalDraw { days, exclude_by, out } => {

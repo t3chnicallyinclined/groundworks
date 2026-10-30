@@ -1173,6 +1173,38 @@ impl Store {
             .unwrap_or_default())
     }
 
+    /// When each gate receipt of a project was taken (RFC 3339), oldest first: receipts whose command
+    /// `gate` wrote (`gate: <steps>`, ops.rs). The meter counts them as work per million tokens.
+    pub fn gate_receipt_times_since(&self, project: &str) -> Result<Vec<String>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let rows = self.retrying(|| {
+            Ok(db.query(
+                "SELECT VALUE <string> ran_at FROM receipt WHERE string::starts_with(command, 'gate: ') ORDER BY ran_at;",
+                &Vars::default().0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(seconds)).collect())
+            .unwrap_or_default())
+    }
+
+    /// Ask packets opened in the last `days`: when, status and author only (the meter's pass rate, week
+    /// on week).
+    pub fn ask_statuses_since(&self, days: u64) -> Result<Vec<Value>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("d", format!("{days}d"));
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT <string> at AS at, status, by FROM ask_packet WHERE at > time::now() - <duration>$d;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_array().cloned().unwrap_or_default())
+    }
+
     /// Facts recorded from asks in the last `days`.
     pub fn facts_from_asks_since(&self, project: &str, days: u64) -> Result<u64> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;

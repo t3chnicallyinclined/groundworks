@@ -60,6 +60,40 @@ Other red conditions in the digest:
 | `machine` | equals `unknown` (doctor fails on the same) |
 | no sessions | `use.all_time.sessions = 0`: the hooks have never run against this store (install the plugin, open a session, run `doctor`) |
 
+## The `cost` numbers (`groundworks cost`; the pulse shows the newest line)
+
+`groundworks cost` (gw-ops `meter.rs`, a port of tokenmeter.py starting from fleet-core rs-02) reads Claude
+Code's transcripts under `<claude dir>/projects` for **counts only**: `message.usage` numbers, the model, tool_use
+names, timestamps, tool_use ids, and the working directory each line records, which it maps to a registered
+project (its worktrees included) or to a class (`(root)` = the workspace itself, `(workspace)` = an unregistered
+folder in it, `(home)`, `(outside)`), never written as a path. A transcript folder whose name, dashes read as
+spaces, matches a `scan.local_only` glob, or names an isolated project, is never opened; a transcript whose
+recorded working directory falls under either is dropped whole. One line per run goes to
+`<home>/metrics/cost.jsonl`; `<home>/metrics/cost-cache.jsonl` (counts only, keyed by session, size, mtime and
+byte offset) makes the next run parse only what changed. `pulse` reads the newest `cost.jsonl` line and never a
+transcript. Each line names its machine and the scan's wall ms. Window: 7 days; previous window: the 7 before.
+
+| Field (per span: `window`, `previous_window`, `all_time`; per project: `window`, `all_time`, `before`, `after`) | Definition |
+|---|---|
+| `turns` | API responses, deduplicated on (message.id, requestId) across every transcript, first occurrence wins |
+| `input`, `cache_read`, `cache_write`, `output`, `tokens` | the usage numbers summed; `tokens` is all four |
+| `sessions`, `contexts` | distinct session ids (a main session and its subagents are one), transcript files |
+| `human_turns` | user lines whose content is typed text, in main sessions (tokenmeter's `prompts`) |
+| `tokens_per_session`, `tokens_per_human_turn` | `tokens` / `sessions`, `tokens` / `human_turns` |
+| `main_ctx_p90` | p90 of input + cache read + cache write per main-session turn (tokenmeter's index rule) |
+| `usd`, `unpriced_turns` | derived from `prices.toml` (data); a model without a row is counted as unpriced, never as $0 |
+| `gw_calls`, `asks`, `ask_latency_p50_ms`/`p95` | Groundworks tool calls (`mcp__plugin_groundworks_groundworks__*`, `mcp__groundworks__*`); latency is tool_use to tool_result time |
+| `gw_result_bytes`, `brief_bytes`, `gw_tokens_est`, `overhead_share`, `packet_bytes_p50`/`p95` | **only with `--overhead`** (off until gw-security signs the read): byte lengths of Groundworks tool results and of the SessionStart brief (an attachment carrying the `groundworks-journal` frame); `overhead_share` = Groundworks bytes carried in context (until a compaction) / 2.98 bytes per token / all input tokens, an estimate |
+| `rereads_per_session_median`, `reread_calls`, `reread_bytes`, `search_bytes_before_ask`/`after_ask` | **only with `--rereads`** (off until signed): Read's file_path is hashed in memory and dropped; a (file, offset, limit) read 3+ times in a context is a re-read; Read/Grep/Glob result bytes before and after the context's first ask |
+| `commits`, `gate_receipts`, `work_per_mtok` | git commits on every branch, and `gate: ` receipts, of registered projects; (commits + gates) per million `tokens`; None outside registered projects |
+| `first_seen`, `before`, `after` | the earliest hook session row or Groundworks call for the project; all time split there. **A trend, confounded** (model mix, task mix), never proof: docs/EVAL-HELPS-OR-HURTS.md is the proof |
+| `asks.asks`, `passed`, `previous_*`, `gw_tokens_per_passed` | ask packets in the store (eval sessions apart) this week and last; ask result bytes / 2.98 / passed (with `--overhead`) |
+
+Red (in `cost.red` and the pulse digest): overhead share above 10% of input in the window (an inference, to be
+reset after the first measurement with `--overhead`); tokens per human turn up more than 20% week on week with no
+model's share of turns moving more than 10 points; asks passed share falling week on week. The pulse adds: the
+Stop hook's p95 (`hook p95` line, Stop on its own) above 300 ms.
+
 ## Reading it
 
 - `write_rate` is the number the design asked for ("are we using it in project X"): sessions that start

@@ -1,0 +1,43 @@
+{
+ "eval_id": "HH-1-helps-or-hurts",
+ "written_at": "2026-10-30T23:30:00+00:00",
+ "status": "WRITTEN, NOT RUN. Running it is an owner go (design ticket 2026-10-30, amendment A1.4). Every number below is fixed before any session of this eval exists; a change after the first session is an amendment with its own timestamp and reason, and a result read before an amendment voids the run.",
+ "question": "Does Groundworks help or hurt an agent answering real questions about the owner's projects: more correct answers, fewer confidently wrong ones, and at what token cost?",
+ "harness": "groundworks eval-run (rust/crates/gw-ops/src/eval_run.rs) unchanged: each question in a fresh headless Claude Code session started in an empty folder, plugin off, read tools only; recording off (GROUNDWORKS_NO_RECORD); a third session with no tools grades each answer against the gold answer without knowing the arm. No new harness.",
+ "set": {
+  "source": "a FRESH set from `groundworks eval-draw --days 30` over real asks (ask_packet rows, eval runners excluded). The ask-v1 and ask-v2 sets are worn (ask-v2 used as a test set five times by r11) and are not used.",
+  "size": "47 questions after the owner approves or rewrites each drawn line and sets its category; `groundworks eval-check` must pass on the frozen file (every gold quote found word for word in a tracked file, every trap's premise absent)",
+  "categories": "at least 6 traps (false premise) and at least 6 questions whose gold needs two sources; the rest as drawn",
+  "freeze": "the set file's sha256 is written into this prereg (amendment, before the first session) and checked by the runner's operator before starting",
+  "never_from": "no question drawn from a scan.local_only folder or an isolated project; eval-draw reads ask packets only, which never searched them"
+ },
+ "arms": ["plain", "groundworks"],
+ "baseline_arm": "plain",
+ "pairing": "the same 47 questions in both arms, same model, same effort, same budget cap; the unit of analysis is the question (a pair), not the session",
+ "model": "opus",
+ "effort": "high",
+ "grader": "opus, no tools, blind to the arm, one retry on bad JSON; verdict correct | partial | wrong | abstained plus a confidently_wrong flag, as eval_run.rs grades them (eval_run.rs:369-377)",
+ "metrics": {
+  "primary_correct": "verdict correct per arm, with 95% Wilson intervals",
+  "primary_confidently_wrong": "confidently_wrong per arm (the costly error)",
+  "tokens": "tokens per question as Claude Code reports them (input + cache read + cache write + output), median per arm, and per pair which arm used fewer",
+  "tokens_wasted": "tokens spent on a question the arm got wrong (verdict wrong, or confidently_wrong), plus tokens the groundworks arm spent above the plain arm on pairs where both answers got the same verdict (help that changed nothing), each summed and reported with its count",
+  "secondary": "turns per question; cost in USD as Claude Code reports it; questions where the groundworks arm saw a recorded fact (packet with a fact candidate)"
+ },
+ "noise_floor": "+-4 on 47 correct (the ask-v2 r2-r5 spread on the same set, 44/43/43/42)",
+ "decision_rule": {
+  "helps": "groundworks has >= 4 more correct than plain (beyond the noise floor) AND no more confidently_wrong than plain AND tokens not higher by the sign test (fewer tokens on >= 16 of 47 pairs)",
+  "costs_less": "groundworks uses fewer tokens on >= 32 of 47 pairs (one-sided sign test p = 0.009) AND its correct is within the noise floor of plain (>= plain - 4) AND no more confidently_wrong",
+  "hurts": "groundworks has >= 4 fewer correct, or more confidently_wrong than plain, or more tokens on >= 32 of 47 pairs with correct within noise",
+  "no_evidence": "anything else, including overlapping Wilson intervals with a difference inside the noise floor. 'No evidence either way' is a result and is reported as one, never rounded toward help",
+  "reported_together": "every verdict is printed with the unflattering number next to the flattering one: correct with confidently_wrong, tokens saved with tokens wasted"
+ },
+ "threats": [
+  "question answering about the owner's projects is not the whole of the owner's work: coding sessions, builds and releases are not measured here; the meter's before/after trend (groundworks cost) covers them only as a confounded trend",
+  "the set is drawn from questions agents asked Groundworks, which may favour the groundworks arm; the plain arm has the same files and read tools, and the traps guard against premise-following",
+  "one run per arm: LLM answers vary between runs (+-4 on 47 measured), which is why a difference inside the floor is no evidence",
+  "the grader is one model; a sample of 10 pairs is re-graded by the owner blind to the arm and the grader's agreement is reported"
+ ],
+ "budget": "94 answering sessions + 94 grading sessions on the subscription; the ask-v2 r10/r11 runs of 66 cost about $25-33 per arm",
+ "outputs": "rows appended by eval-run (resumable); the report from eval-report; the verdict line recorded in the groundworks journal as a decision with the run's machine"
+}

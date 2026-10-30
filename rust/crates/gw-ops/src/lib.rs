@@ -16,6 +16,7 @@ pub mod intake;
 pub mod journal;
 pub mod knowledge;
 pub mod lens;
+pub mod meter;
 pub mod ops;
 pub mod panel;
 pub mod pulse;

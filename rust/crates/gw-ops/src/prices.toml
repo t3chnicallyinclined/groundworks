@@ -1,0 +1,63 @@
+# Model prices for `groundworks cost`, in US dollars per million tokens. Data, not code: tokens are the
+# meter's unit and dollars a derived column, so a price change is an edit here and nothing else.
+#
+# Sources: the claude-api skill's model table (cached 2026-10-06; read 2026-10-30) and fleet-core
+# price.rs (collect.py PRICES, rs-02). A row without cache_write prices it at 1.25 x input (the 5-minute
+# cache write); without cache_read, at 0.1 x input. A dated model id (`-YYYYMMDD`) prices as its undated row.
+# A model not listed here is counted in tokens and reported as unpriced, never priced at zero.
+
+[models."claude-fable-5-1"]
+input = 10.0
+output = 50.0
+cache_read = 0.25
+
+[models."claude-mythos-5-1"]
+input = 10.0
+output = 50.0
+cache_read = 0.25
+
+[models."claude-fable-5"]
+input = 10.0
+output = 50.0
+
+[models."claude-opus-5-5"]
+input = 4.0
+output = 20.0
+cache_read = 0.20
+
+[models."claude-opus-5"]
+input = 5.0
+output = 25.0
+
+[models."claude-opus-4-8"]
+input = 5.0
+output = 25.0
+
+[models."claude-opus-4-7"]
+input = 5.0
+output = 25.0
+
+[models."claude-opus-4-6"]
+input = 5.0
+output = 25.0
+
+[models."claude-sonnet-5-5"]
+input = 2.0
+output = 10.0
+cache_read = 0.20
+
+[models."claude-sonnet-5"]
+input = 2.0
+output = 10.0
+
+[models."claude-sonnet-4-6"]
+input = 3.0
+output = 15.0
+
+[models."claude-haiku-5-5"]
+input = 0.10
+output = 0.50
+
+[models."claude-haiku-4-5"]
+input = 1.0
+output = 5.0
