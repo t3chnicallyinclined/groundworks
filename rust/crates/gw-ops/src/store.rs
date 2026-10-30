@@ -345,7 +345,10 @@ impl Store {
         crate::refusal::check_fact(fact)?;
         let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
         needs_evidence(fact)?;
-        let grade = grade(fact.confidence);
+        let grade = match quote_cap(fact) {
+            Some(_) => grade(Confidence::Inferred),
+            None => grade(fact.confidence),
+        };
         // The machine is what the writer reports; the store cannot verify a machine name.
         let machine_name = match origin {
             Some(o) => o.machine.clone(),
@@ -1635,7 +1638,9 @@ impl Quote {
         let wanted = self.text.replace("\r\n", "\n");
         let wanted = wanted.trim_end_matches('\n');
         ensure!(!wanted.trim().is_empty(), "a quote needs text");
-        let path = project_dir.join(rel);
+        // A memory path maps into Claude Code's memory folder for the project, as `recheck_quotes` reads it;
+        // before 2026-10-30 it was joined to the project, so a memory quote could never be kept at all.
+        let path = crate::claude_setup::resolve(project_dir, &self.file, &crate::ops::claude_dir());
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?
             .replace("\r\n", "\n");
@@ -1826,6 +1831,18 @@ fn needs_evidence(fact: &FactIn) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// When a CONFIRMED fact's only evidence is a quote of the project's Claude setup or memory (kinds
+/// `instructions`, `agent`, `skill`, `command`, `memory`), the kind that caps it at INFERRED: such a file
+/// records what an agent was told or remembered, so quoting it proves the line exists, not that it holds
+/// (docs/DECISIONS.md 2026-10-30). A receipt or an owner statement is evidence of its own and lifts the cap.
+pub fn quote_cap(fact: &FactIn) -> Option<&'static str> {
+    if fact.confidence != Confidence::Confirmed || fact.receipt.is_some() || fact.owner_statement.is_some() {
+        return None;
+    }
+    let kind = crate::intake::kind_of_path(&fact.quote.as_ref()?.file)?;
+    crate::intake::SETUP_KINDS.contains(&kind).then_some(kind)
 }
 
 /// The key of `fact:<key>`: letters, digits and _ only.
@@ -2081,6 +2098,38 @@ mod tests {
         assert_eq!(slug("GP2040-CE").unwrap(), "gp2040_ce");
         assert_eq!(slug("--a--b--").unwrap(), "a_b");
         assert!(slug("---").is_err());
+    }
+
+    #[test]
+    fn a_quote_of_setup_or_memory_alone_caps_confirmed_at_inferred() {
+        let fact = |file: &str| FactIn {
+            kind: Kind::Fact,
+            text: "x".into(),
+            confidence: Confidence::Confirmed,
+            source: "s".into(),
+            by: "b".into(),
+            receipt: None,
+            owner_statement: None,
+            quote: Some(Quote {
+                file: file.into(),
+                line: 1,
+                text: "x".into(),
+            }),
+            lens: None,
+            attacks: None,
+            stance: None,
+        };
+        assert_eq!(quote_cap(&fact("CLAUDE.md")), Some("instructions"));
+        assert_eq!(quote_cap(&fact("~claude-memory/note.md")), Some("memory"));
+        assert_eq!(quote_cap(&fact(".claude/commands/ship.md")), Some("command"));
+        assert_eq!(quote_cap(&fact("notes.txt")), None);
+        assert_eq!(quote_cap(&fact("src/a.rs")), None);
+        let mut with_receipt = fact("CLAUDE.md");
+        with_receipt.receipt = Some("receipt:abc".into());
+        assert_eq!(quote_cap(&with_receipt), None, "a receipt is evidence of its own");
+        let mut inferred = fact("CLAUDE.md");
+        inferred.confidence = Confidence::Inferred;
+        assert_eq!(quote_cap(&inferred), None);
     }
 
     #[test]

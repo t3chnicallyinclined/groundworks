@@ -11,7 +11,8 @@
 //! - **Experts**: an expert agent's definition cites the files and folders it owns. Every cited path
 //!   that exists in the project becomes part of that expert's area, with the agent file and line as
 //!   its evidence; units under it are tagged with the expert.
-//! - **Skipped, and counted**: files that look like secrets, binaries, lockfiles, anything over
+//! - **Skipped, and counted**: files named like secrets, units whose text looks like one (the journal's
+//!   secret refusal, run on every unit since 2026-10-30), binaries, lockfiles, anything over
 //!   200 KB, and kinds of file nobody reads for knowledge.
 //!
 //! Units are cut along markdown headings or in fixed windows of lines; a unit's text is exactly the
@@ -111,6 +112,39 @@ pub struct Collected {
     pub paths: Vec<String>,
     /// What was read of the project's own Claude Code setup (all zero when it is turned off).
     pub setup: SetupReport,
+    /// Units whose own text the secret refusal fired on: the locator and the pattern id, never the text.
+    /// Skipped, never stored (also counted in `skipped` as [`UNIT_SECRET`]).
+    pub refused: Vec<(String, &'static str)>,
+}
+
+impl Collected {
+    /// The refused units counted by pattern id.
+    pub fn refused_by_pattern(&self) -> BTreeMap<&'static str, usize> {
+        let mut by: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for (_, id) in &self.refused {
+            *by.entry(id).or_default() += 1;
+        }
+        by
+    }
+}
+
+/// Why a unit was skipped when its own text looks like it holds a secret.
+pub const UNIT_SECRET: &str = "unit whose text looks like it holds a secret";
+
+/// Drop every unit whose text the journal's secret refusal fires on, keeping its locator and pattern id
+/// (gw-security 2026-10-30, the init design's S0 (c)): the match is never stored, logged or printed.
+fn refuse_secret_units(c: &mut Collected) {
+    let refused = &mut c.refused;
+    c.units.retain(|u| match crate::refusal::check(&u.text) {
+        Some(hit) => {
+            refused.push((u.locator.clone(), hit.id));
+            false
+        }
+        None => true,
+    });
+    if !c.refused.is_empty() {
+        *c.skipped.entry(UNIT_SECRET).or_default() += c.refused.len();
+    }
 }
 
 /// Counts of the Claude Code setup an intake read: files by kind, memory stored and refused, sessions.
@@ -151,6 +185,21 @@ pub fn expand_kinds(kinds: &[String]) -> Vec<String> {
 
 /// The kinds that are the project's own Claude Code setup.
 pub const SETUP_KINDS: [&str; 5] = ["instructions", "agent", "skill", "command", "memory"];
+
+/// The file kinds a quote can confirm a fact from (docs/DECISIONS.md 2026-10-30, the init design's S0 (b)):
+/// the project's own code, config and docs. The setup kinds ([`SETUP_KINDS`]) are what an agent was told or
+/// remembered: a word-for-word quote of one proves the line is there, not that it is true, so a fact that
+/// rests on them alone is INFERRED.
+pub const CONFIRMING_KINDS: [&str; 4] = ["code", "config", "doc", "context"];
+
+/// The kind intake gives a unit path: `memory` under [`crate::claude_setup::MEMORY_PREFIX`], otherwise by
+/// the file's name and folder. None for a file intake does not read.
+pub fn kind_of_path(path: &str) -> Option<&'static str> {
+    if path.starts_with(crate::claude_setup::MEMORY_PREFIX) {
+        return Some("memory");
+    }
+    classify(&path.replace('\\', "/"))
+}
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
@@ -628,7 +677,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize, claud
         }
         let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
         // Every Claude setup file, tracked or not, passes the journal's secret refusal before it is stored
-        // (gw-security, 2026-10-30). The rest of intake still skips by file name only.
+        // (gw-security, 2026-10-30), whole: a hit skips the file. Every other unit passes it one by one at the end.
         if SETUP_KINDS.contains(&kind) && crate::refusal::check(&text).is_some() {
             c.setup.setup_refused += 1;
             skip(&mut c, SETUP_SECRET);
@@ -709,12 +758,48 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize, claud
             });
         }
     }
+    // Every unit, of every kind, passes the refusal on its own text: a file the name filter let through
+    // can still hold a pasted token, and only the unit holding it is skipped.
+    refuse_secret_units(&mut c);
     Ok(c)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_unit_holding_a_secret_is_skipped_and_counted_by_pattern_and_its_neighbours_stay() {
+        let (_, secret) = crate::refusal::must_refuse()
+            .into_iter()
+            .find(|(id, _)| id == "kv-secret")
+            .unwrap();
+        let mut c = Collected::default();
+        c.units.push(Unit::new(
+            "notes.md#L1-2".into(),
+            "doc",
+            "# Clean\nThe manatee is fine.".into(),
+        ));
+        c.units.push(Unit::new(
+            "notes.md#L3-4".into(),
+            "doc",
+            format!("# Pasted\nThe dugong: {secret}"),
+        ));
+        c.units
+            .push(Unit::new("commit:abc".into(), "commit", format!("fix\n\n{secret}")));
+        refuse_secret_units(&mut c);
+        assert_eq!(c.units.len(), 1);
+        assert_eq!(c.units[0].locator, "notes.md#L1-2");
+        assert_eq!(c.refused_by_pattern().get("kv-secret"), Some(&2));
+        assert_eq!(c.refused[1].0, "commit:abc");
+        assert_eq!(c.skipped.get(UNIT_SECRET), Some(&2));
+        // The policy table: setup and memory paths cannot confirm, code and docs can.
+        assert_eq!(kind_of_path("~claude-memory/a.md"), Some("memory"));
+        assert_eq!(kind_of_path("CLAUDE.md"), Some("instructions"));
+        assert_eq!(kind_of_path(".claude/agents/x.md"), Some("agent"));
+        assert_eq!(kind_of_path("src/main.rs"), Some("code"));
+        assert!(CONFIRMING_KINDS.iter().all(|k| !SETUP_KINDS.contains(k)));
+    }
 
     #[test]
     fn kinds_put_context_first() {
@@ -806,7 +891,7 @@ mod tests {
         write(&sessions.join("a.jsonl"), "{\"platypus\": 1}\n");
         write(&sessions.join("b.jsonl"), "{\"platypus\": 2}\n");
 
-        let (local, _) = crate::claude_setup::project_experts(&project, "proj").unwrap();
+        let local = crate::claude_setup::project_experts(&project, "proj").unwrap().experts;
         let on = collect(&project, &local, 0, Some(&claude)).unwrap();
         let kind_of =
             |c: &Collected, path: &str| c.units.iter().find(|u| u.path.as_deref() == Some(path)).map(|u| u.kind);

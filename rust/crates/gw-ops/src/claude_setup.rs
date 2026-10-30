@@ -71,14 +71,57 @@ fn md_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// The project's own experts (`.claude/agents/*.md`, tagged `project:<name>`) and the disabled folders
-/// beside them, which are not loaded.
-pub fn project_experts(project_dir: &Path, project: &str) -> Result<(Vec<Expert>, Vec<Disabled>)> {
+/// Whether `name` belongs to the Groundworks team, so a project's own agent may not take it (the init
+/// design's S0 (d)): `groundworks` and every `gw-*`, in any case. Otherwise a repo could ship its own
+/// `gw-security` and replace the team's inside its project.
+pub fn is_reserved(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    name == "groundworks" || name.starts_with("gw-")
+}
+
+/// A project agent that took a reserved name: reported, never loaded.
+#[derive(Debug, Clone)]
+pub struct Reserved {
+    /// The name, made plain for printing.
+    pub name: String,
+    /// The definition's path inside the project, forward slashes.
+    pub file: String,
+}
+
+/// A project's own experts, as intake and the expert directory see them.
+#[derive(Debug, Clone, Default)]
+pub struct Local {
+    /// Loaded, tagged `project:<name>`; none of them has a reserved name.
+    pub experts: Vec<Expert>,
+    /// Folders the owner switched off: reported, not loaded.
+    pub disabled: Vec<Disabled>,
+    /// Definitions that took a team name: reported, not loaded.
+    pub reserved: Vec<Reserved>,
+}
+
+/// The project's own experts (`.claude/agents/*.md`, tagged `project:<name>`), the disabled folders beside
+/// them and the definitions that took a reserved name ([`is_reserved`]); only the first are loaded.
+pub fn project_experts(project_dir: &Path, project: &str) -> Result<Local> {
     let claude = project_dir.join(".claude");
-    let mut experts = load_experts(&[claude.join("agents")])?;
+    let (mut experts, taken): (Vec<Expert>, Vec<Expert>) = load_experts(&[claude.join("agents")])?
+        .into_iter()
+        .partition(|e| !is_reserved(&e.name));
     for e in &mut experts {
         e.source = format!("project:{project}");
     }
+    let reserved = taken
+        .iter()
+        .map(|e| Reserved {
+            name: plain(&e.name),
+            file: e
+                .file
+                .strip_prefix(project_dir)
+                .unwrap_or(&e.file)
+                .display()
+                .to_string()
+                .replace('\\', "/"),
+        })
+        .collect();
     let mut disabled: Vec<Disabled> = std::fs::read_dir(&claude)
         .into_iter()
         .flatten()
@@ -93,13 +136,18 @@ pub fn project_experts(project_dir: &Path, project: &str) -> Result<(Vec<Expert>
         })
         .collect();
     disabled.sort_by(|a, b| a.folder.cmp(&b.folder));
-    Ok((experts, disabled))
+    Ok(Local {
+        experts,
+        disabled,
+        reserved,
+    })
 }
 
 /// The experts that map areas in one project: its own, then every global expert it does not override
-/// by name.
+/// by name. A local expert with a reserved name is dropped here too, so it never shadows the team's.
 pub fn merge(global: &[Expert], local: &[Expert]) -> Vec<Expert> {
-    let mut out: Vec<Expert> = local.to_vec();
+    let local: Vec<&Expert> = local.iter().filter(|l| !is_reserved(&l.name)).collect();
+    let mut out: Vec<Expert> = local.iter().map(|l| (*l).clone()).collect();
     out.extend(
         global
             .iter()
@@ -300,7 +348,7 @@ mod tests {
             &dir.join(".claude/agents.disabled-2026-09-21/old.md"),
             "---\nname: old\ndescription: Was switched off.\n---\n",
         );
-        let (experts, disabled) = project_experts(&dir, "demo").unwrap();
+        let Local { experts, disabled, .. } = project_experts(&dir, "demo").unwrap();
         assert_eq!(experts.len(), 1);
         assert_eq!(
             (experts[0].name.as_str(), experts[0].source.as_str()),
@@ -324,6 +372,41 @@ mod tests {
         let merged = merge(&[e("a", "global"), e("b", "global")], &[e("b", "project:p")]);
         let pairs: Vec<(&str, &str)> = merged.iter().map(|x| (x.name.as_str(), x.source.as_str())).collect();
         assert_eq!(pairs, vec![("a", "global"), ("b", "project:p")]);
+    }
+
+    #[test]
+    fn a_team_name_is_reported_never_loaded_and_never_shadows_the_global_one() {
+        assert!(is_reserved("gw-security") && is_reserved(" GW-Engineer ") && is_reserved("Groundworks"));
+        assert!(!is_reserved("gwen") && !is_reserved("groundworks-helper") && !is_reserved("my-gw-x"));
+        let dir = scratch("reserved");
+        write(
+            &dir.join(".claude/agents/gw-security.md"),
+            "---\nname: gw-security\ndescription: A repo's own security agent.\n---\n",
+        );
+        write(
+            &dir.join(".claude/agents/local.md"),
+            "---\nname: local\ndescription: Owns `src/`.\n---\n",
+        );
+        let local = project_experts(&dir, "demo").unwrap();
+        let names: Vec<&str> = local.experts.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["local"]);
+        assert_eq!(local.reserved.len(), 1);
+        assert_eq!(
+            (local.reserved[0].name.as_str(), local.reserved[0].file.as_str()),
+            ("gw-security", ".claude/agents/gw-security.md")
+        );
+        // Even handed a reserved local directly, merge keeps the global definition.
+        let e = |name: &str, source: &str| Expert {
+            name: name.into(),
+            summary: String::new(),
+            file: PathBuf::from(format!("{source}/{name}.md")),
+            text: String::new(),
+            source: source.into(),
+        };
+        let merged = merge(&[e("gw-security", "global")], &[e("gw-security", "project:demo")]);
+        let pairs: Vec<(&str, &str)> = merged.iter().map(|x| (x.name.as_str(), x.source.as_str())).collect();
+        assert_eq!(pairs, vec![("gw-security", "global")]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

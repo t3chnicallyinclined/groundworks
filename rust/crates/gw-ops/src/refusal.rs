@@ -389,6 +389,10 @@ fn char_offset(text: &str, byte: usize) -> usize {
 
 /// The first pattern that fires on `text`, if any. Offsets are into the masked text, which differs from
 /// the original only where a reference was replaced; the field and the id are what the writer needs.
+///
+/// The one public entry point for any free text: every intake unit (since 2026-10-30), the SessionStart
+/// brief's names, the planned UserPromptSubmit hint (Phase 4), and (through [`check_fact`] / [`check_text`]) every journal
+/// write. Callers act on the `Hit`'s id and offset and never print the matched text.
 pub fn check(text: &str) -> Option<Hit> {
     let c = compiled();
     let masked = ref_mask().replace_all(text, "REF");
