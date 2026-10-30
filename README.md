@@ -103,7 +103,8 @@ some parts are rough.
 
 ## What I'm working on next
 
-- A desktop app for it, built on the open-source [Nimbalyst](https://github.com/Nimbalyst/nimbalyst).
+- A desktop app for it, a copy of the open-source [Nimbalyst](https://github.com/Nimbalyst/nimbalyst) with
+  Groundworks added.
 - Making the "check your notes first" step automatic instead of something the agent has to remember.
 - Simple alerts when backups or the database stop working.
 - An easy way to remove a project and all its data.
@@ -121,6 +122,28 @@ Then open a project in Claude Code and run `/groundworks:init`. More detail is i
 [plugin/README.md](plugin/README.md).
 
 **If it sounds helpful, give it a fork** and make it fit how you work. Issues and ideas are welcome.
+
+## Thanks
+
+Groundworks stands on a lot of other people's work. Thank you to:
+
+- **[Nimbalyst](https://github.com/Nimbalyst/nimbalyst)** (MIT). The Groundworks desktop app I'm building is a
+  copy of Nimbalyst with Groundworks added on top.
+- **[Claude Code](https://github.com/anthropics/claude-code)** by Anthropic. Its plugins, hooks and agents are what
+  Groundworks plugs into.
+- **[Model Context Protocol](https://github.com/modelcontextprotocol/modelcontextprotocol)** and its
+  [Rust SDK](https://github.com/modelcontextprotocol/rust-sdk), which the Groundworks tools are served through.
+- **[SurrealDB](https://github.com/surrealdb/surrealdb)**, the graph database underneath everything.
+- **[Council of High Intelligence](https://github.com/0xNyk/council-of-high-intelligence)** by nyk (MIT). The
+  expert panel protocol adapts its ideas.
+- **[Copier](https://github.com/copier-org/copier)** and **[uv](https://github.com/astral-sh/uv)**, which run the
+  project templates.
+- **[autoresearch](https://github.com/karpathy/autoresearch)** by Andrej Karpathy and
+  **[Recursive Language Models](https://github.com/alexzhang13/rlm)** by Alex Zhang and co-authors, for ideas I
+  learned from.
+- The Rust crates listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which also records every license.
+
+The logo and mascot art were made with Ideogram and Recraft.
 
 ## Repository map
 

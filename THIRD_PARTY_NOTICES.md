@@ -44,6 +44,7 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | Component | License | Note |
 |---|---|---|
 | surrealdb.py, surrealkv | Apache-2.0 | Keep license and NOTICE |
+| Nimbalyst (Nimbalyst/nimbalyst) | MIT | The Groundworks desktop app is a private copy of it with Groundworks added; none of its code is in this repository. Its LICENSE and notices travel with that copy |
 | Other permissive embedding candidates: nomic-embed-text (Apache-2.0), arctic-embed-l-v2.0 (Apache-2.0), mxbai-embed-large-v1 (Apache-2.0) | as listed | **Never jina-embeddings-v3 (CC-BY-NC-4.0)** |
 
 ## Model weights used (local only, not distributed)
