@@ -307,6 +307,18 @@ enum Command {
     EvalSeed { set: std::path::PathBuf },
     /// Summarise an eval run folder: rates with 95% intervals per arm, and the paired comparison.
     EvalReport { dir: std::path::PathBuf },
+    /// The idea-bridge evaluator (no model, read-only): the cross-project links made after --cutoff are the
+    /// gold; with at least 20 of them, hit@10 of the random, flat and facet arms over the cards made at or before
+    /// it, a paired sign test against flat, and a shuffled-gold control. Fewer than 20: "no evidence".
+    BridgeEval {
+        /// RFC 3339; default 14 days ago.
+        #[arg(long)]
+        cutoff: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+    },
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
@@ -1068,6 +1080,14 @@ async fn dispatch(command: Command) -> Result<bool> {
             )
         }
         Command::EvalReport { dir } => (gw_ops::eval_run::report(&dir)?, true),
+        Command::BridgeEval { cutoff, k, seed } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let cutoff = cutoff.unwrap_or_else(|| gw_ops::bridge_eval::days_ago(14));
+            let text =
+                store::blocking(move || gw_ops::bridge_eval::run(&home, &store, &cutoff, k.clamp(1, 50), seed)).await?;
+            (text, true)
+        }
         Command::EvalRouter { set, haiku } => {
             let store = open_store(&home).await?;
             let home = Arc::clone(&home);

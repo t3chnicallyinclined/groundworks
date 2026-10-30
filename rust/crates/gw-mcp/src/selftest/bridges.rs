@@ -503,5 +503,69 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             && foreign.iter().all(|k| !text.contains(k.trim_start_matches("card:"))),
         &format!("{searched}\n{text}"),
     );
+
+    // ---- B4 bridge eval ---------------------------------------------------------------------------------------
+    // Gold planted after the cutoff: a demo fact citing a red fact (shared, unwalled: counts); an alpha fact
+    // citing a gamma fact (walled: does not); a privy fact citing a beta fact (privy is private: never read).
+    let fact = |s: &mut Client, project: &str, text: &str| -> Result<String> {
+        let (err, reply) = s.call(
+            "journal_add",
+            json!({"project": project, "kind": "fact", "text": text, "source": "selftest bridge eval",
+                   "confidence": "INFERRED", "by": "selftest"}),
+        )?;
+        if err {
+            bail!("journal_add in {project} failed in the eval fixture: {reply}");
+        }
+        reply
+            .split_whitespace()
+            .find(|w| w.starts_with("fact:"))
+            .map(|w| w.trim_end_matches(':').to_owned())
+            .context("a fact id")
+    };
+    let red_fact = fact(s, "red", "The relay drops datagrams over twelve hundred bytes.")?;
+    fact(
+        s,
+        "demo",
+        &format!("The demo keeps datagrams small because of {red_fact}."),
+    )?;
+    let gamma_fact = fact(s, "gamma", "The ring buffer holds eight frames.")?;
+    fact(s, "alpha", &format!("Alpha sizes its buffer from {gamma_fact}."))?;
+    let beta_fact = fact(s, "beta", "The hysteresis band is two degrees wide.")?;
+    fact(s, "privy", &format!("A private note leaning on {beta_fact}."))?;
+    let out = Command::new(exe)
+        .args(["bridge-eval", "--cutoff", "2000-01-01T00:00:00Z"])
+        .env("GROUNDWORKS_HOME", home)
+        .env("GROUNDWORKS_MACHINE", "SELFTEST")
+        .env_remove("GROUNDWORKS_START")
+        .stdin(Stdio::null())
+        .output()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    c.check(
+        "B4: bridge-eval counts the gold links: one fact citing another shared project's fact",
+        out.status.success()
+            && text.contains("gold links after the cutoff: 1 (fact links 1, packet links 0)")
+            && text.contains("  demo -> red: 1"),
+        &text,
+    );
+    c.check(
+        "B4 (gw-security 5): the evaluator reads through the same reach: a walled pair and a private project add no gold",
+        !text.contains("alpha -> gamma") && !text.contains("privy ->") && text.contains("privy (private)"),
+        &text,
+    );
+    c.check(
+        "B4: with fewer than 20 gold links it prints no evidence and compares no arm",
+        text.contains("RESULT: no evidence. 1 gold link(s), fewer than 20") && !text.contains("hit@"),
+        &text,
+    );
+    let failures = gw_ops::bridge_eval::selfcheck();
+    c.check(
+        "B4: the shuffled-gold control scores at chance, and true gold near 1 (synthetic pool of 120)",
+        failures.is_empty(),
+        &failures.join("; "),
+    );
     Ok(())
 }
