@@ -70,11 +70,14 @@ impl Candidate {
             return false;
         };
         let confirming = |k: &str| crate::intake::CONFIRMING_KINDS.contains(&k);
-        match self.kind.as_deref() {
-            Some("quote") => crate::intake::kind_of_path(path).is_some_and(confirming),
-            Some(kind) => confirming(kind) && self.commit.is_some(),
-            None => false,
-        }
+        // The path decides too (schema 0017 judges the locator, and a unit stored before handoffs became
+        // `report` still says `context`), and nothing in the memory project confirms.
+        crate::intake::path_confirms(&self.project, path)
+            && match self.kind.as_deref() {
+                Some("quote") => crate::intake::kind_of_path(path).is_some_and(confirming),
+                Some(kind) => confirming(kind) && self.commit.is_some(),
+                None => false,
+            }
     }
 }
 

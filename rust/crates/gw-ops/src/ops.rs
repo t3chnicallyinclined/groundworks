@@ -183,14 +183,15 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
         .facts(&project.name, None, 1)?
         .pop()
         .map_or_else(|| id.clone(), |f| f.render());
-    Ok(match store::quote_cap(&fact) {
-        Some(kind) => format!(
-            "recorded {id} as INFERRED, not CONFIRMED: its only evidence quotes a Claude setup or memory file (kind \
-             {kind}), which records what an agent was told or remembered. Quote tracked code, config or docs, or cite \
-             a receipt, to confirm.\n{recorded}"
-        ),
-        None => format!("recorded {id}: {recorded}"),
-    })
+    Ok(
+        match store::confirm_cap(&project.name, &fact, note.owner_pass.is_some()) {
+            Some(why) => format!(
+                "recorded {id} as INFERRED, not CONFIRMED: {why}. Quote tracked code, config or docs, cite a receipt, or \
+             have the owner sign it (groundworks note --as-owner) to confirm.\n{recorded}"
+            ),
+            None => format!("recorded {id}: {recorded}"),
+        },
+    )
 }
 
 /// Count a refused write as a rejection row: the pattern id, field, offset and length for a
@@ -358,7 +359,14 @@ pub fn import_journals(home: &Home, store: &Store) -> Result<String> {
             let (kind, mut text) = entry.kind_and_text();
             let owner = entry.source.trim_start().to_lowercase().starts_with("owner");
             let confidence = match entry.confidence.as_str() {
-                "CONFIRMED" if owner => Confidence::Confirmed,
+                // Schema 0017: only the owner's own login confirms an owner statement; the loader is root.
+                "CONFIRMED" if owner => {
+                    text.push_str(
+                        " [was CONFIRMED as an owner statement in the old file journal; only the owner's own login \
+                         confirms one now]",
+                    );
+                    Confidence::Inferred
+                }
                 "CONFIRMED" => {
                     text.push_str(" [was CONFIRMED in the old file journal; the store cannot verify that source]");
                     Confidence::Inferred

@@ -380,7 +380,7 @@ impl Store {
         // Before any network call: secret-shaped text never leaves this process (JOURNAL-REFUSALS.md).
         crate::refusal::check_fact(fact)?;
         let db = self.agent(&project_ns(&slug(project)?)?)?;
-        self.retrying(|| self.write_fact(&db, project_dir, fact, None))
+        self.retrying(|| self.write_fact(&db, project_dir, project, fact, false, None))
     }
 
     /// Record a fact as the owner, signed by the owner's own login.
@@ -393,7 +393,7 @@ impl Store {
     ) -> Result<String> {
         crate::refusal::check_fact(fact)?;
         let db = self.owner(&project_ns(&slug(project)?)?, owner_pass)?;
-        self.retrying(|| self.write_fact(&db, project_dir, fact, None))
+        self.retrying(|| self.write_fact(&db, project_dir, project, fact, true, None))
     }
 
     /// Import a historical fact with the time and machine it was first recorded on, as the
@@ -430,16 +430,27 @@ impl Store {
             if !existing[0].is_null() {
                 return Ok(None);
             }
-            self.write_fact(&root, project_dir, fact, Some(&origin)).map(Some)
+            self.write_fact(&root, project_dir, project, fact, false, Some(&origin))
+                .map(Some)
         })
     }
 
-    fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, origin: Option<&Origin>) -> Result<String> {
+    /// `signed`: the row is written by the owner's own login (schema 0017 reads the role itself; this is the
+    /// client's mirror, for the cap and its reason).
+    fn write_fact(
+        &self,
+        db: &Db,
+        project_dir: &Path,
+        project: &str,
+        fact: &FactIn,
+        signed: bool,
+        origin: Option<&Origin>,
+    ) -> Result<String> {
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
         crate::refusal::check_fact(fact)?;
         let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
         needs_evidence(fact)?;
-        let grade = match quote_cap(fact) {
+        let grade = match confirm_cap(project, fact, signed) {
             Some(_) => grade(Confidence::Inferred),
             None => grade(fact.confidence),
         };
@@ -559,7 +570,7 @@ impl Store {
         let sql = format!(
             "SELECT <string> id AS id, <string> at AS at, kind, text, grade, status, source, by, machine, \
              owner_statement, <string> written_by AS written_by, <string> receipt AS receipt, lens, \
-             <string> attacks AS attacks, stance, ->evidence->unit.locator AS quotes \
+             <string> attacks AS attacks, stance, regraded, ->evidence->unit.locator AS quotes \
              FROM fact {filter} ORDER BY at DESC LIMIT $limit;"
         );
         let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
@@ -659,7 +670,7 @@ impl Store {
                 )?)
             })?;
         }
-        let mut file_kinds = vec!["context", "doc", "code", "config"];
+        let mut file_kinds = vec!["context", "doc", "code", "config", "report"];
         file_kinds.extend(crate::intake::SETUP_KINDS);
         let vars = Vars::default()
             .set("paths", c.paths.clone())
@@ -1794,6 +1805,9 @@ pub struct FactRow {
     pub attacks: Option<String>,
     #[serde(default)]
     pub stance: Option<String>,
+    /// Why the store lowered the row's grade, when a schema change did (0017: R2 tightened).
+    #[serde(default)]
+    pub regraded: Option<String>,
 }
 
 impl FactRow {
@@ -1850,6 +1864,9 @@ impl FactRow {
         }
         if let Some(r) = self.receipt.as_deref().filter(|r| *r != "NONE") {
             let _ = write!(line, " [{r}]");
+        }
+        if let Some(why) = self.regraded.as_deref().filter(|w| !w.is_empty()) {
+            let _ = write!(line, " [regraded: {why}]");
         }
         line
     }
@@ -1934,16 +1951,42 @@ fn needs_evidence(fact: &FactIn) -> Result<()> {
     Ok(())
 }
 
-/// When a CONFIRMED fact's only evidence is a quote of the project's Claude setup or memory (kinds
-/// `instructions`, `agent`, `skill`, `command`, `memory`), the kind that caps it at INFERRED: such a file
-/// records what an agent was told or remembered, so quoting it proves the line exists, not that it holds
-/// (docs/DECISIONS.md 2026-10-30). A receipt or an owner statement is evidence of its own and lifts the cap.
-pub fn quote_cap(fact: &FactIn) -> Option<&'static str> {
-    if fact.confidence != Confidence::Confirmed || fact.receipt.is_some() || fact.owner_statement.is_some() {
+/// Why a CONFIRMED fact must be written INFERRED, if it must: the client's mirror of schema 0017's R2, so a
+/// writer gets INFERRED and a reason instead of the database's refusal (docs/DECISIONS.md 2026-10-30). A
+/// receipt confirms. An owner statement confirms only when the owner's login writes the row (`signed`). A
+/// quote confirms only when [`crate::intake::path_confirms`] holds: not the project's Claude setup or memory,
+/// not an agent report, nothing in the memory project. None when the fact is not CONFIRMED, holds a receipt
+/// or confirming evidence, or holds no evidence at all (the store's own refusal then speaks).
+pub fn confirm_cap(project: &str, fact: &FactIn, signed: bool) -> Option<String> {
+    if fact.confidence != Confidence::Confirmed || fact.receipt.is_some() {
         return None;
     }
-    let kind = crate::intake::kind_of_path(&fact.quote.as_ref()?.file)?;
-    crate::intake::SETUP_KINDS.contains(&kind).then_some(kind)
+    if fact.owner_statement.is_none() && fact.quote.is_none() {
+        return None;
+    }
+    if fact.owner_statement.is_some() && signed {
+        return None;
+    }
+    if let Some(q) = &fact.quote {
+        if crate::intake::path_confirms(project, &q.file) {
+            return None;
+        }
+        let what = if project == crate::intake::MEMORY_PROJECT {
+            "a note of the memory project, which is recollection".to_owned()
+        } else {
+            match crate::intake::kind_of_path(&q.file) {
+                Some(k) if k == crate::intake::REPORT_KIND => {
+                    "an agent report (a handoff or workstream note)".to_owned()
+                }
+                Some(k) => format!("a Claude setup or memory file (kind {k})"),
+                None => "a file that cannot confirm".to_owned(),
+            }
+        };
+        return Some(format!("its only evidence quotes {what}"));
+    }
+    Some(
+        "its only evidence is an owner statement an agent recorded; only the owner's own login confirms one".to_owned(),
+    )
 }
 
 /// The key of `fact:<key>`: letters, digits and _ only.
@@ -2202,7 +2245,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quote_of_setup_or_memory_alone_caps_confirmed_at_inferred() {
+    fn confirmed_is_capped_as_schema_0017_would_refuse_it() {
         let fact = |file: &str| FactIn {
             kind: Kind::Fact,
             text: "x".into(),
@@ -2220,17 +2263,37 @@ mod tests {
             attacks: None,
             stance: None,
         };
-        assert_eq!(quote_cap(&fact("CLAUDE.md")), Some("instructions"));
-        assert_eq!(quote_cap(&fact("~claude-memory/note.md")), Some("memory"));
-        assert_eq!(quote_cap(&fact(".claude/commands/ship.md")), Some("command"));
-        assert_eq!(quote_cap(&fact("notes.txt")), None);
-        assert_eq!(quote_cap(&fact("src/a.rs")), None);
+        let capped = |project: &str, f: &FactIn, signed: bool| confirm_cap(project, f, signed).is_some();
+        assert!(confirm_cap("p", &fact("CLAUDE.md"), false).is_some_and(|w| w.contains("kind instructions")));
+        assert!(capped("p", &fact("~claude-memory/note.md"), false));
+        assert!(capped("p", &fact(".claude/commands/ship.md"), false));
+        assert!(
+            confirm_cap("p", &fact("docs/HANDOFF-2026-10-18-lead.md"), false)
+                .is_some_and(|w| w.contains("agent report"))
+        );
+        assert!(capped("p", &fact("notes/workstream-harness.md"), false));
+        assert!(!capped("p", &fact("notes.txt"), false));
+        assert!(!capped("p", &fact("src/a.rs"), false));
+        // The memory project is recollection, whatever the path.
+        assert!(confirm_cap("memory", &fact("feedback-port.md"), false).is_some_and(|w| w.contains("memory project")));
         let mut with_receipt = fact("CLAUDE.md");
         with_receipt.receipt = Some("receipt:abc".into());
-        assert_eq!(quote_cap(&with_receipt), None, "a receipt is evidence of its own");
+        assert!(!capped("p", &with_receipt, false), "a receipt is evidence of its own");
         let mut inferred = fact("CLAUDE.md");
         inferred.confidence = Confidence::Inferred;
-        assert_eq!(quote_cap(&inferred), None);
+        assert!(!capped("p", &inferred, false));
+        // An owner statement confirms only on a row the owner's login writes.
+        let mut said = fact("CLAUDE.md");
+        said.quote = None;
+        said.owner_statement = Some("owner, 2026-10-30".into());
+        assert!(confirm_cap("p", &said, false).is_some_and(|w| w.contains("owner statement an agent recorded")));
+        assert!(!capped("p", &said, true));
+        let mut bare = fact("CLAUDE.md");
+        bare.quote = None;
+        assert!(
+            !capped("p", &bare, false),
+            "no evidence at all: the store's own refusal speaks"
+        );
     }
 
     #[test]

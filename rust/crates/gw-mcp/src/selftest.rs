@@ -1043,6 +1043,7 @@ the parser now accepts empty input
     wall_checks(exe, base, &home, &owner, &mut c)?;
     lens_frame_checks(exe, base, &home, &mut c)?;
     survey_checks(exe, base, &home, &server.url(), &mut c)?;
+    promotion_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1575,6 +1576,56 @@ fn lens_frame_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Re
         "lens findings are framed as data in the lens view and in an ask through a lens, and a finding cannot close the frame",
         !err && !err_v && !err_a && closed(&view) && closed(&asked),
         &format!("{text}\n--\n{view}\n--\n{asked}"),
+    );
+    Ok(())
+}
+
+/// Promotion as the database decides it (schema 0017, 2026-10-30), through the agent's own tool: journal_add
+/// CONFIRMED with an owner statement an agent typed, or with only a quote of a handoff note (an agent report),
+/// is recorded INFERRED with the reason; the direct-write probes both ways are gw-store's rules tests.
+fn promotion_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    let (home_env, experts_env, claude_env) = (
+        home.display().to_string(),
+        base.join("experts").display().to_string(),
+        base.join("claude").display().to_string(),
+    );
+    std::fs::write(
+        base.join("work/demo/docs/HANDOFF-2026-10-18-demo-lead.md"),
+        "# Handoff\n\nThe gnu migration is finished and verified.\n",
+    )?;
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let s = &mut client;
+    let (err_s, said) = s.call(
+        "journal_add",
+        json!({"project": "demo", "kind": "decision", "text": "The demo is shared, the owner says.",
+               "source": "owner in this session", "confidence": "CONFIRMED", "by": "selftest",
+               "owner_statement": "owner, 2026-10-30: it is shared"}),
+    )?;
+    let (err_h, report) = s.call(
+        "journal_add",
+        json!({"project": "demo", "kind": "fact", "text": "The gnu migration is finished.",
+               "source": "the handoff", "confidence": "CONFIRMED", "by": "selftest",
+               "quote": {"file": "docs/HANDOFF-2026-10-18-demo-lead.md", "line": 3,
+                         "text": "The gnu migration is finished and verified."}}),
+    )?;
+    c.check(
+        "an agent's CONFIRMED owner statement or handoff quote is recorded INFERRED with the reason the database would refuse it",
+        !err_s
+            && !err_h
+            && said.contains("as INFERRED, not CONFIRMED: its only evidence is an owner statement an agent recorded")
+            && said.contains("[decision] INFERRED The demo is shared")
+            && report.contains("as INFERRED, not CONFIRMED: its only evidence quotes an agent report")
+            && report.contains("[fact] INFERRED The gnu migration"),
+        &format!("{said}\n--\n{report}"),
     );
     Ok(())
 }

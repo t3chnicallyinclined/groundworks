@@ -153,7 +153,9 @@ fn r2_confirmed_needs_evidence_a_receipt_or_the_owner() {
         &agent,
         "CREATE fact:ran SET text = 't', grade = 'CONFIRMED', receipt = receipt:r1;",
     );
-    ok(
+    // Reversed on 2026-10-30 (schema 0017, owner go): an owner statement an agent types no longer confirms;
+    // only the owner's own login does (r2_promotion_is_decided_by_the_database_and_owner_words_by_the_owner).
+    refused(
         &agent,
         "CREATE fact:said SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner, 2026-10-24';",
     );
@@ -307,6 +309,139 @@ fn bound_variables_are_data_never_statements() {
     // A write PERMISSIONS refuse through query() is still an error, never an empty OK.
     let refused = agent.query("DELETE fact:v;", &serde_json::Map::new(), Some(1));
     assert!(matches!(refused, Err(DbError::PermissionDenied { .. })), "{refused:?}");
+}
+
+/// R2 as the database's own rule (2026-10-30, schema 0017; scholar-architect review): an owner statement
+/// confirms only on a row the owner's login wrote, and an evidence link confirms only to a unit whose locator
+/// is not the project's Claude setup, its memory, or an agent report (handoff and workstream notes). Every
+/// write below is direct, as any member credential could make it, with no client code in between.
+#[test]
+fn r2_promotion_is_decided_by_the_database_and_owner_words_by_the_owner() {
+    let estate = Estate::new();
+    let (root, agent, owner) = (estate.root("proj_a"), estate.agent("proj_a"), estate.owner("proj_a"));
+
+    refused(
+        &agent,
+        "CREATE fact:typed SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner, 2026-10-30';",
+    );
+    refused(
+        &root,
+        "CREATE fact:loaded SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner, 2026-10-30';",
+    );
+    ok(
+        &owner,
+        "CREATE fact:signed SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner, 2026-10-30';",
+    );
+    ok(&agent, "UPDATE fact:signed SET status = 'stale';");
+
+    for (n, locator) in [
+        "CLAUDE.md#L1-3",
+        "sub/AGENTS.md#L1-2",
+        "~claude-memory/note.md#L1-4",
+        ".claude/skills/check/SKILL.md#L1-6",
+        ".claude/agents/local.md#L1-5",
+        ".claude/commands/ship.md#L1-2",
+        "docs/HANDOFF-2026-10-18-lead.md#L1-9",
+        "notes/WORKSTREAM-2026-10-24-harness.md#L3-4",
+    ]
+    .iter()
+    .enumerate()
+    {
+        ok(
+            &agent,
+            &format!("CREATE unit:c{n} SET locator = '{locator}', hash = 'h';"),
+        );
+        ok(&agent, &format!("CREATE fact:c{n} SET text = 't', grade = 'INFERRED';"));
+        ok(&agent, &format!("RELATE fact:c{n}->evidence->unit:c{n};"));
+        refused(&agent, &format!("UPDATE fact:c{n} SET grade = 'CONFIRMED';"));
+    }
+    ok(&agent, "CREATE unit:code SET locator = 'src/a.rs#L1-3', hash = 'h';");
+    ok(&agent, "CREATE fact:code SET text = 't', grade = 'INFERRED';");
+    ok(&agent, "RELATE fact:code->evidence->unit:code;");
+    ok(&agent, "UPDATE fact:code SET grade = 'CONFIRMED';");
+    // One confirming link among capped ones is enough (docs/DECISIONS.md 2026-10-30).
+    ok(&agent, "CREATE fact:mixed SET text = 't', grade = 'INFERRED';");
+    ok(&agent, "RELATE fact:mixed->evidence->unit:c2;");
+    ok(&agent, "RELATE fact:mixed->evidence->unit:code;");
+    ok(&agent, "UPDATE fact:mixed SET grade = 'CONFIRMED';");
+
+    // The memory project (owner, 2026-10-30: it stays shared) is the owner's agent memory: every unit in it
+    // is recollection, whatever its path, so a direct write citing only a memory unit is refused there.
+    estate.server.namespace("proj_memory");
+    let memory = estate.agent("proj_memory");
+    ok(
+        &memory,
+        "CREATE unit:note SET locator = 'feedback-port-proven-code.md#L1-12', hash = 'h';",
+    );
+    ok(&memory, "CREATE fact:recalled SET text = 't', grade = 'INFERRED';");
+    ok(&memory, "RELATE fact:recalled->evidence->unit:note;");
+    refused(&memory, "UPDATE fact:recalled SET grade = 'CONFIRMED';");
+    refused(
+        &memory,
+        "CREATE fact:recalled2 SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner said so';",
+    );
+}
+
+/// 0017 over a store written under the old R2: rows the new rule would refuse (an agent-typed owner
+/// statement, CONFIRMED by a handoff quote alone) come out INFERRED, the owner's own signed row stays
+/// CONFIRMED and signed, and every row still takes an agent's later write (the stale event, a status change).
+#[test]
+fn promotion_upgrade_brings_old_rows_under_the_new_rule() {
+    use gw_store::testkit::{AGENT_PASS, OWNER_PASS};
+    let server = gw_store::testkit::Throwaway::start();
+    let root = server.root("proj_up");
+    gw_store::ensure(&root, "proj_up").unwrap();
+    let before: Vec<(&str, &str)> = SCHEMA.iter().copied().filter(|(f, _)| f < &"0017").collect();
+    migrate(&root, Scope::Project, &before, true).unwrap();
+    gw_store::provision(&root, "agent1", "agent", AGENT_PASS).unwrap();
+    gw_store::provision(&root, "owner1", "owner", OWNER_PASS).unwrap();
+    let agent = connect_member(&server.url(), "proj_up", "agent1", AGENT_PASS).unwrap();
+    let owner = connect_member(&server.url(), "proj_up", "owner1", OWNER_PASS).unwrap();
+    ok(
+        &agent,
+        "CREATE fact:typed SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner said';",
+    );
+    ok(
+        &owner,
+        "CREATE fact:signed SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner said';",
+    );
+    ok(
+        &agent,
+        "CREATE unit:h SET locator = 'docs/HANDOFF-x.md#L1-2', hash = 'h1';",
+    );
+    ok(&agent, "CREATE fact:report SET text = 't', grade = 'INFERRED';");
+    ok(&agent, "RELATE fact:report->evidence->unit:h;");
+    ok(&agent, "UPDATE fact:report SET grade = 'CONFIRMED';");
+    ok(&agent, "CREATE unit:code SET locator = 'src/a.rs#L1-2', hash = 'h1';");
+    ok(&agent, "CREATE fact:code SET text = 't', grade = 'INFERRED';");
+    ok(&agent, "RELATE fact:code->evidence->unit:code;");
+    ok(&agent, "UPDATE fact:code SET grade = 'CONFIRMED';");
+
+    migrate(&root, Scope::Project, SCHEMA, true).unwrap();
+    // First what an intake does (gw-architect's hazard): a changed unit stales the old CONFIRMED fact citing
+    // only a handoff, and the one citing code. Without the regrade the first write is refused.
+    ok(&agent, "UPDATE unit:h SET hash = 'h2';");
+    ok(&agent, "UPDATE unit:code SET hash = 'h2';");
+    assert_eq!(value(&root, "SELECT VALUE status FROM ONLY fact:report;"), "stale");
+    assert_eq!(value(&root, "SELECT VALUE status FROM ONLY fact:code;"), "stale");
+    let grade = |id: &str| value(&root, &format!("SELECT VALUE grade FROM ONLY fact:{id};"));
+    assert_eq!(grade("typed"), "INFERRED");
+    assert_eq!(grade("report"), "INFERRED");
+    assert_eq!(grade("signed"), "CONFIRMED");
+    assert_eq!(grade("code"), "CONFIRMED");
+    assert_eq!(value(&root, "SELECT VALUE signed FROM ONLY fact:signed;"), true);
+    let note = value(&root, "SELECT VALUE regraded FROM ONLY fact:typed;");
+    assert!(
+        note.as_str().is_some_and(|n| n.contains("schema 0017")),
+        "a regraded row says why: {note}"
+    );
+    assert_eq!(
+        value(&root, "SELECT VALUE regraded FROM ONLY fact:signed;"),
+        serde_json::Value::Null
+    );
+    for id in ["typed", "signed", "report"] {
+        ok(&agent, &format!("UPDATE fact:{id} SET status = 'gone';"));
+    }
 }
 
 #[test]

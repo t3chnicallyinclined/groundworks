@@ -174,7 +174,7 @@ pub struct SetupReport {
 pub fn expand_kinds(kinds: &[String]) -> Vec<String> {
     let mut out = kinds.to_vec();
     if kinds.iter().any(|k| k == "context") {
-        for k in ["instructions", "agent"] {
+        for k in ["instructions", "agent", "report"] {
             if !out.iter().any(|o| o == k) {
                 out.push(k.to_owned());
             }
@@ -191,6 +191,23 @@ pub const SETUP_KINDS: [&str; 5] = ["instructions", "agent", "skill", "command",
 /// remembered: a word-for-word quote of one proves the line is there, not that it is true, so a fact that
 /// rests on them alone is INFERRED.
 pub const CONFIRMING_KINDS: [&str; 4] = ["code", "config", "doc", "context"];
+
+/// Agent reports (handoff and workstream notes): read as context, never a fact's confirming evidence.
+pub const REPORT_KIND: &str = "report";
+
+/// The project that is the owner's agent memory (it stays shared, owner 2026-10-30): every unit of it is
+/// recollection, so none confirms a fact, whatever its path.
+pub const MEMORY_PROJECT: &str = "memory";
+
+/// Whether a quote of `path` in `project` may confirm a fact: the client's mirror of schema 0017's
+/// `fn::confirming_locator`, which the database applies to every write whatever this says. Not the memory
+/// project, not a commit, not the project's Claude setup or auto-memory, not an agent report.
+pub fn path_confirms(project: &str, path: &str) -> bool {
+    if project == MEMORY_PROJECT || path.starts_with("commit:") {
+        return false;
+    }
+    !kind_of_path(path).is_some_and(|k| SETUP_KINDS.contains(&k) || k == REPORT_KIND)
+}
 
 /// The kind intake gives a unit path: `memory` under [`crate::claude_setup::MEMORY_PREFIX`], otherwise by
 /// the file's name and folder. None for a file intake does not read.
@@ -371,14 +388,14 @@ fn classify(path: &str) -> Option<&'static str> {
             return Some("command");
         }
     }
+    // Handoff and workstream notes are agent reports (scholar-architect review, 2026-10-30): read as context,
+    // never a fact's confirming evidence. Matched by name, whatever the extension, as schema 0017 does.
+    if lower.contains("handoff") || lower.contains("workstream") {
+        return Some("report");
+    }
     if lower.starts_with("readme")
         || lower == "context.md"
-        || (ext == "md"
-            && (lower_path.starts_with("docs/")
-                || lower_path.contains("/docs/")
-                || lower.contains("handoff")
-                || lower.contains("workstream")
-                || !path.contains('/')))
+        || (ext == "md" && (lower_path.starts_with("docs/") || lower_path.contains("/docs/") || !path.contains('/')))
     {
         return Some("context");
     }
@@ -399,7 +416,7 @@ fn spans(lines: &[&str], kind: &str) -> Vec<(usize, usize)> {
     if lines.is_empty() {
         return out;
     }
-    let markdown = matches!(kind, "context" | "doc") || SETUP_KINDS.contains(&kind);
+    let markdown = matches!(kind, "context" | "doc" | "report") || SETUP_KINDS.contains(&kind);
     let max = if markdown { DOC_MAX } else { CODE_WINDOW };
     let mut start = 0;
     for i in 1..=lines.len() {
@@ -657,7 +674,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize, claud
             skip(&mut c, "not a kind we read");
             continue;
         };
-        if !is_tracked && !matches!(kind, "context" | "doc") && !SETUP_KINDS.contains(&kind) {
+        if !is_tracked && !matches!(kind, "context" | "doc" | "report") && !SETUP_KINDS.contains(&kind) {
             skip(&mut c, "untracked, and not a doc");
             continue;
         }

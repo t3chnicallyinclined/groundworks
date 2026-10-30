@@ -25,15 +25,37 @@ struct Mutation {
 }
 
 const MUTATIONS: &[Mutation] = &[
+    // R2 lives in 0017 since 2026-10-30 (it redefines `grade`; loosening 0004's copy no longer loosens it).
     Mutation {
         name: "R2 CONFIRMED needs evidence",
-        file: "0004_project_rules.surql",
+        file: "0017_project_promotion.surql",
         find: "AND ($value != 'CONFIRMED'",
         replace: "AND (true OR $value != 'CONFIRMED'",
         scope: Scope::Project,
         setup: "",
         who: Who::Agent,
         probe: "CREATE fact:p SET text = 't', grade = 'CONFIRMED';",
+    },
+    Mutation {
+        name: "R2 an owner statement confirms only on the owner's own row",
+        file: "0017_project_promotion.surql",
+        find: "($this.signed = true OR $auth.role = 'owner')",
+        replace: "true",
+        scope: Scope::Project,
+        setup: "",
+        who: Who::Agent,
+        probe: "CREATE fact:p SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner said';",
+    },
+    Mutation {
+        name: "R2 setup, memory and report units never confirm",
+        file: "0017_project_promotion.surql",
+        find: "RETURN !(",
+        replace: "RETURN true OR !(",
+        scope: Scope::Project,
+        setup: "CREATE unit:u SET locator = 'CLAUDE.md#L1-3', hash = 'h'; \
+                CREATE fact:p SET text = 't', grade = 'INFERRED'; RELATE fact:p->evidence->unit:u;",
+        who: Who::Agent,
+        probe: "UPDATE fact:p SET grade = 'CONFIRMED';",
     },
     Mutation {
         name: "R3 receipts are read-only, even for root",
