@@ -148,7 +148,7 @@ impl Store {
     }
 
     /// Run `f`; if the server could not be reached, start it again and run `f` once more.
-    fn retrying<T>(&self, f: impl Fn() -> Result<T>) -> Result<T> {
+    pub(crate) fn retrying<T>(&self, f: impl Fn() -> Result<T>) -> Result<T> {
         match f() {
             Err(e) if unreachable(&e) => match &self.launcher {
                 Some(launcher) => {
@@ -1496,10 +1496,10 @@ pub struct Reach {
 
 /// Bound variables for [`Db::query`]: values travel as JSON, never inside the statement text.
 #[derive(Default)]
-struct Vars(serde_json::Map<String, Value>);
+pub(crate) struct Vars(pub(crate) serde_json::Map<String, Value>);
 
 impl Vars {
-    fn set(mut self, name: &str, value: impl Into<Value>) -> Self {
+    pub(crate) fn set(mut self, name: &str, value: impl Into<Value>) -> Self {
         self.0.insert(name.to_owned(), value.into());
         self
     }
@@ -1945,7 +1945,7 @@ fn receipt_key(id: &str) -> Result<String> {
     Ok(key.to_owned())
 }
 
-fn record_id(v: &Value) -> Option<String> {
+pub(crate) fn record_id(v: &Value) -> Option<String> {
     match v {
         Value::String(s) if s.contains(':') => Some(s.clone()),
         Value::Array(a) => a.iter().find_map(record_id),

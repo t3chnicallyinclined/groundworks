@@ -14,6 +14,9 @@ use gw_ops::journal::{Confidence, Kind};
 use gw_ops::ops;
 use gw_ops::store::{self, Quote, Store};
 
+/// The attack tools (verdicts and answers, schema 0018): their own router, merged in `new`.
+mod attack;
+
 const INSTRUCTIONS: &str = "\
 Groundworks: the registry, journal, knowledge and tools for every project the owner runs.
 The main session leads: start from project_show and the journal, keep both current, report to the owner,
@@ -298,7 +301,7 @@ impl Groundworks {
         Self {
             home: Arc::new(home),
             store: Arc::default(),
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router() + Self::attack_router(),
         }
     }
 
