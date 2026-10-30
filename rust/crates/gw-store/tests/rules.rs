@@ -141,7 +141,11 @@ fn r2_confirmed_needs_evidence_a_receipt_or_the_owner() {
     refused(&agent, "CREATE fact:bare SET text = 't', grade = 'CONFIRMED';");
     refused(&root, "CREATE fact:bare_root SET text = 't', grade = 'CONFIRMED';");
 
-    ok(&agent, "CREATE fact:linked SET text = 't', grade = 'INFERRED';");
+    // A decision, since 2026-10-30: the owner's confirm rule lets a doc (this README) confirm decisions only.
+    ok(
+        &agent,
+        "CREATE fact:linked SET text = 't', kind = 'decision', grade = 'INFERRED';",
+    );
     ok(&agent, "RELATE fact:linked->evidence->unit:u1;");
     ok(&agent, "UPDATE fact:linked SET grade = 'CONFIRMED';");
 
@@ -380,6 +384,62 @@ fn r2_promotion_is_decided_by_the_database_and_owner_words_by_the_owner() {
         &memory,
         "CREATE fact:recalled2 SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner said so';",
     );
+}
+
+/// The owner's confirm rule (owner statement, 2026-10-30): a tracked doc confirms only a DECISION; on
+/// supergun no doc confirms anything (byte gates are its proof); code and config confirm as before.
+#[test]
+fn r2_a_doc_confirms_only_a_decision_and_nothing_on_supergun() {
+    let estate = Estate::new();
+    let agent = estate.agent("proj_a");
+    ok(
+        &agent,
+        "CREATE unit:doc SET locator = 'docs/DESIGN.md#L1-3', hash = 'h';",
+    );
+    ok(&agent, "CREATE unit:readme SET locator = 'README#L1-2', hash = 'h';");
+    ok(&agent, "CREATE unit:conf SET locator = 'Cargo.toml#L1-4', hash = 'h';");
+    for (id, kind, unit) in [("d", "decision", "doc"), ("r", "decision", "readme")] {
+        ok(
+            &agent,
+            &format!("CREATE fact:{id} SET text = 't', kind = '{kind}', grade = 'INFERRED';"),
+        );
+        ok(&agent, &format!("RELATE fact:{id}->evidence->unit:{unit};"));
+        ok(&agent, &format!("UPDATE fact:{id} SET grade = 'CONFIRMED';"));
+    }
+    for (id, kind) in [("g", "gotcha"), ("f", "fact"), ("s", "status"), ("e", "eliminated")] {
+        ok(
+            &agent,
+            &format!("CREATE fact:{id} SET text = 't', kind = '{kind}', grade = 'INFERRED';"),
+        );
+        ok(&agent, &format!("RELATE fact:{id}->evidence->unit:doc;"));
+        refused(&agent, &format!("UPDATE fact:{id} SET grade = 'CONFIRMED';"));
+    }
+    ok(
+        &agent,
+        "CREATE fact:cf SET text = 't', kind = 'gotcha', grade = 'INFERRED';",
+    );
+    ok(&agent, "RELATE fact:cf->evidence->unit:conf;");
+    ok(&agent, "UPDATE fact:cf SET grade = 'CONFIRMED';");
+
+    estate.server.namespace("proj_supergun");
+    let sg = estate.agent("proj_supergun");
+    ok(&sg, "CREATE unit:doc SET locator = 'docs/NETCODE.md#L1-3', hash = 'h';");
+    ok(
+        &sg,
+        "CREATE unit:code SET locator = 'sg_net/src/udp.rs#L1-60', hash = 'h';",
+    );
+    ok(
+        &sg,
+        "CREATE fact:d SET text = 't', kind = 'decision', grade = 'INFERRED';",
+    );
+    ok(&sg, "RELATE fact:d->evidence->unit:doc;");
+    refused(&sg, "UPDATE fact:d SET grade = 'CONFIRMED';");
+    ok(
+        &sg,
+        "CREATE fact:c SET text = 't', kind = 'decision', grade = 'INFERRED';",
+    );
+    ok(&sg, "RELATE fact:c->evidence->unit:code;");
+    ok(&sg, "UPDATE fact:c SET grade = 'CONFIRMED';");
 }
 
 /// 0017 over a store written under the old R2: rows the new rule would refuse (an agent-typed owner

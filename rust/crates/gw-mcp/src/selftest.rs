@@ -416,6 +416,8 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     }
 
     let mut args = note("the parser rejects empty input", "CONFIRMED");
+    // A decision since 2026-10-30: the owner's confirm rule lets a doc (notes.txt) confirm decisions only.
+    args["kind"] = json!("decision");
     args["quote"] = json!({"file": "notes.txt", "line": 2, "text": "the parser rejects empty input"});
     let (err, text) = s.call("journal_add", args)?;
     c.check(
@@ -585,7 +587,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
         "answer passes with a quote given as a line range, says what was not read, and records the fact",
         !err && text.contains("check PASS")
             && text.contains("not read")
-            && text.contains("CONFIRMED by docs/GUIDE.md#L3-3"),
+            && text.contains("INFERRED by docs/GUIDE.md#L3-3"), // a doc confirms only a decision (owner, 2026-10-30)
         &text,
     );
     let (err, text) = s.call(
@@ -594,7 +596,7 @@ fn run_in(exe: &Path, base: &Path) -> Result<(String, usize)> {
     )?;
     c.check(
         "the next ask puts the recorded fact first, above the files",
-        !err && text.contains("[1] RECORDED FACT (CONFIRMED): Rollback resimulates confirmed frames only."),
+        !err && text.contains("[1] RECORDED FACT (INFERRED): Rollback resimulates confirmed frames only."),
         &text,
     );
     let (err, text) = s.call("answer", json!({"packet": packet, "read": all, "answer": "again"}))?;
@@ -1045,6 +1047,7 @@ the parser now accepts empty input
     survey_checks(exe, base, &home, &server.url(), &mut c)?;
     promotion_checks(exe, base, &home, &mut c)?;
     ruled_out_checks(exe, base, &home, &mut c)?;
+    confirm_rule_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1395,7 +1398,7 @@ fn init_safety_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> R
         "an answer whose quotes come only from a memory unit is recorded INFERRED, never CONFIRMED",
         !err && memory.is_some()
             && text.contains("INFERRED by ~claude-memory/clean.md")
-            && text.contains("not CONFIRMED: no support quote is from tracked code, config or docs; quoted: memory")
+            && text.contains("not CONFIRMED: no support quote is from tracked code or config (a doc confirms only a decision); quoted: memory")
             && !text.contains("CONFIRMED by"),
         &format!("{text}\n{packet}"),
     );
@@ -1410,8 +1413,11 @@ fn init_safety_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> R
                           {"n": guide.unwrap_or(0), "quote": "Rollback netcode resimulates confirmed frames", "use": "support"}]}),
     )?;
     c.check(
-        "a mixed answer is CONFIRMED only through its tracked-doc quote, which becomes the evidence",
-        !err && memory.is_some() && guide.is_some() && text.contains("CONFIRMED by docs/GUIDE.md#L3-3"),
+        "a mixed answer of a doc and a memory quote is recorded INFERRED: a doc confirms only a decision (owner, 2026-10-30)",
+        !err && memory.is_some()
+            && guide.is_some()
+            && text.contains("INFERRED by")
+            && text.contains("quoted: context, memory"),
         &format!("{text}\n{packet}"),
     );
 
@@ -1419,7 +1425,7 @@ fn init_safety_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> R
                           "source": "selftest", "confidence": "CONFIRMED", "by": "selftest"});
     args["quote"] = json!({"file": "CLAUDE.md", "line": 3, "text": "The quillwort rule: run the gate first."});
     let (err, capped) = s.call("journal_add", args)?;
-    let mut args = json!({"project": "demo", "kind": "fact", "text": "rollback resimulates confirmed frames, per the guide",
+    let mut args = json!({"project": "demo", "kind": "decision", "text": "rollback resimulates confirmed frames, per the guide",
                           "source": "selftest", "confidence": "CONFIRMED", "by": "selftest"});
     args["quote"] =
         json!({"file": "docs/GUIDE.md", "line": 3, "text": "Rollback netcode resimulates confirmed frames."});
@@ -1429,7 +1435,7 @@ fn init_safety_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> R
         !err && capped.contains("as INFERRED, not CONFIRMED: its only evidence quotes a Claude setup or memory file (kind instructions)")
             && capped.contains("[fact] INFERRED the quillwort rule")
             && !err2
-            && kept.contains("[fact] CONFIRMED rollback resimulates"),
+            && kept.contains("[decision] CONFIRMED rollback resimulates"),
         &format!("{kept}\n{capped}"),
     );
     Ok(())
@@ -1677,6 +1683,47 @@ fn ruled_out_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Res
             && !packet.contains("RECORDED FACT (INFERRED): Resimulating every frame")
             && brief.lines().any(|l| l.contains("RULED OUT:") && l.contains("Resimulating every frame")),
         &format!("{added}\n--\n{packet}\n--\n{brief}"),
+    );
+    Ok(())
+}
+
+/// The owner's confirm rule (2026-10-30) through journal_add: a tracked doc quote confirms a decision, and
+/// the same quote for a gotcha is recorded INFERRED with the rule as the reason.
+fn confirm_rule_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    let (home_env, experts_env, claude_env) = (
+        home.display().to_string(),
+        base.join("experts").display().to_string(),
+        base.join("claude").display().to_string(),
+    );
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let s = &mut client;
+    let add = |s: &mut Client, kind: &str| {
+        s.call(
+            "journal_add",
+            json!({"project": "demo", "kind": kind, "confidence": "CONFIRMED", "by": "selftest",
+                   "text": format!("The guide says what rollback resimulates ({kind})"), "source": "docs/GUIDE.md",
+                   "quote": {"file": "docs/GUIDE.md", "line": 3, "text": "Rollback netcode resimulates confirmed frames."}}),
+        )
+    };
+    let (err_d, decision) = add(s, "decision")?;
+    let (err_g, gotcha) = add(s, "gotcha")?;
+    c.check(
+        "a tracked doc quote confirms a decision, and the same quote for a gotcha is recorded INFERRED with the reason",
+        !err_d
+            && !err_g
+            && decision.contains("[decision] CONFIRMED The guide says")
+            && gotcha.contains("as INFERRED, not CONFIRMED: its only evidence quotes a doc, which confirms only a decision (this is a gotcha)")
+            && gotcha.contains("[gotcha] INFERRED The guide says"),
+        &format!("{decision}\n--\n{gotcha}"),
     );
     Ok(())
 }

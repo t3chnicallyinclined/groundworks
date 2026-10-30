@@ -72,7 +72,8 @@ impl Candidate {
         let confirming = |k: &str| crate::intake::CONFIRMING_KINDS.contains(&k);
         // The path decides too (schema 0017 judges the locator, and a unit stored before handoffs became
         // `report` still says `context`), and nothing in the memory project confirms.
-        crate::intake::path_confirms(&self.project, path)
+        // An answer is recorded as a `fact`, so a doc no longer confirms one (owner, 2026-10-30).
+        crate::intake::path_confirms(&self.project, path, "fact")
             && match self.kind.as_deref() {
                 Some("quote") => crate::intake::kind_of_path(path).is_some_and(confirming),
                 Some(kind) => confirming(kind) && self.commit.is_some(),
@@ -864,7 +865,7 @@ fn record(
         kinds.sort_unstable();
         kinds.dedup();
         format!(
-            " (not CONFIRMED: no support quote is from tracked code, config or docs; quoted: {})",
+            " (not CONFIRMED: no support quote is from tracked code or config (a doc confirms only a decision); quoted: {})",
             kinds.join(", ")
         )
     };
@@ -912,7 +913,9 @@ mod tests {
             commit: commit.map(str::to_owned),
             ..cand(1, "a")
         };
-        assert!(with("context", "docs/G.md#L1-2", Some("abc")).confirms());
+        // An answer is a `fact`, and a doc confirms only a decision (owner, 2026-10-30).
+        assert!(!with("context", "docs/G.md#L1-2", Some("abc")).confirms());
+        assert!(with("config", "Cargo.toml#L1-9", Some("abc")).confirms());
         assert!(with("code", "src/a.rs#L1-60", Some("abc")).confirms());
         assert!(!with("context", "docs/LATE.md#L1-2", None).confirms(), "untracked");
         for kind in crate::intake::SETUP_KINDS {

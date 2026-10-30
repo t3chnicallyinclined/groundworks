@@ -199,14 +199,24 @@ pub const REPORT_KIND: &str = "report";
 /// recollection, so none confirms a fact, whatever its path.
 pub const MEMORY_PROJECT: &str = "memory";
 
-/// Whether a quote of `path` in `project` may confirm a fact: the client's mirror of schema 0017's
-/// `fn::confirming_locator`, which the database applies to every write whatever this says. Not the memory
-/// project, not a commit, not the project's Claude setup or auto-memory, not an agent report.
-pub fn path_confirms(project: &str, path: &str) -> bool {
+/// The project whose proof is its byte gates: no doc confirms anything there (owner, 2026-10-30).
+pub const DOCS_NEVER_CONFIRM: &str = "supergun";
+
+/// Whether a quote of `path` in `project` may confirm a fact of journal kind `fact_kind`: the client's mirror
+/// of schema 0017's `fn::confirming_locator`, which the database applies to every write whatever this says.
+/// Never in the memory project, a commit, the project's Claude setup or auto-memory, or an agent report; a
+/// doc (`.md`, `.txt`, `.rst`, a README) only for a `decision`, and never on supergun (owner, 2026-10-30);
+/// code and config always.
+pub fn path_confirms(project: &str, path: &str, fact_kind: &str) -> bool {
     if project == MEMORY_PROJECT || path.starts_with("commit:") {
         return false;
     }
-    !kind_of_path(path).is_some_and(|k| SETUP_KINDS.contains(&k) || k == REPORT_KIND)
+    if kind_of_path(path).is_some_and(|k| SETUP_KINDS.contains(&k) || k == REPORT_KIND) {
+        return false;
+    }
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase();
+    let doc = [".md", ".txt", ".rst"].iter().any(|e| name.ends_with(e)) || name.starts_with("readme");
+    !doc || (fact_kind == "decision" && project != DOCS_NEVER_CONFIRM)
 }
 
 /// The kind intake gives a unit path: `memory` under [`crate::claude_setup::MEMORY_PREFIX`], otherwise by

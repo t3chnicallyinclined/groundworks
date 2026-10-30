@@ -47,6 +47,17 @@ const MUTATIONS: &[Mutation] = &[
         probe: "CREATE fact:p SET text = 't', grade = 'CONFIRMED', owner_statement = 'owner said';",
     },
     Mutation {
+        name: "R2 a doc confirms only a decision (owner, 2026-10-30)",
+        file: "0017_project_promotion.surql",
+        find: "OR ($doc AND ($kind != 'decision' OR session::ns() = 'proj_supergun'))",
+        replace: "",
+        scope: Scope::Project,
+        setup: "CREATE unit:u SET locator = 'docs/DESIGN.md#L1-3', hash = 'h'; \
+                CREATE fact:p SET text = 't', kind = 'gotcha', grade = 'INFERRED'; RELATE fact:p->evidence->unit:u;",
+        who: Who::Agent,
+        probe: "UPDATE fact:p SET grade = 'CONFIRMED';",
+    },
+    Mutation {
         name: "R2 setup, memory and report units never confirm",
         file: "0017_project_promotion.surql",
         find: "RETURN !(",

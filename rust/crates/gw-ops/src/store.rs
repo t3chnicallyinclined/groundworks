@@ -1992,7 +1992,7 @@ pub fn confirm_cap(project: &str, fact: &FactIn, signed: bool) -> Option<String>
         return None;
     }
     if let Some(q) = &fact.quote {
-        if crate::intake::path_confirms(project, &q.file) {
+        if crate::intake::path_confirms(project, &q.file, kind(fact.kind)) {
             return None;
         }
         let what = if project == crate::intake::MEMORY_PROJECT {
@@ -2002,8 +2002,13 @@ pub fn confirm_cap(project: &str, fact: &FactIn, signed: bool) -> Option<String>
                 Some(k) if k == crate::intake::REPORT_KIND => {
                     "an agent report (a handoff or workstream note)".to_owned()
                 }
-                Some(k) => format!("a Claude setup or memory file (kind {k})"),
-                None => "a file that cannot confirm".to_owned(),
+                Some(k) if crate::intake::SETUP_KINDS.contains(&k) => {
+                    format!("a Claude setup or memory file (kind {k})")
+                }
+                _ if project == crate::intake::DOCS_NEVER_CONFIRM => {
+                    format!("a doc, and on {project} no doc confirms anything: its byte gates are its proof")
+                }
+                _ => format!("a doc, which confirms only a decision (this is a {})", kind(fact.kind)),
             }
         };
         return Some(format!("its only evidence quotes {what}"));
@@ -2296,7 +2301,18 @@ mod tests {
                 .is_some_and(|w| w.contains("agent report"))
         );
         assert!(capped("p", &fact("notes/workstream-harness.md"), false));
-        assert!(!capped("p", &fact("notes.txt"), false));
+        assert!(capped("p", &fact("notes.txt"), false), "a doc confirms only a decision");
+        let mut decision = fact("docs/DESIGN.md");
+        decision.kind = Kind::Decision;
+        assert!(!capped("p", &decision, false), "a doc confirms a decision");
+        assert!(
+            confirm_cap("supergun", &decision, false).is_some_and(|w| w.contains("byte gates")),
+            "on supergun no doc confirms anything"
+        );
+        assert!(
+            !capped("supergun", &fact("sg_net/src/udp.rs"), false),
+            "code confirms on supergun"
+        );
         assert!(!capped("p", &fact("src/a.rs"), false));
         // The memory project is recollection, whatever the path.
         assert!(confirm_cap("memory", &fact("feedback-port.md"), false).is_some_and(|w| w.contains("memory project")));

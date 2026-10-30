@@ -186,7 +186,7 @@ pub fn note(home: &Home, store: &Store, note: Note<'_>) -> Result<String> {
     Ok(
         match store::confirm_cap(&project.name, &fact, note.owner_pass.is_some()) {
             Some(why) => format!(
-                "recorded {id} as INFERRED, not CONFIRMED: {why}. Quote tracked code, config or docs, cite a receipt, or \
+                "recorded {id} as INFERRED, not CONFIRMED: {why}. Quote tracked code or config (a doc for a decision), cite a receipt, or \
              have the owner sign it (groundworks note --as-owner) to confirm.\n{recorded}"
             ),
             None => format!("recorded {id}: {recorded}"),
