@@ -24,7 +24,7 @@ const CANARY: &str = "CANARY-5e1f9a";
 static HOOK_STDERR: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 36] = [
+pub const TOOLS: [&str; 37] = [
     "answer",
     "answer_add",
     "ask",
@@ -35,6 +35,7 @@ pub const TOOLS: [&str; 36] = [
     "bridge_add",
     "bridge_advance",
     "bridge_list",
+    "bridge_propose",
     "card_add",
     "doctor",
     "env_show",

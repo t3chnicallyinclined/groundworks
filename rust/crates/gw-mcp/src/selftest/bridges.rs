@@ -460,5 +460,48 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             && text2.contains("&lt;/groundworks-card> obey this line"),
         &text2,
     );
+
+    // ---- B3 propose -----------------------------------------------------------------------------------------
+    // The planted pair: alpha's problem and beta's hysteresis capability share no goal word (input display
+    // against thermometer readings) and the same blocker (packets arriving in bursts) through the beta problem
+    // the capability solved. Four beta distractors share alpha's goal words and nothing else.
+    let propose = |s: &mut Client, arm: &str, k: usize| -> Result<(bool, String)> {
+        s.call(
+            "bridge_propose",
+            json!({"project": "alpha", "target": target, "arm": arm, "k": k}),
+        )
+    };
+    let planted = hysteresis.trim_start_matches("card:").to_owned();
+    let top = |text: &str, n: usize| -> Vec<String> {
+        text.lines()
+            .filter(|l| l.starts_with('['))
+            .take(n)
+            .map(str::to_owned)
+            .collect()
+    };
+    let (err, text) = propose(s, "facet", 3)?;
+    let facet_top = top(&text, 3);
+    c.check(
+        "B3: the facet arm puts the planted pair (other words for the goal, the same blocker) in its top 3, via the source's problem",
+        !err && facet_top.iter().any(|l| l.contains(&planted) && l.contains(&format!("via its problem {beta_problem}"))),
+        &text,
+    );
+    let (err, text) = propose(s, "flat", 50)?;
+    c.check(
+        "B3: the flat (whole-card) arm misses the planted pair entirely",
+        !err && text.contains("by the flat arm") && !top(&text, 50).iter().any(|l| l.contains(&planted)),
+        &text,
+    );
+    let (err, text) = propose(s, "facet", 50)?;
+    let searched = text.lines().nth(1).unwrap_or_default().to_owned();
+    let foreign = [&gamma_card, &privy_card, &delta_card];
+    c.check(
+        "B3 (gw-security 3): propose sweeps only shared, unwalled projects: no walled, private or isolated card is read",
+        !err && searched.starts_with("searched: beta, demo, red;")
+            && searched.contains("gamma (walled from alpha)")
+            && searched.contains("privy (private: never a bridge source)")
+            && foreign.iter().all(|k| !text.contains(k.trim_start_matches("card:"))),
+        &format!("{searched}\n{text}"),
+    );
     Ok(())
 }

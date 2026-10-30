@@ -56,8 +56,40 @@ pub struct BridgeListArgs {
     pub limit: Option<usize>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct BridgeProposeArgs {
+    pub project: String,
+    /// The problem card of the project to find capabilities for (`card:...`).
+    pub target: String,
+    /// facet (default: goal against goal, blocker against blocker through the problem a capability
+    /// solved), flat (whole card against whole card, the baseline) or random.
+    pub arm: Option<String>,
+    /// How many candidates (default 10, at most 50).
+    pub k: Option<usize>,
+}
+
 #[tool_router(router = bridge_router, vis = "pub(super)")]
 impl Groundworks {
+    #[tool(
+        description = "Propose candidate bridges for a problem card: capabilities of the shared, unwalled projects ranked by BM25 per facet (no model). Writes nothing; each candidate is a hypothesis, served as data, to keep with bridge_add."
+    )]
+    async fn bridge_propose(&self, args: Parameters<BridgeProposeArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            gw_ops::bridge::propose(
+                &home,
+                &store,
+                &a.project,
+                &a.target,
+                a.arm.as_deref().unwrap_or("facet"),
+                a.k.unwrap_or(10).clamp(1, 50),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
     #[tool(
         description = "Record an idea card: one problem (x the goal, y the blocker), capability (x what it achieves, mech how, a what it assumes, solves the problem card it got past), assumption or limitation of a project. The quote is {unit (key, locator, or path), lines [a, b]} copied by the program, or {fact, text}. Refused: a quote not word for word, a facet sharing no word with the quote or over 300 characters, secret-shaped text, CONFIRMED from a memory/instructions/agent/skill/command unit."
     )]

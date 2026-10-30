@@ -182,6 +182,23 @@ pub fn rrf(orders: &[Vec<usize>], k: f64) -> Vec<usize> {
     order_desc(&score)
 }
 
+/// Reciprocal rank fusion of score lists over the same indices, where an index counts only in the lists in
+/// which it scored above zero, and an index that scored nowhere is left out (a bridge arm must not propose a
+/// card that matched nothing). Best first; ties keep index order.
+pub fn rrf_positive(scores: &[Vec<f64>], k: f64) -> Vec<usize> {
+    let n = scores.first().map_or(0, Vec::len);
+    let mut fused = vec![0.0f64; n];
+    let mut scored = vec![false; n];
+    for list in scores {
+        let ranked = order_desc(list).into_iter().filter(|&i| list[i] > 0.0);
+        for (rank, i) in ranked.enumerate() {
+            fused[i] += 1.0 / (k + rank as f64 + 1.0);
+            scored[i] = true;
+        }
+    }
+    order_desc(&fused).into_iter().filter(|&i| scored[i]).collect()
+}
+
 /// The arms of the retrieval ladder, in the order they are reported. The first is the baseline the
 /// paired tests run against: the store's merged scores, the order ask shipped until 2026-10-26.
 pub const ARMS: [&str; 10] = [
@@ -262,6 +279,14 @@ pub fn ladder_orders(question: &str, pool: &Pool<'_>) -> Vec<(&'static str, Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rrf_positive_leaves_out_what_scored_nowhere() {
+        // 0 leads list one, 2 leads list two, 1 scored nothing: 0 and 2 tie and keep index order.
+        assert_eq!(rrf_positive(&[vec![2.0, 0.0, 0.0], vec![0.0, 0.0, 1.0]], RRF_K), [0, 2]);
+        assert_eq!(rrf_positive(&[vec![1.0, 2.0, 0.0], vec![0.0, 3.0, 0.0]], RRF_K), [1, 0]);
+        assert!(rrf_positive(&[vec![0.0, 0.0]], RRF_K).is_empty());
+    }
 
     #[test]
     fn words_split_lowercase_and_stem_like_the_store() {

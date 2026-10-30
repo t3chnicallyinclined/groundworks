@@ -481,3 +481,184 @@ pub fn list(home: &Home, store: &Store, project: &str, limit: usize) -> Result<S
     }
     Ok(out)
 }
+
+/// The arms `propose` (and the evaluator) rank with. `flat` is the baseline: BM25 of the target's whole text
+/// over each capability's whole text. `facet` keeps the facets apart: the target's goal (x) against each
+/// capability's goal, and the target's blocker (y) against other problems' blockers, a capability taking the
+/// score of the problem it solved (Swanson's ABC chain); the two lists fused by reciprocal rank fusion.
+/// `random` is a seeded shuffle, the floor. No model: BM25 over one pool at a time, one vocabulary.
+pub const ARMS: [&str; 3] = ["random", "flat", "facet"];
+
+/// One proposal: the capability's index in the pool, its score, and the pool index of the problem the chain
+/// went through.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ranked {
+    pub index: usize,
+    pub score: f64,
+    pub via: Option<usize>,
+}
+
+fn bag(text: &str) -> Vec<String> {
+    card::content_words(text)
+}
+
+/// The capabilities of `pool` best first for `target` under `arm`, each with a positive score (every one, in
+/// a seeded order, for `random`). Pure: the same pool and target give the same order.
+pub fn rank(arm: &str, target: &Card, pool: &[Card]) -> Result<Vec<Ranked>> {
+    let caps: Vec<usize> = (0..pool.len()).filter(|&i| pool[i].kind == "capability").collect();
+    let ranked = match arm {
+        "random" => {
+            let mut order = caps.clone();
+            let mut seed = u64::from_str_radix(&sha256_hex(&[target.key.as_bytes()])[..16], 16).unwrap_or(1) | 1;
+            for i in (1..order.len()).rev() {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                order.swap(i, (seed % (i as u64 + 1)) as usize);
+            }
+            order
+                .into_iter()
+                .map(|index| Ranked {
+                    index,
+                    score: 0.0,
+                    via: None,
+                })
+                .collect()
+        }
+        "flat" => {
+            let docs: Vec<Vec<String>> = caps.iter().map(|&i| bag(&pool[i].whole_text())).collect();
+            let scores = crate::rerank::bm25(&bag(&target.whole_text()), &docs);
+            crate::rerank::order_desc(&scores)
+                .into_iter()
+                .filter(|&j| scores[j] > 0.0)
+                .map(|j| Ranked {
+                    index: caps[j],
+                    score: scores[j],
+                    via: None,
+                })
+                .collect()
+        }
+        "facet" => {
+            let x_docs: Vec<Vec<String>> = caps.iter().map(|&i| bag(&pool[i].x)).collect();
+            let by_x = crate::rerank::bm25(&bag(&target.x), &x_docs);
+            // Y <-> Y: the target's blocker against every other problem's, then onto the capability that solved it.
+            let problems: Vec<usize> = (0..pool.len())
+                .filter(|&i| pool[i].kind == "problem" && pool[i].y.is_some())
+                .collect();
+            let y_docs: Vec<Vec<String>> = problems
+                .iter()
+                .map(|&i| bag(pool[i].y.as_deref().unwrap_or_default()))
+                .collect();
+            let y_scores = crate::rerank::bm25(&bag(target.y.as_deref().unwrap_or_default()), &y_docs);
+            let mut by_y = vec![0.0f64; caps.len()];
+            let mut via = vec![None; caps.len()];
+            for (j, &c) in caps.iter().enumerate() {
+                let Some(solves) = pool[c].solves.as_deref() else {
+                    continue;
+                };
+                for (k, &p) in problems.iter().enumerate() {
+                    if pool[p].key == solves && pool[p].project == pool[c].project && y_scores[k] > by_y[j] {
+                        by_y[j] = y_scores[k];
+                        via[j] = Some(p);
+                    }
+                }
+            }
+            let fused = crate::rerank::rrf_positive(&[by_x.clone(), by_y.clone()], crate::rerank::RRF_K);
+            fused
+                .into_iter()
+                .map(|j| Ranked {
+                    index: caps[j],
+                    score: by_x[j] + by_y[j],
+                    via: via[j].filter(|_| by_y[j] > 0.0),
+                })
+                .collect()
+        }
+        other => bail!("unknown arm {other:?}; the arms are {}", ARMS.join(", ")),
+    };
+    Ok(ranked)
+}
+
+/// The live problem and capability cards of every project in reach, each servable; and those held back.
+pub fn pool(store: &Store, r: &Reach) -> Result<(Vec<Card>, Vec<String>)> {
+    let mut pool = Vec::new();
+    let mut held = Vec::new();
+    for name in &r.sources {
+        let cards = card::cards(
+            store,
+            name,
+            "WHERE status = 'live' AND kind IN ['problem', 'capability']",
+            Vars::default(),
+            5000,
+        )?;
+        for c in cards {
+            match card::unservable(&c) {
+                Some(why) => held.push(format!("{name} card:{} ({why})", c.key)),
+                None => pool.push(c),
+            }
+        }
+    }
+    Ok((pool, held))
+}
+
+/// Candidate bridges for one problem card of `project`: the best `k` capabilities of the projects in its
+/// bridge reach under `arm`, each framed as data with its project and the grade the reader may see. Writes
+/// nothing; a candidate becomes a bridge only through `bridge_add`.
+pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &str, k: usize) -> Result<String> {
+    let r = reach(home, store, project)?;
+    let t = card::card(store, &r.target, target)?;
+    ensure!(
+        t.kind == "problem",
+        "card:{} is a {}; propose takes a problem card",
+        t.key,
+        t.kind
+    );
+    ensure!(t.status == "live", "card:{} is {}, not live", t.key, t.status);
+    let (pool, held) = pool(store, &r)?;
+    let ranked = rank(arm, &t, &pool)?;
+    let mut out = format!(
+        "candidates for {} card:{} by the {arm} arm: {} of {} capabilities in reach scored; showing {}\n\
+         searched: {}{}{}\n",
+        r.target,
+        t.key,
+        ranked.len(),
+        pool.iter().filter(|c| c.kind == "capability").count(),
+        ranked.len().min(k),
+        if r.sources.is_empty() {
+            "nothing".to_owned()
+        } else {
+            r.sources.join(", ")
+        },
+        if r.skipped.is_empty() {
+            String::new()
+        } else {
+            format!("; not a source: {}", r.skipped.join(", "))
+        },
+        if held.is_empty() {
+            String::new()
+        } else {
+            format!("; held back: {}", held.join(", "))
+        },
+    );
+    for (n, p) in ranked.iter().take(k).enumerate() {
+        let c = &pool[p.index];
+        let _ = writeln!(
+            out,
+            "[{}] {} card:{} score {:.3}{}",
+            n + 1,
+            c.project,
+            c.key,
+            p.score,
+            p.via
+                .map_or(String::new(), |v| format!(" via its problem card:{}", pool[v].key))
+        );
+        out.push_str(&framed_card(c, &r.target));
+        if let Some(v) = p.via {
+            out.push_str(&framed_card(&pool[v], &r.target));
+        }
+    }
+    out.push_str(
+        "Each candidate is a hypothesis, not a finding. To keep one, call bridge_add with the target, the source \
+         project and card (and via); it is tested through bridge_advance.\n",
+    );
+    Ok(out)
+}
