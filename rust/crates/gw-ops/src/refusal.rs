@@ -58,6 +58,12 @@ impl Fixture {
 const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const UPPER_DIGIT: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64URL: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+/// Words for passphrase samples: capitalised, joined by `-`, with one number among them.
+const WORDS: [&str; 16] = [
+    "Copper", "Lantern", "Thistle", "Quartz", "Wombat", "Juniper", "Vortex", "Fjord", "Mangrove", "Zephyr", "Kestrel",
+    "Obsidian", "Bramble", "Yonder", "Glyph", "Pickax",
+];
 
 /// xorshift64* seeded from the process's random hasher keys: fresh bytes every run, no dependency.
 struct Noise(u64);
@@ -77,6 +83,20 @@ impl Noise {
 
     fn draw(&mut self, alphabet: &[u8], n: usize) -> String {
         (0..n).map(|_| alphabet[self.below(alphabet.len())] as char).collect()
+    }
+
+    /// A hyphenated word passphrase of 32+ characters with one number among the words, no `/` and no
+    /// extension, whose Shannon entropy is at least `min_entropy`.
+    fn passphrase(&mut self, min_entropy: f64) -> String {
+        loop {
+            let mut parts: Vec<String> = (0..6).map(|_| WORDS[self.below(WORDS.len())].to_owned()).collect();
+            let at = self.below(parts.len());
+            parts.insert(at, (2 + self.below(97)).to_string());
+            let s = parts.join("-");
+            if s.len() >= 32 && entropy(&s) >= min_entropy {
+                return s;
+            }
+        }
     }
 
     /// `n` characters, no two alike (so the Shannon entropy is exactly log2 n), holding a digit, a
@@ -238,6 +258,33 @@ pub fn must_refuse() -> Vec<(String, String)> {
             ),
         ),
         ("high-entropy", r.distinct(ALNUM, 40)),
+        // gw-security ruling 4 (2026-10-30): key material shaped like a path must stay refused.
+        (
+            "high-entropy",
+            format!(
+                "{}/services/T{}/B{}/{}",
+                cat(&["https://hooks.", "slack.com"]),
+                r.draw(UPPER_DIGIT, 8),
+                r.draw(UPPER_DIGIT, 10),
+                r.distinct(ALNUM, 24)
+            ),
+        ),
+        (
+            "high-entropy",
+            format!(
+                "{}/api/webhooks/{}/{}",
+                cat(&["https://disc", "ord.com"]),
+                r.draw(b"0123456789", 18),
+                r.distinct(ALNUM, 20) + &r.draw(B64URL, 48)
+            ),
+        ),
+        ("high-entropy", format!("{}.md", r.distinct(ALNUM, 40))),
+        ("high-entropy", format!("keys/{}", r.distinct(ALNUM, 40))),
+        ("high-entropy", r.passphrase(4.3)),
+        (
+            "kv-secret",
+            format!("password: {}", r.passphrase(0.0).replacen('-', "/", 2)),
+        ),
     ];
     samples.into_iter().map(|(id, text)| (id.to_owned(), text)).collect()
 }
@@ -366,6 +413,31 @@ fn kv_value_ok(value: &str) -> bool {
     first.is_some() && chars.all(|c| Some(c) == first)
 }
 
+/// A high-entropy run that is a file path or a ticket name, not key material (gw-security ruling 4,
+/// 2026-10-30; applied only inside the high-entropy rule, after the named patterns and kv-secret):
+/// (1) it holds a `/`, or the text right after it is `.` and 1 to 5 letters ending a word (an extension);
+/// (2) cut on `/`, `_`, `-` and `.`, every piece is all letters, all digits, or hex of 7 or more (a commit
+/// or a UUID: a whole canonical UUID counts as one hex piece, since its 4-character groups would fail
+/// alone); (3) no piece is longer than 40 characters.
+fn path_shaped(run: &str, after: &str) -> bool {
+    static EXT: OnceLock<Regex> = OnceLock::new();
+    static UUID: OnceLock<Regex> = OnceLock::new();
+    let ext = EXT.get_or_init(|| Regex::new(r"^\.[A-Za-z]{1,5}\b").expect("extension"));
+    let uuid = UUID.get_or_init(|| {
+        Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").expect("uuid")
+    });
+    if !(run.contains('/') || ext.is_match(after)) {
+        return false;
+    }
+    let joined = uuid.replace_all(run, |c: &regex::Captures<'_>| c[0].replace('-', ""));
+    joined.split(['/', '_', '-', '.']).filter(|p| !p.is_empty()).all(|p| {
+        p.len() <= 40
+            && (p.chars().all(|c| c.is_ascii_alphabetic())
+                || p.chars().all(|c| c.is_ascii_digit())
+                || (p.len() >= 7 && p.chars().all(|c| c.is_ascii_hexdigit())))
+    })
+}
+
 /// Shannon entropy in bits per character.
 pub fn entropy(s: &str) -> f64 {
     let mut counts: BTreeMap<char, usize> = BTreeMap::new();
@@ -416,6 +488,9 @@ pub fn check(text: &str) -> Option<Hit> {
             continue;
         }
         if PUBKEY_PREFIXES.iter().any(|p| run.starts_with(p)) {
+            continue;
+        }
+        if path_shaped(run, &masked[m.end()..]) {
             continue;
         }
         let has = |f: fn(char) -> bool| run.chars().any(f);

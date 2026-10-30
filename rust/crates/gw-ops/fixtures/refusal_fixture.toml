@@ -40,6 +40,13 @@ must_accept = [
   "access_key_id rotation is the owner's step; passwd -S deploy shows the account state",
   "user:pass@host is the shape; https://user:$PASS@host is how to write it",
   "the error field was capped at 200 chars with the redaction regex Bearer \\S+|[A-Za-z0-9_\\-]{32,}",
+  # Path-shaped runs (gw-security ruling 4, 2026-10-30): each was refused by high-entropy before the
+  # path-shaped exemption and must go red again without it.
+  "design in C:/Users/trist/projects/_tickets/DESIGN-2026-10-30-groundworks-idea-bridges.md section 2",
+  "see _tickets/HANDOFF-2026-10-18-groundworks-fleetview-lead.md first",
+  "the plan is WORKSTREAM-2026-10-24-groundworks-harness.md in the tickets project",
+  "dump at C:/Users/trist/AppData/Local/Temp/claude/c--Users-trist-projects/7c9e6679-7425-40de-944b-e07fc1f90ae7/scratchpad/journal.txt",
+  "golden rust/goldens/Release-0c559620f3a1b2c4d5e6f708192a3b4c5d6e7f80/Summary.md is the baseline",
 ]
 
 [patterns]
