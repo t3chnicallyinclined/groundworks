@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse a push that would publish a deny-listed commit message or ref name (every commit in the pushed
+# range, not only the last one, and messages written before the commit-msg hook existed).
+# git passes the remote's name and URL as arguments and the refs on stdin; both reach the scanner.
+exec "${GROUNDWORKS_PYTHON:-python}" scripts/privacy_scan.py --push "$1" "$2"

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuse a commit whose MESSAGE matches the deny list (the pre-commit scan reads files, not messages).
+# Installed by scripts/install_hooks.py, which writes the Python it ran under in place of PYTHON.
+exec "${GROUNDWORKS_PYTHON:-python}" scripts/privacy_scan.py --message "$1"

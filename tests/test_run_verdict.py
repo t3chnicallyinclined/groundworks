@@ -186,6 +186,102 @@ class PrivacyScanTests(unittest.TestCase):
         self.deny.unlink()
         self.assertEqual(self.scan({"readme.md": "hello"}).returncode, 2)
 
+    # ---- 2026-10-30 (gw-security, fixes 1-4): line numbers, staged content, messages, pushes ----------
+
+    def repo(self):
+        """A throwaway repository holding the scanner, its hooks and the installer, with an identity."""
+        repo = self.work / "hooked"
+        (repo / "scripts" / "hooks").mkdir(parents=True, exist_ok=True)
+        for rel in ("scripts/privacy_scan.py", "scripts/install_hooks.py", "scripts/hooks/commit-msg",
+                    "scripts/hooks/pre-push"):
+            (repo / rel).write_text((ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        self.git(repo, "init", "-q", "-b", "main")
+        self.git(repo, "config", "user.name", "t")
+        self.git(repo, "config", "user.email", "t@localhost")
+        return repo
+
+    def git(self, repo, *args, stdin=None):
+        env = dict(os.environ, GROUNDWORKS_DENYLIST=str(self.deny))
+        return subprocess.run(["git"] + list(args), cwd=repo, capture_output=True, text=True, env=env, input=stdin)
+
+    def run_scan(self, repo, *args, stdin=None):
+        env = dict(os.environ, GROUNDWORKS_DENYLIST=str(self.deny))
+        return subprocess.run([sys.executable, "scripts/privacy_scan.py"] + list(args), cwd=repo,
+                              capture_output=True, text=True, env=env, input=stdin)
+
+    def test_a_match_names_the_deny_list_line_never_the_pattern(self):
+        self.deny.write_text("# a comment\n\nZZQUUX_FAKE_IDENTIFIER\n", encoding="utf-8")
+        out = self.scan({"notes/a.md": "see ZZQUUX_FAKE_IDENTIFIER here\n"})
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("notes/a.md:1 matches deny-list line 3", out.stdout)
+        self.assertNotIn("ZZQUUX", out.stdout + out.stderr, "the pattern is the identifier: never print it")
+
+    def test_the_staged_content_is_scanned_not_the_working_tree(self):
+        repo = self.repo()
+        doc = repo / "doc.md"
+        doc.write_text("ZZQUUX_FAKE_IDENTIFIER\n", encoding="utf-8")
+        self.git(repo, "add", "doc.md")
+        doc.write_text("clean now, but the index still holds the identifier\n", encoding="utf-8")
+        out = self.run_scan(repo)
+        self.assertEqual(out.returncode, 1, "a staged identifier is what the commit would carry: " + out.stdout)
+        self.git(repo, "add", "doc.md")
+        doc.write_text("ZZQUUX_FAKE_IDENTIFIER only on disk, not staged\n", encoding="utf-8")
+        out = self.run_scan(repo)
+        self.assertEqual(out.returncode, 0, "the commit would carry the clean staged text: " + out.stdout)
+
+    def test_a_commit_message_is_scanned(self):
+        msg = self.work / "MSG"
+        msg.write_text("fix the parser\n\nfor ZZQUUX_FAKE_IDENTIFIER\n", encoding="utf-8")
+        out = self.run_scan(self.repo(), "--message", str(msg))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("commit message line 3 matches deny-list line 1", out.stdout)
+        self.assertNotIn("ZZQUUX", out.stdout)
+        msg.write_text("fix the parser\n", encoding="utf-8")
+        self.assertEqual(self.run_scan(self.repo(), "--message", str(msg)).returncode, 0)
+
+    def installed(self):
+        repo = self.repo()
+        out = subprocess.run([sys.executable, "scripts/install_hooks.py"], cwd=repo, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        check = subprocess.run([sys.executable, "scripts/install_hooks.py", "--check"], cwd=repo,
+                               capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stdout)
+        # The file scan's pre-commit hook also runs license_check.py, which this throwaway repo lacks;
+        # these tests are about the message and push hooks.
+        (repo / ".git" / "hooks" / "pre-commit").unlink()
+        return repo
+
+    def test_the_commit_msg_hook_refuses_a_deny_listed_message(self):
+        repo = self.installed()
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        self.git(repo, "add", "a.txt")
+        bad = self.git(repo, "commit", "-q", "-m", "about ZZQUUX_FAKE_IDENTIFIER")
+        self.assertNotEqual(bad.returncode, 0, "the hook let a deny-listed message through")
+        self.assertIn("deny-list line 1", bad.stdout + bad.stderr)
+        self.assertNotEqual(self.git(repo, "rev-parse", "--verify", "-q", "HEAD").returncode, 0, "nothing committed")
+        self.assertEqual(self.git(repo, "commit", "-q", "-m", "a clean message").returncode, 0)
+
+    def test_the_pre_push_hook_scans_every_pushed_message_and_ref_names(self):
+        repo = self.installed()
+        remote = self.work / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], capture_output=True)
+        self.git(repo, "remote", "add", "origin", str(remote))
+        for n, msg in enumerate(["clean first", "old history ZZQUUX_FAKE_IDENTIFIER", "clean last"]):
+            (repo / ("f%d.txt" % n)).write_text("x\n", encoding="utf-8")
+            self.git(repo, "add", "-A")
+            # --no-verify stands in for history written before the commit-msg hook existed.
+            self.git(repo, "commit", "-q", "--no-verify", "-m", msg)
+        bad = self.git(repo, "push", "-q", "origin", "main")
+        self.assertNotEqual(bad.returncode, 0, "a deny-listed message in the middle of the range was pushed")
+        self.assertIn("message line 1 matches deny-list line 1", bad.stdout + bad.stderr)
+        self.assertNotIn("ZZQUUX", bad.stdout + bad.stderr)
+        self.git(repo, "checkout", "-q", "-b", "clean", "HEAD~2")
+        named = self.git(repo, "push", "-q", "origin", "clean:ZZQUUX_FAKE_IDENTIFIER-branch")
+        self.assertNotEqual(named.returncode, 0, "a deny-listed branch name was pushed")
+        self.assertIn("(remote name) matches deny-list line 1", named.stdout + named.stderr)
+        ok = self.git(repo, "push", "-q", "origin", "clean")
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
 
 class CiTests(unittest.TestCase):
     """CI must be able to go red. Each assertion here is a way it silently could not."""

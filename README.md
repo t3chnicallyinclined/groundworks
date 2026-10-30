@@ -259,7 +259,7 @@ This repository contains **no client or matter data**, ever:
 | `groundworks/embed/` | Local embeddings and a retrieval bake-off (keyword, dense, hybrid) with confidence intervals; models adopted only if they beat keyword search |
 | `docs/LICENSING.md`, `THIRD_PARTY_NOTICES.md`, `scripts/license_check.py` | Licensing policy, notices, and the commit-time license check |
 | `groundworks/patterns/` | Proven datastore patterns: truth maintenance, archive bin, stable edge ids |
-| `scripts/privacy_scan.py` | Deny-list scan (list kept outside the repo); runs as a pre-commit hook; fails closed |
+| `scripts/privacy_scan.py` | Deny-list scan (list kept outside the repo): staged files (pre-commit), the commit message (commit-msg), every pushed commit message and ref name (pre-push); reports deny-list line numbers, never patterns; fails closed. `scripts/install_hooks.py` installs the three hooks |
 | `docs/ROADMAP.md` | Tracks for the engine, pilots and product, with acceptance tests |
 | `docs/DECISIONS.md` | Method-level decisions and open questions |
 | `notes/` | Dated design notes: how the idea developed and why |
