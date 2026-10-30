@@ -14,9 +14,9 @@
 
 ## What this is
 
-I'm a cloud engineer, not a software company. I have a lot of side projects, and I use AI agents (mostly Claude
-Code) to help with them. Groundworks is the tooling I built to make that less painful. It's a personal project
-that I'm sharing in case it's useful to someone else.
+I'm a cloud engineer, not a software company. I have a lot of research and side projects going, and I use AI
+agents (mostly Claude Code) to help with them. I made Groundworks to make my own life easier on that work. It's a
+personal project, and I'm sharing it in case it's useful to someone else.
 
 ## What I'm trying to fix
 
@@ -39,6 +39,61 @@ gives the agent a few tools and habits:
 - **Housekeeping.** The database is backed up nightly, and a short report shows whether things are healthy.
 
 Everything stays on my machine. Your notes and data live in your own folder, never in this repo.
+
+## How it works: the whole harness
+
+Groundworks is less one tool and more a harness around each agent session. The pieces fit together like this:
+
+```
+  your projects (code, docs, commits)
+          |
+          |  intake: split into small citable pieces, each with file, lines, hash and date
+          v
+  +----------------------------- the store (a local SurrealDB graph) -----------------------------+
+  |  projects   units (the pieces)   facts (what was learned)   receipts (what was run)           |
+  |  experts    decisions, gotchas, dead ends                    sessions and hook events         |
+  |                                                                                                |
+  |  fact --evidence--> unit            fact --receipt--> the command that proved it               |
+  +------------------------------------------------------------------------------------------------+
+          ^                          ^                                    ^
+          |  ask / search / grep     |  journal (write what was learned)  |  run / gate (leave a receipt)
+          |                          |                                    |
+  +------------------------------ Claude Code + the plugin ------------------------------+
+  |  session start: inject the project's notes       before a shell command: deny list    |
+  |  before stopping: "record what you learned"      agents: architect, engineer, SRE,    |
+  |                                                  security, plus any domain experts    |
+  +---------------------------------------------------------------------------------------+
+          ^
+          |  supervisor: keeps the store running, nightly export, restore drill, health report
+```
+
+1. **A home folder** next to my projects holds the registry (projects, their environments, and where secrets
+   live, by reference only), the expert agents, and the database.
+2. **Intake** reads each project into small citable pieces called units.
+3. **The store** is a graph. A fact is linked by an `evidence` edge to the exact units behind it, or to the
+   receipt of the command that proved it. Every row carries its project, so a project's data is easy to find, and later to remove.
+4. **The agent** works through tools: look things up before re-deriving them, use `run` and `gate` to do and
+   check work, and write to the journal to record what it learned.
+5. **The hooks** make that happen without counting on the agent to remember: notes in at the start, a guard on
+   the shell, a nudge to record at the end.
+6. **The supervisor** keeps the database running and backed up, and writes a short health report.
+
+## A few choices I made
+
+There are plenty of good agent memory tools out there, and I'm not claiming this one is better. I built it for my
+own research and projects, and these are the choices that fit how I work:
+
+- **The database holds the line, not the prompt.** Marking a fact as confirmed needs a link to a real piece of
+  source, a command receipt, or my say-so. Without one, SurrealDB refuses the write.
+- **A program checks quotes.** When an answer cites a file, the quote has to be found word for word in what the
+  agent actually read.
+- **Dead ends are kept.** Ruled-out approaches are written down with the reason, so they don't get re-tried.
+- **Facts link to their proof.** Because it's a graph, I can walk from a fact to the lines or command behind it.
+- **Each agent signs in as itself**, so I can see who wrote what.
+- **Organised by project.** One home covers all my projects; related ones can see each other, private ones can be
+  walled off.
+- **Kept simple.** One local program and one local database. No cloud service, and no AI model inside
+  Groundworks itself.
 
 ## How I use it
 
