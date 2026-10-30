@@ -142,7 +142,7 @@ fn body(text: &'static str) -> &'static str {
 /// One headless session; returns Claude Code's JSON result. The prompt goes in on stdin (`-p` with
 /// no text reads it), because a Windows command line holds at most 32 KB and a packet of candidates
 /// does not fit.
-pub(crate) fn session(cwd: &Path, prompt: &str, args: &[String], timeout: Duration) -> Result<Value> {
+pub fn session(cwd: &Path, prompt: &str, args: &[String], timeout: Duration) -> Result<Value> {
     let mut child = Command::new("claude")
         .current_dir(cwd)
         .arg("-p")

@@ -1,4 +1,5 @@
 mod homeless;
+mod init_drill;
 mod selftest;
 mod server;
 
@@ -179,6 +180,18 @@ enum Command {
     },
     /// Survey a folder before bringing it in: read-only JSON (what init would bring in); writes nothing.
     InitSurvey { path: String },
+    /// The init skill's gate: one headless Claude Code session follows the skill against a throwaway home
+    /// and store; FAILS on any CONFIRMED owner line the owner did not sign, or on a vacuous run. Costs one
+    /// model session (tokens printed). Never touches the real home or store.
+    InitDrill {
+        /// A skill file to drill instead of the one built in (to show the gate red on another text).
+        #[arg(long)]
+        skill: Option<PathBuf>,
+        #[arg(long, default_value = "sonnet")]
+        model: String,
+        #[arg(long, default_value_t = 2.0)]
+        budget_usd: f64,
+    },
     /// The expert directory: the global experts, or with --project the ones visible in that project.
     Experts {
         #[arg(long)]
@@ -515,6 +528,24 @@ async fn dispatch(command: Command) -> Result<bool> {
         println!("{report}");
         return Ok(failed == 0);
     }
+    if let Command::InitDrill {
+        skill,
+        model,
+        budget_usd,
+    } = &command
+    {
+        let skill = match skill {
+            Some(path) => {
+                anyhow::Context::with_context(std::fs::read_to_string(path), || format!("reading {}", path.display()))?
+            }
+            None => init_drill::SKILL.to_owned(),
+        };
+        let (model, budget) = (model.clone(), *budget_usd);
+        let (report, passed) =
+            store::blocking(move || init_drill::run(&std::env::current_exe()?, &skill, &model, budget)).await?;
+        println!("{report}");
+        return Ok(passed);
+    }
     if let Command::Hook { event, rules } = &command {
         let event: gw_ops::hook::Event = event.parse()?;
         let mut input = String::new();
@@ -554,7 +585,9 @@ async fn dispatch(command: Command) -> Result<bool> {
     }
     let home = Arc::new(Home::discover()?);
     let (text, ok) = match command {
-        Command::Serve | Command::Selftest | Command::Hook { .. } => unreachable!("handled above"),
+        Command::Serve | Command::Selftest | Command::Hook { .. } | Command::InitDrill { .. } => {
+            unreachable!("handled above")
+        }
         Command::Projects => (ops::projects(&home)?, true),
         Command::Show { project, limit, since } => {
             let store = open_store(&home).await.ok();

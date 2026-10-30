@@ -164,7 +164,7 @@ impl Checks {
 
 /// A throwaway home: three projects (one green, one red, one the owner isolates), a protected
 /// env, a file to quote, the store pointed at `url`.
-fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
+pub(crate) fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
     let home = base.join(".groundworks");
     let workspace = base.join("work");
     for dir in ["registry/projects", "secrets", "knowledge", "journal"] {
@@ -1048,6 +1048,7 @@ the parser now accepts empty input
     promotion_checks(exe, base, &home, &mut c)?;
     ruled_out_checks(exe, base, &home, &mut c)?;
     confirm_rule_checks(exe, base, &home, &mut c)?;
+    owner_signature_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1724,6 +1725,51 @@ fn confirm_rule_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> 
             && gotcha.contains("as INFERRED, not CONFIRMED: its only evidence quotes a doc, which confirms only a decision (this is a gotcha)")
             && gotcha.contains("[gotcha] INFERRED The guide says"),
         &format!("{decision}\n--\n{gotcha}"),
+    );
+    Ok(())
+}
+
+/// The init skill's signing step (S3, 2026-10-30): the exact command the skill gives the owner records a
+/// CONFIRMED line signed by the owner's login; the same command with a wrong password records nothing.
+fn owner_signature_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    let note = |pass: &str| -> Result<(bool, String)> {
+        let out = Command::new(exe)
+            .args([
+                "note",
+                "demo",
+                "fact",
+                "The demo converts units for bench notes; it is active.",
+                "--as-owner",
+                "--confidence",
+                "confirmed",
+                "--owner-statement",
+                "The demo converts units for bench notes; it is active., 2026-10-30",
+                "--source",
+                "owner, 2026-10-30",
+            ])
+            .env("GROUNDWORKS_HOME", home)
+            .env("GROUNDWORKS_MACHINE", "SELFTEST")
+            .env("GROUNDWORKS_EXPERTS", base.join("experts"))
+            .env("GROUNDWORKS_CLAUDE_DIR", base.join("claude"))
+            .env("GROUNDWORKS_OWNER_PASS", pass)
+            .env_remove("GROUNDWORKS_START")
+            .stdin(Stdio::null())
+            .output()?;
+        Ok((
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        ))
+    };
+    let (ok, signed) = note(OWNER_PASS)?;
+    let (bad_ok, refused) = note("not-the-owner-password")?;
+    c.check(
+        "the owner's signing command from the init skill records a CONFIRMED line signed by the owner; a wrong password records nothing",
+        ok && signed.contains("[fact] CONFIRMED The demo converts units") && signed.contains("signed owner") && !bad_ok,
+        &format!("{signed}\n--\n{refused}"),
     );
     Ok(())
 }
