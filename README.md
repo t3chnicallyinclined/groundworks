@@ -47,8 +47,8 @@ and no AI model inside Groundworks.
 
 ## Roadmap
 
-- **Now:** a Groundworks desktop app, private and in progress. It's a copy of Nimbalyst with the Groundworks plugin
-  in every session.
+- **Now:** a Groundworks desktop app, private and in progress. It's a copy of Nimbalyst with Groundworks built into
+  every session.
 - **Next:**
   - "check your notes first" made automatic;
   - a smaller tool set per session;
@@ -68,12 +68,14 @@ mkdir -p ~/projects/.groundworks                                 # 2. a home fol
 echo 'workspace = "/home/you/projects"' > ~/projects/.groundworks/groundworks.toml
 export GROUNDWORKS_OWNER_PASS=...                                # 3. start the store, create your owner login
 cd ~/projects && groundworks store init && unset GROUNDWORKS_OWNER_PASS
+groundworks store supervise &                                    #    keep it running, with nightly export and restore drill
 claude plugin marketplace add <path to this repository>          # 4. add the plugin
 claude plugin install groundworks@groundworks
 groundworks selftest && groundworks doctor                       # 5. check it
 ```
 
-Then open a project in Claude Code and run `/groundworks:init`. Type the owner password yourself; Groundworks never
+On Windows, `groundworks store install` runs the supervisor as a logon task instead. Then open a project in Claude
+Code and run `/groundworks:init`. Type the owner password yourself; Groundworks never
 stores it. PowerShell steps and every command are in [plugin/README.md](plugin/README.md).
 
 **If it sounds helpful, give it a fork** and make it fit how you work.
@@ -102,7 +104,8 @@ stores it. PowerShell steps and every command are in [plugin/README.md](plugin/R
 | `docs/` | Architecture, decisions, roadmap, and `METRICS.md` (what the health report measures) |
 | `docs/brand/`, `site/` | Logo, mascot, icon and colours; the project website |
 | `scripts/` | The privacy scan and license check that run before every commit |
-| `groundworks/`, `instances/`, `tests/`, `.claude/` | The original Python version, kept as a reference ([its README](docs/ENGINE-PYTHON-V0.2.md)) |
+| `.claude/` | The repo's own agent and skills (instance design, panels) |
+| `groundworks/`, `instances/`, `tests/` | The original Python version, kept as a reference ([its README](docs/ENGINE-PYTHON-V0.2.md)) |
 | `research/`, `notes/`, `evals/` | Background reading, dated design notes and eval sets |
 
 ## License

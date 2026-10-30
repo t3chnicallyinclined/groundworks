@@ -115,7 +115,7 @@ footer a{color:#5B9BFF}
 <section><div class="wrap">
   <h2>Roadmap</h2>
   <div class="grid">
-    <div class="card"><h3>Now</h3><p>A Groundworks desktop app, private and in progress: a copy of Nimbalyst with the Groundworks plugin in every session.</p></div>
+    <div class="card"><h3>Now</h3><p>A Groundworks desktop app, private and in progress: a copy of Nimbalyst with Groundworks built into every session.</p></div>
     <div class="card"><h3>Next</h3><p>"Check your notes first" made automatic, a smaller tool set per session, alerts when something stops working, an undoable way to remove a project, and picking up a project's own Claude Code agents, skills and notes when it's added.</p></div>
     <div class="card"><h3>Later</h3><p>Sandboxed sessions, and a side-by-side check against plain Claude Code.</p></div>
   </div>
@@ -136,6 +136,7 @@ echo 'workspace = "/home/you/projects"' &gt; ~/projects/.groundworks/groundworks
 export GROUNDWORKS_OWNER_PASS=...
 cd ~/projects &amp;&amp; groundworks store init
 unset GROUNDWORKS_OWNER_PASS
+groundworks store supervise &amp;     # keep it running, nightly export, restore drill
 
 # 4. Add the plugin to Claude Code
 claude plugin marketplace add &lt;path to the repository&gt;
@@ -144,7 +145,7 @@ claude plugin install groundworks@groundworks
 # 5. Check it
 groundworks selftest
 groundworks doctor</pre>
-  <p>Then open one of your projects in Claude Code and run <code>/groundworks:init</code>.</p>
+  <p>On Windows, <code>groundworks store install</code> runs the supervisor as a logon task instead. Then open one of your projects in Claude Code and run <code>/groundworks:init</code>.</p>
   <div class="note"><b>If it sounds helpful, give it a fork</b> and make it fit how you work. Issues and ideas are welcome.</div>
 </div></section>
 <section><div class="wrap">
