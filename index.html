@@ -42,6 +42,7 @@ th,td{text-align:left;padding:10px 12px;border:1px solid #e4ddd0;vertical-align:
 th{background:var(--blueprint);color:#fff}
 .note{background:#fff8dc;border-left:5px solid var(--yellow);padding:12px 16px;border-radius:6px;margin-top:16px}
 pre{background:var(--night);color:var(--paper);padding:16px;border-radius:10px;overflow-x:auto;font-size:.88rem;line-height:1.5}
+.flow{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;margin:16px 0 8px}.flow .box{background:var(--blueprint);color:#fff;border-radius:10px;padding:14px 16px;text-align:center;font-weight:600;min-width:200px;flex:1 1 200px}.flow .box.main{background:var(--night);border:3px solid var(--yellow)}.flow small{font-weight:400;opacity:.85}.flow .arrow{font-weight:700;color:var(--orange);text-align:center}
 footer{background:var(--night);color:#B8C2D6;padding:28px 0;font-size:.9rem}
 footer a{color:#5B9BFF}
 @media (max-width:720px){.why{grid-template-columns:1fr}.why img{max-width:220px;margin:0 auto}body{font-size:16px}}
@@ -65,7 +66,7 @@ footer a{color:#5B9BFF}
 <section><div class="wrap why">
   <div>
     <h2>What this is</h2>
-    <p>I'm a cloud engineer, not a software company. I have a lot of side projects, and I use AI agents (mostly Claude Code) to help with them. Groundworks is the tooling I built to make that less painful. It's a personal project that I'm sharing in case it's useful to someone else.</p>
+    <p>I'm a cloud engineer, not a software company. I have a lot of research and side projects going, and I use AI agents (mostly Claude Code) to help with them. I made Groundworks to make my own life easier on that work. It's a personal project, and I'm sharing it in case it's useful to someone else.</p>
     <h2 style="margin-top:28px">What I'm trying to fix</h2>
     <ul class="pain">
       <li>Every new agent session forgets what the last one figured out, so the same lessons get re-learned.</li>
@@ -87,6 +88,38 @@ footer a{color:#5B9BFF}
     <div class="card"><h3>Hooks</h3><p>A session starts with that project's notes. Risky shell commands get blocked. Before it ends, it's asked to write down what it learned.</p></div>
     <div class="card"><h3>Housekeeping</h3><p>The database is backed up nightly, and a short report shows whether things are healthy.</p></div>
     <div class="card"><h3>Stays local</h3><p>Your notes and data live in your own folder on your machine, never in the repo.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>How it works: the whole harness</h2>
+  <p>Groundworks is less one tool and more a harness around each agent session.</p>
+  <div class="flow">
+    <div class="box">Your projects<br><small>code, docs, commits</small></div><div class="arrow">intake &rarr;</div>
+    <div class="box main">The store<br><small>a local graph: fact &rarr; evidence &rarr; source lines, fact &rarr; receipt</small></div><div class="arrow">&larr; look up, record, run &rarr;</div>
+    <div class="box">Claude Code + plugin<br><small>hooks, tools, expert agents</small></div>
+  </div>
+  <ol class="loop">
+    <li><b>A home folder</b> next to my projects holds the registry (projects, environments, and where secrets live, by reference only), the expert agents, and the database.</li>
+    <li><b>Intake</b> reads each project's code, docs and commits into small citable pieces called units, each with file, lines, hash and date.</li>
+    <li><b>The store</b> is a local SurrealDB graph. A fact is linked by an <code>evidence</code> edge to the exact units behind it, or to the receipt of the command that proved it. Every row carries its project, so a project's data is easy to find, and later to remove.</li>
+    <li><b>The agent</b> works through tools: look things up before re-deriving them, use <code>run</code> and <code>gate</code> to do and check work, and write to the journal to record what it learned.</li>
+    <li><b>The hooks</b> make that happen without counting on the agent to remember: notes in at the start, a guard on the shell, a nudge to record at the end.</li>
+    <li><b>The supervisor</b> keeps the database running and backed up, and writes a short health report.</li>
+  </ol>
+</div></section>
+
+<section><div class="wrap">
+  <h2>A few choices I made</h2>
+  <p>There are plenty of good agent memory tools out there, and I'm not claiming this one is better. I built it for my own research and projects, and these are the choices that fit how I work:</p>
+  <div class="grid">
+    <div class="card"><h3>The database holds the line</h3><p>Marking a fact as confirmed needs a link to real source, a command receipt, or my say-so. Without one, SurrealDB refuses the write.</p></div>
+    <div class="card"><h3>A program checks quotes</h3><p>When an answer cites a file, the quote has to be found word for word in what the agent actually read.</p></div>
+    <div class="card"><h3>Dead ends are kept</h3><p>Ruled-out approaches are written down with the reason, so they don't get re-tried.</p></div>
+    <div class="card"><h3>Facts link to their proof</h3><p>Because it's a graph, I can walk from a fact to the lines or command behind it.</p></div>
+    <div class="card"><h3>Each agent signs in as itself</h3><p>So I can see who wrote what.</p></div>
+    <div class="card"><h3>Organised by project</h3><p>One home covers all my projects. Related ones can see each other, private ones can be walled off.</p></div>
+    <div class="card"><h3>Kept simple</h3><p>One local program and one local database. No cloud service, and no AI model inside Groundworks itself.</p></div>
   </div>
 </div></section>
 
