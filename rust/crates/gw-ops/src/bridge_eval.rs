@@ -199,27 +199,63 @@ pub fn gold(home: &Home, store: &Store, cutoff: &str) -> Result<(Vec<Gold>, Vec<
         if !rest.iter().all(|n| entry.related.iter().any(|x| x == n)) {
             continue;
         }
-        let candidates = pk["candidates"].as_array().cloned().unwrap_or_default();
-        for quote in pk["answer"]["quotes"].as_array().into_iter().flatten() {
-            if quote["use"].as_str().unwrap_or("support") != "support" {
-                continue;
-            }
-            let Some(c) = candidates.iter().find(|c| c["n"] == quote["n"]) else {
-                continue;
-            };
-            let q = c["project"].as_str().unwrap_or_default();
-            if q != p && r.sources.iter().any(|s| s == q) {
-                out.insert(Gold {
-                    p: p.to_owned(),
-                    anchor_p: pk["key"].as_str().unwrap_or_default().to_owned(),
-                    q: q.to_owned(),
-                    anchor_q: c["key"].as_str().unwrap_or_default().to_owned(),
-                    kind: "packet",
-                });
-            }
-        }
+        out.extend(packet_links(pk, p, &r.sources));
     }
     Ok((out.into_iter().collect(), not_read))
+}
+
+/// The links one passed packet for a question about `p` made: each support quote from a candidate of another
+/// project in `sources`. A quote of a candidate that came through `fan_out`'s recorded-fact path (the candidate
+/// carries the fact's text) is kind `packet-fact`: the cross-project fact flood that slice B5 fixes put those
+/// facts there, so they are counted apart and never taken as gold (scholar-architect 2026-10-30).
+pub fn packet_links(pk: &Value, p: &str, sources: &[String]) -> Vec<Gold> {
+    let candidates = pk["candidates"].as_array().cloned().unwrap_or_default();
+    let mut out = Vec::new();
+    for quote in pk["answer"]["quotes"].as_array().into_iter().flatten() {
+        if quote["use"].as_str().unwrap_or("support") != "support" {
+            continue;
+        }
+        let Some(c) = candidates.iter().find(|c| c["n"] == quote["n"]) else {
+            continue;
+        };
+        let q = c["project"].as_str().unwrap_or_default();
+        if q != p && sources.iter().any(|s| s == q) {
+            let via_fact = c["fact"].as_str().is_some_and(|f| !f.is_empty());
+            out.push(Gold {
+                p: p.to_owned(),
+                anchor_p: pk["key"].as_str().unwrap_or_default().to_owned(),
+                q: q.to_owned(),
+                anchor_q: c["key"].as_str().unwrap_or_default().to_owned(),
+                kind: if via_fact { "packet-fact" } else { "packet" },
+            });
+        }
+    }
+    out
+}
+
+/// The packet rule on a synthetic packet, both ways; the failures, empty when it holds. Run by the selftest.
+pub fn packet_selfcheck() -> Vec<String> {
+    let pk = serde_json::json!({
+        "key": "k1",
+        "candidates": [
+            {"n": 1, "project": "q", "key": "unit1"},
+            {"n": 2, "project": "q", "key": "unit2", "fact": "a recorded fact of q"},
+            {"n": 3, "project": "p", "key": "own"}
+        ],
+        "answer": {"quotes": [{"n": 1, "use": "support"}, {"n": 2, "use": "support"}, {"n": 3, "use": "support"}]}
+    });
+    let links = packet_links(&pk, "p", &["q".to_owned()]);
+    let mut failures = Vec::new();
+    if !links.iter().any(|g| g.anchor_q == "unit1" && g.kind == "packet") {
+        failures.push("a quote of a unit candidate of another project is not a packet link".to_owned());
+    }
+    if !links.iter().any(|g| g.anchor_q == "unit2" && g.kind == "packet-fact") {
+        failures.push("a quote that came through the recorded-fact path is not marked packet-fact".to_owned());
+    }
+    if links.iter().any(|g| g.q == "p") {
+        failures.push("a quote of the asked project's own candidate counted as a cross-project link".to_owned());
+    }
+    failures
 }
 
 /// One target problem and the pool it is ranked against, with the pool indices its gold points at.
@@ -341,6 +377,7 @@ pub fn selfcheck() -> Vec<String> {
         cite: None,
         unit: None,
         fact: None,
+        source_kind: None,
         at: String::new(),
     };
     let mut pool = Vec::new();
@@ -407,14 +444,18 @@ pub fn selfcheck() -> Vec<String> {
 /// The whole evaluation: gold after `cutoff`, and, with at least MIN_GOLD of it, the arms over the cards made
 /// at or before the cutoff. Read-only.
 pub fn run(home: &Home, store: &Store, cutoff: &str, k: usize, seed: u64) -> Result<String> {
-    let (gold, not_read) = gold(home, store, cutoff)?;
-    let facts = gold.iter().filter(|g| g.kind == "fact").count();
-    let packets = gold.len() - facts;
+    let (all, not_read) = gold(home, store, cutoff)?;
+    let count = |kind: &str| all.iter().filter(|g| g.kind == kind).count();
+    let (facts, packets, flood) = (count("fact"), count("packet"), count("packet-fact"));
+    // Links through the recorded-fact path are the flood B5 fixes, not gold.
+    let gold: Vec<Gold> = all.into_iter().filter(|g| g.kind != "packet-fact").collect();
     let mut out = format!(
         "bridge-eval (no model; read-only; machine {})\ncutoff: {cutoff}\ngold links after the cutoff: {} (fact links \
-         {facts}, packet links {packets})\nnot read: {}\n",
+         {facts}, packet links {packets}); with the {flood} packet link(s) through the recorded-fact path: {}\n\
+         not read: {}\n",
         crate::home::machine(),
         gold.len(),
+        gold.len() + flood,
         if not_read.is_empty() {
             "none".to_owned()
         } else {

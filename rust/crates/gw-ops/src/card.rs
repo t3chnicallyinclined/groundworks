@@ -28,6 +28,9 @@ use crate::store::{self, Store, Vars, sha256_hex};
 pub const FACET_MAX: usize = 300;
 /// The kinds of unit whose text is an agent's recollection or a prompt: never CONFIRMED on a card.
 pub const CAPPED_KINDS: [&str; 5] = crate::intake::SETUP_KINDS;
+/// Projects that are recollection as a whole: the owner's agent memory (shared, a bridge source, owner decision
+/// 2026-10-30, but never above INFERRED; the schema holds it by namespace too).
+pub const RECOLLECTION_PROJECTS: [&str; 1] = ["memory"];
 /// Words that carry no meaning of their own: a facet must share a word with its quote beyond these.
 const STOP: [&str; 48] = [
     "a", "an", "the", "and", "or", "of", "to", "in", "on", "at", "by", "for", "with", "from", "is", "are", "was",
@@ -121,6 +124,9 @@ pub struct Card {
     /// `path#La-b` of the quoted unit, or `fact:<key>`.
     #[serde(default)]
     pub cite: Option<String>,
+    /// What the quote is (the unit's kind, the file's for a journal quote unit, or `fact`).
+    #[serde(default)]
+    pub source_kind: Option<String>,
     #[serde(default)]
     pub unit: Option<String>,
     #[serde(default)]
@@ -153,9 +159,10 @@ impl Card {
         parts.join("\n")
     }
 
-    /// The grade a reader in `reader_project` sees: INFERRED at most when the card is another project's.
+    /// The grade a reader in `reader_project` sees: INFERRED at most when the card is another project's, or
+    /// rests on recollection.
     pub fn grade_for(&self, reader_project: &str) -> &str {
-        if self.project != reader_project && self.grade == "CONFIRMED" {
+        if (self.project != reader_project || is_recollection(self)) && self.grade == "CONFIRMED" {
             "INFERRED"
         } else {
             &self.grade
@@ -183,6 +190,16 @@ impl Card {
         }
         out
     }
+}
+
+/// Whether a card rests on recollection: a card of a recollection project, or one quoting a memory,
+/// instructions, agent, skill or command unit. Such a card, and a bridge resting on it, stays INFERRED.
+pub fn is_recollection(card: &Card) -> bool {
+    RECOLLECTION_PROJECTS.contains(&card.project.as_str())
+        || card
+            .source_kind
+            .as_deref()
+            .is_some_and(|k| CAPPED_KINDS.contains(&k) || k == "quote")
 }
 
 /// The meaning-bearing words of `text`: split as the store's analyzer does, stop words dropped, stemmed.
@@ -523,6 +540,10 @@ pub fn add(store: &Store, project: &str, card: &CardIn, by: &str) -> Result<Stri
         Confidence::Unknown => "UNKNOWN",
     };
     if grade == "CONFIRMED" {
+        ensure!(
+            !RECOLLECTION_PROJECTS.contains(&project),
+            "a card of {project} is never CONFIRMED: the project is recollection (the owner's agent memory); record              it as INFERRED"
+        );
         if resolved.fact_key.is_some() {
             ensure!(
                 resolved.fact_grade.as_deref() == Some("CONFIRMED"),
@@ -618,7 +639,7 @@ pub(crate) fn read_cards(
 ) -> Result<Vec<Card>> {
     let vars = vars.set("limit", limit);
     let sql = format!(
-        "SELECT record::id(id) AS key, kind, x, y, a, mech, <string> solves AS solves, quote, hash, grade, status, \
+        "SELECT record::id(id) AS key, kind, x, y, a, mech, <string> solves AS solves, quote, hash, grade, status, source_kind, \
          <string> unit AS unit, <string> fact AS fact, unit.locator AS locator, lines, <string> at AS at \
          FROM card {filter} ORDER BY at LIMIT $limit;"
     );
@@ -715,6 +736,7 @@ mod tests {
             cite: None,
             unit: None,
             fact: None,
+            source_kind: None,
             at: String::new(),
         };
         assert_eq!(card.grade_for("alpha"), "INFERRED");

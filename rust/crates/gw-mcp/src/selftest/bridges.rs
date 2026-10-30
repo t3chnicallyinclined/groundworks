@@ -62,7 +62,9 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             (
                 "notes/alpha.md",
                 "# Alpha notes\n\nThe onscreen input display must stay steady for the player.\n\
-                 Network packets arrive in bursts after a stall, so the display jumps.\n",
+                 Network packets arrive in bursts after a stall, so the display jumps.\n\
+                 We keep the input steady ourselves with a double buffer swap.\n\
+                 We already read input once per frame in the alpha loop.\n",
             ),
             (
                 "CLAUDE.md",
@@ -139,6 +141,7 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
         &text,
     );
     let (err, text) = s.call("card_add", problem(memory, "INFERRED", "stop the input display jitter"))?;
+    let alpha_memory = card_id(&text);
     c.check(
         "B1: the same memory card at INFERRED is recorded (the cap, not a ban)",
         !err && text.contains("grade INFERRED") && text.contains("source kind memory"),
@@ -273,7 +276,7 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             "INFERRED",
         ),
     )?;
-    add(
+    let double = add(
         s,
         "beta",
         cap(
@@ -284,7 +287,7 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             "INFERRED",
         ),
     )?;
-    add(
+    let once = add(
         s,
         "beta",
         cap(
@@ -305,6 +308,14 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             [9, 9],
             "INFERRED",
         ),
+    )?;
+    // alpha's own capability: its mechanism is what a beta distractor repeats (the veto in B3).
+    let alpha_own = add(
+        s,
+        "alpha",
+        json!({"kind": "capability", "x": "keep the input steady", "mech": "a double buffer swap",
+               "a": ["the input fits a double buffer"], "quote": {"unit": "notes/alpha.md", "lines": [5, 5]},
+               "confidence": "INFERRED"}),
     )?;
     let ring = |x: &str| {
         json!({"kind": "capability", "x": x, "mech": "a ring buffer of frames", "a": ["frames fit in a ring buffer"],
@@ -350,6 +361,7 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     let b1 = b1.unwrap_or_default();
     let alpha_quote = json!({"unit": "notes/alpha.md", "lines": [4, 4]});
     let checks = json!([{"assumption": 0, "verdict": "holds", "quote": alpha_quote}]);
+    let skeptic = json!([{"lens": "skeptic", "verdict": "proceed", "why": "the blocker is quoted in alpha itself"}]);
     let step = |extra: Value| {
         let mut args = json!({"project": "alpha", "bridge": b1, "to": "testable", "by": "selftest"});
         for (k, v) in extra.as_object().into_iter().flatten() {
@@ -357,58 +369,145 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
         }
         args
     };
-    let test_text = "Hold the shown input inside a band and replay the burst trace; the display must not jump.";
-    let (err, a) = s.call(
+    let novel = json!({"novelty_query": "hysteresis input display", "novelty_verdict": "not_made"});
+    let with = |base: &Value, more: Value| {
+        let mut v = base.clone();
+        for (k, x) in more.as_object().into_iter().flatten() {
+            v[k] = x.clone();
+        }
+        v
+    };
+    let everything = with(&novel, json!({"checks": checks, "lens_verdicts": skeptic}));
+    let receipt = |s: &mut Client, command: &str| -> Result<Option<String>> {
+        let (_, text) = s.call("run", json!({"project": "alpha", "env": "local", "command": command}))?;
+        Ok(super::receipt_in(&text))
+    };
+    let test_command = "echo the burst trace holds";
+    // A green run of the very command, made before the test was registered: it must never count.
+    let early = receipt(s, test_command)?.context("an early receipt")?;
+    let (err3, d) = s.call("bridge_advance", step(everything.clone()))?;
+    let register = json!({"project": "alpha", "bridge": b1, "to": "candidate", "by": "selftest",
+        "test": "Hold the shown input inside a band and replay the burst trace; the display must not jump.",
+        "test_command": test_command, "test_expect": "exit 0: the trace holds", "control_command": "exit 7"});
+    let (rerr, rtext) = s.call("bridge_advance", register.clone())?;
+    let (err, a) = s.call("bridge_advance", step(with(&novel, json!({"lens_verdicts": skeptic}))))?;
+    let (err2, b) = s.call(
         "bridge_advance",
-        step(json!({"novelty_query": "hysteresis input display", "test": test_text})),
-    )?;
-    let (err2, b) = s.call("bridge_advance", step(json!({"checks": checks, "test": test_text})))?;
-    let (err3, d) = s.call(
-        "bridge_advance",
-        step(json!({"checks": checks, "novelty_query": "hysteresis input display"})),
+        step(json!({"checks": checks, "lens_verdicts": skeptic})),
     )?;
     c.check(
         "B2: testable is refused without the assumption checks, without the novelty check, and without a test",
         err && err2
             && err3
+            && !rerr
+            && rtext.contains("test registered")
             && [&a, &b, &d]
                 .iter()
                 .all(|t| t.contains("cannot move from candidate to testable")),
-        &format!("{a}\n{b}\n{d}"),
+        &format!("{a}\n{b}\n{d}\n{rtext}"),
     );
-    let (err, text) = s.call(
+    let (err, a) = s.call(
         "bridge_advance",
-        step(json!({"checks": checks, "novelty_query": "hysteresis input display", "test": test_text})),
+        step(with(&everything, json!({"novelty_verdict": "made"}))),
     )?;
+    let (_, once_bridge) = s.call("bridge_add", bridge("beta", &once))?;
+    let once_bridge = bridge_id(&once_bridge).unwrap_or_default();
+    let (err2, b) = s.call(
+        "bridge_advance",
+        json!({"project": "alpha", "bridge": once_bridge, "to": "candidate", "by": "selftest",
+               "novelty_query": "read input once per frame", "novelty_verdict": "not_made"}),
+    )?;
+    c.check(
+        "B2 (scholar-architect 1): the novelty check is a verdict: made blocks testable, and not_made is refused when the target already holds the link",
+        err && a.contains("cannot move from candidate to testable")
+            && err2
+            && b.contains("already holds the link")
+            && b.contains("notes/alpha.md"),
+        &format!("{a}\n{b}"),
+    );
+    let (err, a) = s.call("bridge_advance", step(with(&novel, json!({"checks": checks}))))?;
+    let (err2, b) = s.call(
+        "bridge_advance",
+        step(with(
+            &everything,
+            json!({"lens_verdicts": [{"lens": "statistician", "verdict": "reject", "why": "one trace is not a sample"}]}),
+        )),
+    )?;
+    c.check(
+        "B2 (scholar-architect 4): testable needs a skeptic lens's proceed, and any lens reject blocks it",
+        err && err2
+            && [&a, &b]
+                .iter()
+                .all(|t| t.contains("cannot move from candidate to testable")),
+        &format!("{a}\n{b}"),
+    );
+    // The statistician's reject above was refused with its move, so it was never recorded.
+    let (err, text) = s.call("bridge_advance", step(everything.clone()))?;
     c.check(
         "B2: testable with a check per assumption (quoting the target), the program's novelty search and a test",
         !err && text.contains("is testable"),
         &text,
     );
-    let receipt = |s: &mut Client, command: &str| -> Result<Option<String>> {
-        let (_, text) = s.call("run", json!({"project": "alpha", "env": "local", "command": command}))?;
-        Ok(super::receipt_in(&text))
-    };
-    let failed = receipt(s, "exit 3")?.context("a receipt for a failing run")?;
-    let passed = receipt(s, "echo bridge test passed")?.context("a receipt for a passing run")?;
-    let supported = |r: Option<&str>| {
-        let mut args = json!({"project": "alpha", "bridge": b1, "to": "supported", "by": "selftest"});
-        if let Some(r) = r {
-            args["receipt"] = json!(r);
+    let (err, text) = s.call("bridge_advance", with(&register, json!({"test_command": "true"})))?;
+    c.check(
+        "B2 (scholar-architect 2): the registered test cannot be changed after registration",
+        err && text.contains("registered once"),
+        &text,
+    );
+    let red = receipt(s, "exit 7")?.context("a red receipt of the control")?;
+    let green = receipt(s, test_command)?.context("a green receipt")?;
+    let support = |receipt: Option<&str>, red: Option<&str>| -> Result<(bool, String)> {
+        let mut cmd = Command::new(exe);
+        cmd.args(["owner", "bridge-support", "alpha", &b1]);
+        if let Some(r) = receipt {
+            cmd.args(["--receipt", r]);
         }
-        args
+        if let Some(r) = red {
+            cmd.args(["--red-receipt", r]);
+        }
+        let out = cmd
+            .env("GROUNDWORKS_HOME", home)
+            .env("GROUNDWORKS_MACHINE", "SELFTEST")
+            .env("GROUNDWORKS_OWNER_PASS", OWNER_PASS)
+            .env_remove("GROUNDWORKS_START")
+            .stdin(Stdio::null())
+            .output()?;
+        Ok((
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        ))
     };
-    let (err, a) = s.call("bridge_advance", supported(None))?;
-    let (err2, b) = s.call("bridge_advance", supported(Some(&failed)))?;
+    let (ok1, a) = support(None, Some(&red))?;
+    let (ok2, b) = support(Some(&red), Some(&red))?;
     c.check(
         "B2: supported is refused without a receipt, and with a receipt whose run failed",
-        err && err2 && a.contains("to supported") && b.contains("to supported"),
+        !ok1 && !ok2 && a.contains("to supported") && b.contains("to supported"),
         &format!("{a}\n{b}"),
     );
-    let (err, text) = s.call("bridge_advance", supported(Some(&passed)))?;
+    let (ok1, a) = support(Some(&early), Some(&red))?;
+    let (ok2, b) = support(Some(&green), None)?;
+    c.check(
+        "B2 (scholar-architect 2): supported needs the registered command green after registration, and a red run (the test shown able to fail)",
+        !ok1 && !ok2 && a.contains("to supported") && b.contains("to supported"),
+        &format!("{a}\n{b}"),
+    );
+    let (err, text) = s.call(
+        "bridge_advance",
+        json!({"project": "alpha", "bridge": b1, "to": "supported", "receipt": green, "red_receipt": red, "by": "selftest"}),
+    )?;
+    c.check(
+        "B2 (scholar-architect 3): the credential that proposed a bridge cannot promote it",
+        err && text.contains("independent writer"),
+        &text,
+    );
+    let (ok, text) = support(Some(&green), Some(&red))?;
     c.check(
         "B2: supported with an ok receipt",
-        !err && text.contains("is supported"),
+        ok && text.contains("is supported, grade CONFIRMED"),
         &text,
     );
 
@@ -462,15 +561,16 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     );
 
     // ---- B3 propose -----------------------------------------------------------------------------------------
-    // The planted pair: alpha's problem and beta's hysteresis capability share no goal word (input display
-    // against thermometer readings) and the same blocker (packets arriving in bursts) through the beta problem
-    // the capability solved. Four beta distractors share alpha's goal words and nothing else.
-    let propose = |s: &mut Client, arm: &str, k: usize| -> Result<(bool, String)> {
+    // The planted pair: alpha's second problem (from its memory note) and beta's hysteresis capability share no
+    // goal word (input display against thermometer readings) and the same blocker (packets arriving in bursts)
+    // through the beta problem the capability solved. Beta distractors share alpha's goal words and nothing else.
+    let propose = |s: &mut Client, target: &str, arm: &str, k: usize| -> Result<(bool, String)> {
         s.call(
             "bridge_propose",
             json!({"project": "alpha", "target": target, "arm": arm, "k": k}),
         )
     };
+    let fresh = alpha_memory.clone().context("alpha's memory problem card from B1")?;
     let planted = hysteresis.trim_start_matches("card:").to_owned();
     let top = |text: &str, n: usize| -> Vec<String> {
         text.lines()
@@ -479,29 +579,60 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             .map(str::to_owned)
             .collect()
     };
-    let (err, text) = propose(s, "facet", 3)?;
+    let (err, text) = propose(s, &fresh, "facet", 3)?;
     let facet_top = top(&text, 3);
     c.check(
         "B3: the facet arm puts the planted pair (other words for the goal, the same blocker) in its top 3, via the source's problem",
         !err && facet_top.iter().any(|l| l.contains(&planted) && l.contains(&format!("via its problem {beta_problem}"))),
         &text,
     );
-    let (err, text) = propose(s, "flat", 50)?;
+    let why_ok = text.contains(&format!(
+        "why: shared blocker words through its problem {beta_problem}: packet, arriv, burst"
+    )) && text.contains("target quote \"The input display jitter came from bursty packets.\"")
+        && text.contains("source quote \"We hold the thermometer value");
+    let (err, text2) = propose(s, &fresh, "flat", 50)?;
     c.check(
         "B3: the flat (whole-card) arm misses the planted pair entirely",
-        !err && text.contains("by the flat arm") && !top(&text, 50).iter().any(|l| l.contains(&planted)),
-        &text,
+        !err && text2.contains("by the flat arm") && !top(&text2, 50).iter().any(|l| l.contains(&planted)),
+        &text2,
     );
-    let (err, text) = propose(s, "facet", 50)?;
-    let searched = text.lines().nth(1).unwrap_or_default().to_owned();
+    let (err, text2) = propose(s, &target, "facet", 50)?;
+    let searched = text2.lines().nth(1).unwrap_or_default().to_owned();
     let foreign = [&gamma_card, &privy_card, &delta_card];
     c.check(
         "B3 (gw-security 3): propose sweeps only shared, unwalled projects: no walled, private or isolated card is read",
         !err && searched.starts_with("searched: beta, demo, red;")
             && searched.contains("gamma (walled from alpha)")
             && searched.contains("privy (private: never a bridge source)")
-            && foreign.iter().all(|k| !text.contains(k.trim_start_matches("card:"))),
-        &format!("{searched}\n{text}"),
+            && foreign.iter().all(|k| !text2.contains(k.trim_start_matches("card:"))),
+        &format!("{searched}\n{text2}"),
+    );
+    c.check(
+        "B3 (scholar-architect): a refuted pair is served with its mismatch, not proposed again",
+        text2.contains(&format!("{} ALREADY REFUTED as {b2}: not proposed again", redraw))
+            && text2.contains("<groundworks-bridge-mismatch")
+            && text2.contains("fails in alpha"),
+        &text2,
+    );
+    c.check(
+        "B3 (Punchable contrasts): a candidate repeating the target project's own mechanism is vetoed, not proposed",
+        text2.contains(&format!(
+            "vetoed: beta {double} (its mechanism repeats this project's {alpha_own})"
+        )) && !top(&text2, 50)
+            .iter()
+            .any(|l| l.contains(double.trim_start_matches("card:"))),
+        &text2,
+    );
+    let failures = gw_ops::bridge::screen_selfcheck();
+    c.check(
+        "B3 (Punchable relative thresholds): a weak match is dropped for a hub card and kept for a sparse one (z over 30, p99 over 3)",
+        failures.is_empty(),
+        &failures.join("; "),
+    );
+    c.check(
+        "B3: each proposal carries a why line: the shared facet words, with the quote of both cards",
+        why_ok,
+        &text,
     );
 
     // ---- B4 bridge eval ---------------------------------------------------------------------------------------
@@ -566,6 +697,49 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
         "B4: the shuffled-gold control scores at chance, and true gold near 1 (synthetic pool of 120)",
         failures.is_empty(),
         &failures.join("; "),
+    );
+    let failures = gw_ops::bridge_eval::packet_selfcheck();
+    c.check(
+        "B4 (scholar-architect): asks whose quote came through the recorded-fact path are counted apart, never gold",
+        failures.is_empty() && text.contains("packet link(s) through the recorded-fact path"),
+        &format!("{}\n{text}", failures.join("; ")),
+    );
+
+    // ---- memory: shared, a bridge source, never above INFERRED (owner decision 2026-10-30) ------------------------
+    project(
+        base,
+        home,
+        "memory",
+        &[(
+            "notes/display.md",
+            "# Display note\n\nWe smooth the input display with a moving average of three frames.\n",
+        )],
+        "",
+    )?;
+    let (err, text) = s.call("intake", json!({"project": "memory"}))?;
+    if err {
+        bail!("intake memory failed in the fixture: {text}");
+    }
+    let note = |confidence: &str| {
+        json!({"project": "memory", "kind": "capability", "x": "smooth the input display",
+               "mech": "a moving average of three frames", "a": ["the input display can lag three frames"],
+               "quote": {"unit": "notes/display.md", "lines": [3, 3]}, "confidence": confidence, "by": "selftest"})
+    };
+    let (err, text) = s.call("card_add", note("CONFIRMED"))?;
+    let (err2, text2) = s.call("card_add", note("INFERRED"))?;
+    let memory_card = card_id(&text2).unwrap_or_default();
+    c.check(
+        "memory: a card of the memory project at CONFIRMED is refused (recollection), and recorded at INFERRED",
+        err && text.contains("is never CONFIRMED: the project is recollection") && !err2,
+        &format!("{text}\n{text2}"),
+    );
+    let (err, text) = s.call("bridge_add", bridge("memory", &memory_card))?;
+    let (_, list) = s.call("bridge_list", json!({"project": "alpha"}))?;
+    c.check(
+        "memory: memory is a bridge source, served inside the frame labelled as recollection, at INFERRED",
+        !err && text.contains("candidate, INFERRED")
+            && list.contains("project=\"memory\" grade=\"INFERRED\" source=\"memory: recollection, not evidence; capped at INFERRED\""),
+        &format!("{text}\n{list}"),
     );
     Ok(())
 }

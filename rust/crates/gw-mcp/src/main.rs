@@ -552,6 +552,16 @@ enum OwnerAction {
         #[arg(long)]
         why: String,
     },
+    /// Promote a bridge to supported as the owner: the second, independent writer the gate needs. The receipts
+    /// are the registered test's green run and its red run (or the control's), both after registration.
+    BridgeSupport {
+        project: String,
+        bridge: String,
+        #[arg(long)]
+        receipt: Option<String>,
+        #[arg(long)]
+        red_receipt: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -877,6 +887,7 @@ async fn dispatch(command: Command) -> Result<bool> {
         Command::Owner { action } => {
             let pass = owner_pass();
             let store = open_store(&home).await?;
+            let owner_home = Arc::clone(&home);
             let text = store::blocking(move || match action {
                 OwnerAction::Level {
                     scope,
@@ -889,6 +900,20 @@ async fn dispatch(command: Command) -> Result<bool> {
                 OwnerAction::Wall { a, b, why } => {
                     store.add_wall(&pass, &a, &b, &why)?;
                     Ok(format!("wall between {a} and {b} recorded"))
+                }
+                OwnerAction::BridgeSupport {
+                    project,
+                    bridge,
+                    receipt,
+                    red_receipt,
+                } => {
+                    let step = gw_ops::bridge::AdvanceIn {
+                        to: "supported".to_owned(),
+                        receipt,
+                        red_receipt,
+                        ..Default::default()
+                    };
+                    gw_ops::bridge::advance(&owner_home, &store, &project, &bridge, &step, "owner", Some(&pass))
                 }
             })
             .await?;

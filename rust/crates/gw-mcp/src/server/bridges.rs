@@ -131,7 +131,7 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Move a bridge along its gate. to=testable needs checks (one per source assumption: {assumption: index, verdict holds|fails|unknown, quote of THIS project as for a card}), novelty_query (the program runs the search and records it) and test. to=supported needs a receipt from run or gate with ok. to=refuted needs a receipt or a check whose verdict is fails. Reach and the source card are re-checked first."
+        description = "Move a bridge along its gate. Register the test first (test, test_command, test_expect, optional control_command expected to fail; once, before it runs). to=testable also needs checks (one per source assumption: {assumption: index, verdict holds|fails|unknown, quote of THIS project as for a card}), novelty_query with novelty_verdict not_made (the program runs the search and refuses not_made when this project already holds the link), and lens_verdicts with a skeptic proceed (to=candidate records verdicts or the test without moving). to=supported needs a green receipt of the registered command and a red one, both run after registration, from a credential other than the proposer's: the owner promotes with `groundworks owner bridge-support`. to=refuted needs a failing run of the registered command or a check whose verdict is fails."
     )]
     async fn bridge_advance(&self, args: Parameters<BridgeAdvanceArgs>) -> Result<String, String> {
         let a = args.0;
@@ -144,6 +144,7 @@ impl Groundworks {
                 &a.bridge,
                 &a.step,
                 a.by.as_deref().unwrap_or("agent"),
+                None,
             )
         })
         .await

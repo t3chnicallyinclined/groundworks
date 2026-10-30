@@ -10,6 +10,7 @@
 //! every time one is read, so a wall or level set later stops an existing bridge from rendering. Every read
 //! takes its reach from [`reach`] alone.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -165,7 +166,7 @@ pub fn add(
     crate::refusal::check_text("by", by)?;
     let mut sql = String::from(
         "CREATE bridge SET target = type::record('card', $target), source_project = $source, source_card = $card, \
-         source_hash = $hash, source_a = $n, found_by = $found_by, by = $by, machine = $machine",
+         source_hash = $hash, source_a = $n, source_recollection = $recollection, found_by = $found_by, by = $by, machine = $machine",
     );
     let mut vars = Vars::default()
         .set("target", t.key.as_str())
@@ -173,6 +174,7 @@ pub fn add(
         .set("card", s.key.as_str())
         .set("hash", s.hash.as_str())
         .set("n", s.a.len())
+        .set("recollection", card::is_recollection(&s))
         .set("found_by", found_by)
         .set("by", by)
         .set("machine", machine());
@@ -206,23 +208,53 @@ pub struct CheckIn {
     pub quote: CardQuote,
 }
 
+/// One lens's verdict on a bridge (METHOD section 13: statistician, target-field-expert, vocabulary-translator,
+/// skeptic, each with its own). The skeptic's `proceed` is required before testable; any `reject` blocks it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct LensVerdictIn {
+    pub lens: String,
+    /// proceed or reject.
+    pub verdict: String,
+    /// Why, in a sentence or two.
+    pub why: String,
+}
+
 /// A bridge's move.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct AdvanceIn {
-    /// testable, supported or refuted.
+    /// candidate (record lens verdicts or register the test without moving), testable, supported or refuted.
     pub to: String,
     /// testable: one check per source assumption; refuted: a check whose verdict is fails.
     #[serde(default)]
     pub checks: Vec<CheckIn>,
-    /// testable: what to search for to learn whether the idea is already known here; the program runs it.
+    /// testable: what to search for to learn whether the link was already made; the program runs it.
     #[serde(default)]
     pub novelty_query: Option<String>,
-    /// testable: the test that would support or refute it, in words.
+    /// testable: your verdict on the search, not_made or made. The program refuses not_made when a hit in this
+    /// project already quotes the source card or names it.
+    #[serde(default)]
+    pub novelty_verdict: Option<String>,
+    /// Lens verdicts to add (the skeptic's is required before testable).
+    #[serde(default)]
+    pub lens_verdicts: Vec<LensVerdictIn>,
+    /// The test, registered before it runs (once; never changed): what it shows, in words.
     #[serde(default)]
     pub test: Option<String>,
-    /// supported (ok receipt) or refuted: a receipt from run or gate in this project (`receipt:...`).
+    /// The exact command `run` or `gate` will run for it.
+    #[serde(default)]
+    pub test_command: Option<String>,
+    /// The expected result (e.g. "exit 0: the display holds through the burst trace").
+    #[serde(default)]
+    pub test_expect: Option<String>,
+    /// Optional: a control command expected to FAIL, showing the test can fail.
+    #[serde(default)]
+    pub control_command: Option<String>,
+    /// supported: the green receipt of the registered command; refuted: its red receipt (`receipt:...`).
     #[serde(default)]
     pub receipt: Option<String>,
+    /// supported: a red receipt after registration: the registered command before the green run, or the control.
+    #[serde(default)]
+    pub red_receipt: Option<String>,
 }
 
 /// A bridge row as stored.
@@ -242,8 +274,9 @@ fn rows(store: &Store, project: &str, filter: &str, vars: Vars) -> Result<Vec<Ro
     let db = store.agent(&gw_store::project_ns(&store::slug(project)?)?)?;
     let sql = format!(
         "SELECT record::id(id) AS key, record::id(target) AS target, source_project, source_card, source_hash, \
-         status, grade, found_by, assumption_check, novelty_check, test, <string> receipt AS receipt, via_card, \
-         <string> at AS at FROM bridge {filter} ORDER BY at;"
+         status, grade, found_by, assumption_check, novelty_check, lens_verdicts, test, test_command, test_expect, \
+         control_command, <string> test_at AS test_at, <string> receipt AS receipt, \
+         <string> red_receipt AS red_receipt, via_card, <string> at AS at FROM bridge {filter} ORDER BY at;"
     );
     let out = store.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
     Ok(out[0]
@@ -267,9 +300,20 @@ fn rows(store: &Store, project: &str, filter: &str, vars: Vars) -> Result<Vec<Ro
         .collect())
 }
 
-/// Move a bridge of `project` along its gate. The schema refuses a move whose evidence is missing; this
-/// checks first, so the refusal is plain, and runs the novelty search itself.
-pub fn advance(home: &Home, store: &Store, project: &str, id: &str, mv: &AdvanceIn, by: &str) -> Result<String> {
+/// Move a bridge of `project` along its gate. The schema refuses a move whose evidence is missing; this checks
+/// first where it can, so the refusal is plain, and runs the novelty search itself. The test is registered in a
+/// write of its own before any move (the store stamps `test_at`), so a receipt can only count if it ran after.
+/// With `owner_pass` the writes are the owner's: the second, independent credential `supported` needs (the
+/// agent login that proposed the bridge cannot promote it).
+pub fn advance(
+    home: &Home,
+    store: &Store,
+    project: &str,
+    id: &str,
+    mv: &AdvanceIn,
+    by: &str,
+    owner_pass: Option<&str>,
+) -> Result<String> {
     let key = card::key_of(id, "bridge")?;
     let r = reach(home, store, project)?;
     let row = rows(
@@ -289,8 +333,8 @@ pub fn advance(home: &Home, store: &Store, project: &str, id: &str, mv: &Advance
     }
     let to = mv.to.trim();
     ensure!(
-        ["testable", "supported", "refuted"].contains(&to),
-        "a bridge moves to testable, supported or refuted, not {to:?}"
+        ["candidate", "testable", "supported", "refuted"].contains(&to),
+        "a bridge moves to testable, supported or refuted (or stays a candidate), not {to:?}"
     );
     crate::refusal::check_text("by", by)?;
     // The source must still say what it said when bridged, for any move that rests on it.
@@ -303,6 +347,69 @@ pub fn advance(home: &Home, store: &Store, project: &str, id: &str, mv: &Advance
             row.source_project
         );
     }
+    let ns = gw_store::project_ns(&store::slug(&r.target)?)?;
+    let db = match owner_pass {
+        Some(pass) => std::sync::Arc::new(store.owner(&ns, pass)?),
+        None => store.agent(&ns)?,
+    };
+    let refused = |e: anyhow::Error| -> anyhow::Error {
+        anyhow::anyhow!(
+            "refused: bridge:{key} cannot move from {} to {to}: {}. Testable needs a registered test (test, \
+             test_command, test_expect), one check per source assumption (quoting this project), a novelty verdict \
+             not_made, and a skeptic's proceed with no lens reject; supported needs all of that, a green receipt of \
+             the registered command and a red one (the same command earlier, or the control), both run after \
+             registration, written by a credential other than the proposer's; refuted needs a failing run of the \
+             registered command or a check whose verdict is fails.",
+            row.status,
+            first_line(&format!("{e:#}"))
+        )
+    };
+
+    // 1. Registration, its own write.
+    let registering = [&mv.test, &mv.test_command, &mv.test_expect, &mv.control_command]
+        .iter()
+        .any(|f| f.as_deref().is_some_and(|t| !t.trim().is_empty()));
+    if registering {
+        let field = |name: &'static str, v: &Option<String>| -> Result<Option<String>> {
+            let Some(t) = v.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+                return Ok(None);
+            };
+            crate::refusal::check_text(name, t)?;
+            ensure!(t.len() <= 2000, "{name} is at most 2000 characters");
+            Ok(Some(t.to_owned()))
+        };
+        let (test, command, expect, control) = (
+            field("test", &mv.test)?,
+            field("test_command", &mv.test_command)?,
+            field("test_expect", &mv.test_expect)?,
+            field("control_command", &mv.control_command)?,
+        );
+        ensure!(
+            test.is_some() && command.is_some() && expect.is_some(),
+            "a test is registered whole: test (what it shows), test_command and test_expect"
+        );
+        let mut sql = String::from(
+            "UPDATE type::record('bridge', $key) SET test = $test, test_command = $command, test_expect = $expect",
+        );
+        let mut vars = Vars::default()
+            .set("key", key.as_str())
+            .set("test", test)
+            .set("command", command)
+            .set("expect", expect);
+        if let Some(c) = control {
+            sql.push_str(", control_command = $control");
+            vars = vars.set("control", c);
+        }
+        sql.push_str(" RETURN VALUE id;");
+        store.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?)).map_err(|e| {
+            anyhow::anyhow!(
+                "refused: the test is registered once and never changed: {}",
+                first_line(&format!("{e:#}"))
+            )
+        })?;
+    }
+
+    // 2. The move.
     let mut sets = vec!["status = $to".to_owned()];
     let mut vars = Vars::default().set("key", key.as_str()).set("to", to);
     if !mv.checks.is_empty() {
@@ -343,71 +450,151 @@ pub fn advance(home: &Home, store: &Store, project: &str, id: &str, mv: &Advance
     if let Some(query) = mv.novelty_query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
         crate::refusal::check_text("novelty_query", query)?;
         ensure!(query.len() <= 300, "a novelty query is at most 300 characters");
+        let verdict = mv.novelty_verdict.as_deref().map(str::trim).unwrap_or_default();
+        ensure!(
+            ["not_made", "made"].contains(&verdict),
+            "a novelty check needs a verdict, not_made or made, on what the search found"
+        );
+        let check = novelty(store, &r, &source, query, verdict)?;
         sets.push("novelty_check = $novelty".to_owned());
-        vars = vars.set("novelty", novelty(store, &r, query)?);
+        vars = vars.set("novelty", check);
     }
-    if let Some(test) = mv.test.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        crate::refusal::check_text("test", test)?;
-        ensure!(test.len() <= 2000, "a test is at most 2000 characters");
-        sets.push("test = $test".to_owned());
-        vars = vars.set("test", test);
+    if !mv.lens_verdicts.is_empty() {
+        let mut verdicts = Vec::new();
+        for v in &mv.lens_verdicts {
+            crate::refusal::check_text("why", &v.why)?;
+            ensure!(v.why.len() <= 2000, "a lens verdict's why is at most 2000 characters");
+            verdicts.push(json!({"lens": v.lens.trim(), "verdict": v.verdict.trim(), "why": v.why.trim()}));
+        }
+        sets.push("lens_verdicts = array::concat(lens_verdicts, $verdicts)".to_owned());
+        vars = vars.set("verdicts", verdicts);
     }
     if let Some(receipt) = &mv.receipt {
         sets.push("receipt = type::record('receipt', $receipt)".to_owned());
         vars = vars.set("receipt", card::key_of(receipt, "receipt")?);
     }
-    if to == "supported" {
+    if let Some(red) = &mv.red_receipt {
+        sets.push("red_receipt = type::record('receipt', $red)".to_owned());
+        vars = vars.set("red", card::key_of(red, "receipt")?);
+    }
+    // A bridge resting on recollection (the memory project, or a card quoting a memory, instructions, agent,
+    // skill or command unit) stays INFERRED even when its test passes (owner decision 2026-10-30).
+    let recollection = card::is_recollection(&source);
+    if to == "supported" && !recollection {
         sets.push("grade = 'CONFIRMED'".to_owned());
     }
     let sql = format!(
         "UPDATE type::record('bridge', $key) SET {} RETURN VALUE [status, grade];",
         sets.join(", ")
     );
-    let db = store.agent(&gw_store::project_ns(&store::slug(&r.target)?)?)?;
-    match store.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?)) {
-        Ok(_) => Ok(format!("bridge:{key} in {} is {to}", r.target)),
-        Err(e) => bail!(
-            "refused: bridge:{key} cannot move from {} to {to}: {}. Testable needs one check per source assumption \
-             (quoting this project), a novelty query and a test; supported needs those and a receipt with ok = true; \
-             refuted needs a receipt or a check whose verdict is fails.",
-            row.status,
-            first_line(&format!("{e:#}"))
-        ),
-    }
+    let done = store
+        .retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))
+        .map_err(refused)?;
+    let grade = done[0][0][1].as_str().unwrap_or("?").to_owned();
+    Ok(format!(
+        "bridge:{key} in {} is {to}, grade {grade}{}",
+        r.target,
+        if registering { "; test registered" } else { "" }
+    ))
 }
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
 
-/// The novelty check: the query, the reach it ran over, and the top hits (locators and hashes only).
-fn novelty(store: &Store, r: &Reach, query: &str) -> Result<Value> {
+/// The novelty check, as a verdict with what was searched: the query, the reach it ran over, the top hits
+/// (locators and hashes only), and `made` hits: target-project text that already quotes the source card, names
+/// it, or holds every meaning word of its mechanism. A `not_made` verdict against such a hit is refused.
+fn novelty(store: &Store, r: &Reach, source: &Card, query: &str, verdict: &str) -> Result<Value> {
     let mut hits = Vec::new();
     let mut searched = Vec::new();
+    let mut made = Vec::new();
+    let quote = crate::ask::normalize(&source.quote).to_lowercase();
+    let mech: Vec<String> = source.mech.as_deref().map(card::content_words).unwrap_or_default();
     for name in std::iter::once(&r.target).chain(&r.sources) {
         match store.retrieve(name, query, None, &[], 5) {
             Ok(found) => {
                 searched.push(name.clone());
-                hits.extend(
-                    found
-                        .into_iter()
-                        .map(|h| json!({"project": h.project, "locator": h.locator, "hash": h.hash})),
-                );
+                for h in found {
+                    if *name == r.target {
+                        let text = crate::ask::normalize(&h.text).to_lowercase();
+                        let words = card::content_words(&h.text);
+                        if text.contains(&quote)
+                            || text.contains(&format!("card:{}", source.key).to_lowercase())
+                            || (mech.len() >= 2 && mech.iter().all(|w| words.contains(w)))
+                        {
+                            made.push(json!({"project": h.project, "locator": h.locator, "hash": h.hash}));
+                        }
+                    }
+                    hits.push(json!({"project": h.project, "locator": h.locator, "hash": h.hash}));
+                }
             }
             Err(e) => searched.push(format!("{name} (not searched: {})", first_line(&format!("{e:#}")))),
         }
     }
-    Ok(json!({"query": query, "reach": searched, "hits": hits, "at_machine": machine()}))
+    if verdict == "not_made" && !made.is_empty() {
+        bail!(
+            "refused: novelty verdict not_made, but {} already holds the link: {}",
+            r.target,
+            made.iter()
+                .filter_map(|m| m["locator"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(
+        json!({"verdict": verdict, "query": query, "reach": searched, "hits": hits, "made": made,
+              "at_machine": machine()}),
+    )
 }
 
-/// A card wrapped for a reader in `reader`: one frame per card, labelled with its project and the grade
-/// the reader may see.
+/// Why a refuted bridge was refuted: its failing checks, quoted from the target, or its red receipt.
+fn mismatch(b: &Row, target: &str) -> String {
+    let mut body = String::new();
+    for c in b.raw["assumption_check"].as_array().into_iter().flatten() {
+        if c["verdict"] == "fails" {
+            let _ = writeln!(
+                body,
+                "assumption {:?} fails in {target}: {:?} ({})",
+                c["assumption"].as_str().unwrap_or("?"),
+                c["quote"].as_str().unwrap_or("?"),
+                c["cite"].as_str().unwrap_or("?")
+            );
+        }
+    }
+    if body.is_empty() {
+        let _ = writeln!(
+            body,
+            "the registered test failed: {}",
+            b.raw["receipt"].as_str().unwrap_or("(no receipt)")
+        );
+    }
+    card::framed(
+        "groundworks-bridge-mismatch",
+        &[("project", target)],
+        "Why this bridge was refuted, as recorded: a negative, kept.",
+        &body,
+    )
+}
+
+/// A card wrapped for a reader in `reader`: one frame per card, labelled with its project, the grade the reader
+/// may see, and, for recollection (the memory project, or a memory or instructions unit), that it is one.
 pub fn framed_card(c: &Card, reader: &str) -> String {
+    let recollection = card::is_recollection(c);
+    let mut attrs = vec![("project", c.project.as_str()), ("grade", c.grade_for(reader))];
+    if recollection {
+        attrs.push(("source", "memory: recollection, not evidence; capped at INFERRED"));
+    }
     card::framed(
         "groundworks-card",
-        &[("project", &c.project), ("grade", c.grade_for(reader))],
-        "A card of the named project: the quote is that repository's own text; the facets are an agent-written \
-         summary, unverified.",
+        &attrs,
+        if recollection {
+            "A card resting on recollection (the owner's or an agent's memory notes, or a prompt file), never more \
+             than INFERRED: the quote is that note's own text; the facets are an agent-written summary, unverified."
+        } else {
+            "A card of the named project: the quote is that repository's own text; the facets are an agent-written \
+             summary, unverified."
+        },
         &c.render(reader),
     )
 }
@@ -468,6 +655,25 @@ pub fn list(home: &Home, store: &Store, project: &str, limit: usize) -> Result<S
                 c["verdict"].as_str().unwrap_or("?"),
                 c["assumption"].as_str().unwrap_or("?"),
                 c["cite"].as_str().unwrap_or("?")
+            );
+        }
+        for v in b.raw["lens_verdicts"].as_array().into_iter().flatten() {
+            let _ = writeln!(
+                out,
+                "  lens {}: {}",
+                v["lens"].as_str().unwrap_or("?"),
+                v["verdict"].as_str().unwrap_or("?")
+            );
+        }
+        if let Some(v) = b.raw["novelty_check"]["verdict"].as_str() {
+            let _ = writeln!(out, "  novelty: {v}");
+        }
+        if let Some(c) = b.raw["test_command"].as_str() {
+            let _ = writeln!(
+                out,
+                "  test registered {}: command {c:?}, expect {:?}",
+                b.raw["test_at"].as_str().unwrap_or("?"),
+                b.raw["test_expect"].as_str().unwrap_or("?")
             );
         }
         if let Some(t) = b.raw["test"].as_str() {
@@ -600,9 +806,174 @@ pub fn pool(store: &Store, r: &Reach) -> Result<(Vec<Card>, Vec<String>)> {
     Ok((pool, held))
 }
 
-/// Candidate bridges for one problem card of `project`: the best `k` capabilities of the projects in its
-/// bridge reach under `arm`, each framed as data with its project and the grade the reader may see. Writes
-/// nothing; a candidate becomes a bridge only through `bridge_add`.
+/// A candidate whose mechanism shares at least this share of meaning words (Jaccard) with a mechanism the target
+/// project already has is vetoed: it is the target's own idea again, not a bridge (the "Contrasts" rule of the
+/// owner's Punchable `creative/connections.py`: the same move is not another angle).
+pub const VETO_JACCARD: f64 = 0.5;
+/// A candidate is kept for a target only when its score there stands out against its own scores for every other
+/// problem it could answer: z >= Z_MIN over at least Z_MIN_N of them, or, with fewer, at or above its own p99
+/// (the k-th highest, k = 1% of them, at least 1). Never one global cutoff (Punchable `creative/merge.py` `_ref`:
+/// each row's own "usually this close" level).
+pub const Z_MIN: f64 = 2.5;
+pub const Z_MIN_N: usize = 20;
+
+fn word_set(text: &str) -> BTreeSet<String> {
+    card::content_words(text).into_iter().collect()
+}
+
+fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
+    let union = a.union(b).count();
+    if union == 0 {
+        0.0
+    } else {
+        a.intersection(b).count() as f64 / union as f64
+    }
+}
+
+/// What the screen did to one ranking.
+#[derive(Debug, Default)]
+pub struct Screened {
+    /// Kept, best first, each score lowered by its whole-text closeness to the target project's own capabilities.
+    pub kept: Vec<Ranked>,
+    /// Pool index of each vetoed candidate and the own card whose mechanism it repeats.
+    pub vetoed: Vec<(usize, String)>,
+    /// Pool index of each candidate that did not stand out against its own distribution, and why.
+    pub below: Vec<(usize, String)>,
+}
+
+/// Screen `ranked` (from [`rank`]) for `target`: the mechanism veto against `own` (the target project's live
+/// capability cards), the relative threshold over each candidate's own scores for every other problem it could
+/// answer (the pool's problems of projects other than the candidate's and the target's), and the whole-text
+/// penalty. The random arm is not screened (it is the floor). Pure.
+pub fn screen(arm: &str, target: &Card, pool: &[Card], own: &[Card], ranked: Vec<Ranked>) -> Result<Screened> {
+    let mut out = Screened::default();
+    if arm == "random" {
+        out.kept = ranked;
+        return Ok(out);
+    }
+    let own_caps: Vec<&Card> = own.iter().filter(|c| c.kind == "capability").collect();
+    let own_mech: Vec<(BTreeSet<String>, &Card)> = own_caps
+        .iter()
+        .filter_map(|c| c.mech.as_deref().map(|m| (word_set(m), *c)))
+        .collect();
+    let own_whole: Vec<BTreeSet<String>> = own_caps.iter().map(|c| word_set(&c.whole_text())).collect();
+    // Each other problem's ranking, once: the distribution every candidate is judged against.
+    // Problems of the target's own project are left out: a capability that answers two of the asker's problems
+    // is no hub.
+    let others: Vec<&Card> = pool
+        .iter()
+        .filter(|q| q.kind == "problem" && q.project != target.project)
+        .collect();
+    let mut other_scores: Vec<(String, std::collections::HashMap<usize, f64>)> = Vec::new();
+    for q in &others {
+        let scores = rank(arm, q, pool)?.into_iter().map(|r| (r.index, r.score)).collect();
+        other_scores.push((q.project.clone(), scores));
+    }
+    for r in ranked {
+        let c = &pool[r.index];
+        if let Some(m) = c.mech.as_deref() {
+            let mine = word_set(m);
+            if let Some((_, o)) = own_mech.iter().find(|(w, _)| jaccard(&mine, w) >= VETO_JACCARD) {
+                out.vetoed.push((r.index, o.key.clone()));
+                continue;
+            }
+        }
+        let dist: Vec<f64> = other_scores
+            .iter()
+            .filter(|(project, _)| *project != c.project)
+            .map(|(_, s)| s.get(&r.index).copied().unwrap_or(0.0))
+            .collect();
+        if let Some(why) = below(r.score, &dist) {
+            out.below.push((r.index, why));
+            continue;
+        }
+        let whole = word_set(&c.whole_text());
+        let close = own_whole.iter().map(|o| jaccard(&whole, o)).fold(0.0f64, f64::max);
+        out.kept.push(Ranked {
+            score: r.score * (1.0 - close),
+            ..r
+        });
+    }
+    out.kept.sort_by(|a, b| b.score.total_cmp(&a.score));
+    Ok(out)
+}
+
+/// Why `score` does not stand out against `dist` (the candidate's scores for every other problem), if it does
+/// not: z below Z_MIN over at least Z_MIN_N, or, with fewer, not above the candidate's own p99.
+pub fn below(score: f64, dist: &[f64]) -> Option<String> {
+    let n = dist.len();
+    if n == 0 {
+        return None;
+    }
+    if n >= Z_MIN_N {
+        let mean = dist.iter().sum::<f64>() / n as f64;
+        let sd = (dist.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+        let z = if sd > 0.0 {
+            (score - mean) / sd
+        } else if score > mean {
+            f64::INFINITY
+        } else {
+            0.0
+        };
+        return (z < Z_MIN).then(|| format!("z {z:.2} below {Z_MIN} over its {n} other problems"));
+    }
+    let k = (n / 100).max(1);
+    let mut sorted = dist.to_vec();
+    sorted.sort_by(|a, b| b.total_cmp(a));
+    let p99 = sorted[k - 1];
+    (score <= p99).then(|| format!("score {score:.3} not above its own p99 {p99:.3} over {n} other problem(s)"))
+}
+
+/// One plain line on why a candidate was proposed: the meaning words its goal shares with the target's goal,
+/// and, through the chain, the words its problem's blocker shares with the target's blocker; with the quoted
+/// evidence of both cards.
+pub fn why(target: &Card, c: &Card, via: Option<&Card>) -> String {
+    let shared = |a: &str, b: &str| -> Vec<String> {
+        let b = word_set(b);
+        let mut seen = BTreeSet::new();
+        card::content_words(a)
+            .into_iter()
+            .filter(|w| b.contains(w) && seen.insert(w.clone()))
+            .collect()
+    };
+    let mut parts = Vec::new();
+    let goal = shared(&target.x, &c.x);
+    if !goal.is_empty() {
+        parts.push(format!("shared goal words: {}", goal.join(", ")));
+    }
+    if let Some(v) = via {
+        let blocker = shared(
+            target.y.as_deref().unwrap_or_default(),
+            v.y.as_deref().unwrap_or_default(),
+        );
+        if !blocker.is_empty() {
+            parts.push(format!(
+                "shared blocker words through its problem card:{}: {}",
+                v.key,
+                blocker.join(", ")
+            ));
+        }
+    }
+    if parts.is_empty() {
+        parts.push(format!(
+            "shared words: {}",
+            shared(&target.whole_text(), &c.whole_text()).join(", ")
+        ));
+    }
+    format!(
+        "why: {}; target quote {:?}; source quote {:?}{}",
+        parts.join("; "),
+        target.quote,
+        c.quote,
+        via.map_or(String::new(), |v| format!("; its problem's quote {:?}", v.quote))
+    )
+}
+
+/// Candidate bridges for one problem card of `project`: the capabilities of the projects in its bridge reach
+/// ranked under `arm`, screened (mechanism veto, relative threshold, whole-text penalty), the best `k` shown,
+/// each framed as data with its project, the grade the reader may see and a why line. A pair already bridged is
+/// not proposed again: a refuted one comes back with its mismatch. Writes nothing; a candidate becomes a bridge
+/// only through `bridge_add`.
 pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &str, k: usize) -> Result<String> {
     let r = reach(home, store, project)?;
     let t = card::card(store, &r.target, target)?;
@@ -614,15 +985,27 @@ pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &st
     );
     ensure!(t.status == "live", "card:{} is {}, not live", t.key, t.status);
     let (pool, held) = pool(store, &r)?;
-    let ranked = rank(arm, &t, &pool)?;
+    let own = card::cards(
+        store,
+        &r.target,
+        "WHERE status = 'live' AND kind IN ['problem', 'capability']",
+        Vars::default(),
+        5000,
+    )?;
+    let scored = rank(arm, &t, &pool)?;
+    let n_scored = scored.len();
+    let s = screen(arm, &t, &pool, &own, scored)?;
     let mut out = format!(
-        "candidates for {} card:{} by the {arm} arm: {} of {} capabilities in reach scored; showing {}\n\
+        "candidates for {} card:{} by the {arm} arm: {} of {} capabilities in reach scored; {} vetoed (same \
+         mechanism as this project's own), {} below their own distribution; showing {}\n\
          searched: {}{}{}\n",
         r.target,
         t.key,
-        ranked.len(),
+        n_scored,
         pool.iter().filter(|c| c.kind == "capability").count(),
-        ranked.len().min(k),
+        s.vetoed.len(),
+        s.below.len(),
+        s.kept.len().min(k),
         if r.sources.is_empty() {
             "nothing".to_owned()
         } else {
@@ -639,8 +1022,46 @@ pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &st
             format!("; held back: {}", held.join(", "))
         },
     );
-    for (n, p) in ranked.iter().take(k).enumerate() {
+    for (i, own_key) in &s.vetoed {
+        let _ = writeln!(
+            out,
+            "vetoed: {} card:{} (its mechanism repeats this project's card:{own_key})",
+            pool[*i].project, pool[*i].key
+        );
+    }
+    for (i, reason) in &s.below {
+        let _ = writeln!(out, "below: {} card:{} ({reason})", pool[*i].project, pool[*i].key);
+    }
+    // A pair already bridged is not proposed again: a refuted one comes back with its mismatch (METHOD section 13:
+    // negatives are kept and served; scholar-architect 2026-10-30), any other with its status.
+    let existing = rows(
+        store,
+        &r.target,
+        "WHERE target = type::record('card', $t)",
+        Vars::default().set("t", t.key.as_str()),
+    )?;
+    for (n, p) in s.kept.iter().take(k).enumerate() {
         let c = &pool[p.index];
+        if let Some(b) = existing
+            .iter()
+            .filter(|b| b.source_project == c.project && b.source_card == c.key)
+            .max_by_key(|b| b.status == "refuted")
+        {
+            let _ = writeln!(
+                out,
+                "[{}] {} card:{} ALREADY {} as bridge:{}: not proposed again",
+                n + 1,
+                c.project,
+                c.key,
+                b.status.to_uppercase(),
+                b.key
+            );
+            if b.status == "refuted" {
+                out.push_str(&mismatch(b, &r.target));
+            }
+            continue;
+        }
+        let via = p.via.map(|v| &pool[v]);
         let _ = writeln!(
             out,
             "[{}] {} card:{} score {:.3}{}",
@@ -648,12 +1069,23 @@ pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &st
             c.project,
             c.key,
             p.score,
-            p.via
-                .map_or(String::new(), |v| format!(" via its problem card:{}", pool[v].key))
+            via.map_or(String::new(), |v| format!(" via its problem card:{}", v.key))
         );
-        out.push_str(&framed_card(c, &r.target));
-        if let Some(v) = p.via {
-            out.push_str(&framed_card(&pool[v], &r.target));
+        // The why line quotes the source card, so it goes inside the source's frame.
+        let recollection = card::is_recollection(c);
+        let mut attrs = vec![("project", c.project.as_str()), ("grade", c.grade_for(&r.target))];
+        if recollection {
+            attrs.push(("source", "memory: recollection, not evidence; capped at INFERRED"));
+        }
+        out.push_str(&card::framed(
+            "groundworks-card",
+            &attrs,
+            "A candidate card of the named project: the quote is that repository's own text; the facets and the why \
+             line are a program's and an agent's summary, unverified.",
+            &format!("{}\n  {}", c.render(&r.target), why(&t, c, via)),
+        ));
+        if let Some(v) = via {
+            out.push_str(&framed_card(v, &r.target));
         }
     }
     out.push_str(
@@ -661,4 +1093,136 @@ pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &st
          project and card (and via); it is tested through bridge_advance.\n",
     );
     Ok(out)
+}
+
+/// The screen's two rules on synthetic cards, both ways; the failures, empty when they hold. Run by the
+/// selftest. (1) A candidate repeating a mechanism the target project has is vetoed; one that does not is kept.
+/// (2) The same weak match is dropped for a hub card that matches many problems as strongly, and kept for a
+/// sparse card that matches nothing else, with at least Z_MIN_N problems (the z rule) and with fewer (p99).
+pub fn screen_selfcheck() -> Vec<String> {
+    let card = |project: &str, key: &str, kind: &str, x: &str, mech: Option<&str>| Card {
+        project: project.to_owned(),
+        key: key.to_owned(),
+        kind: kind.to_owned(),
+        x: x.to_owned(),
+        y: (kind == "problem").then(|| "a blocker".to_owned()),
+        a: if kind == "capability" {
+            vec!["it holds".to_owned()]
+        } else {
+            Vec::new()
+        },
+        mech: mech.map(str::to_owned),
+        solves: None,
+        quote: String::new(),
+        hash: String::new(),
+        grade: "INFERRED".to_owned(),
+        status: "live".to_owned(),
+        cite: None,
+        unit: None,
+        fact: None,
+        source_kind: Some("doc".to_owned()),
+        at: String::new(),
+    };
+    let mut failures = Vec::new();
+    let target = card("p", "t", "problem", "steady input display", None);
+    // (1) the veto
+    let pool = vec![
+        card(
+            "q",
+            "dup",
+            "capability",
+            "steady input display",
+            Some("double buffer swap"),
+        ),
+        card(
+            "q",
+            "new",
+            "capability",
+            "steady input display",
+            Some("hysteresis band"),
+        ),
+    ];
+    let own = vec![card(
+        "p",
+        "mine",
+        "capability",
+        "keep input steady",
+        Some("a double buffer swap"),
+    )];
+    match rank("facet", &target, &pool).and_then(|r| screen("facet", &target, &pool, &own, r)) {
+        Ok(s) => {
+            if !s.vetoed.iter().any(|(i, o)| pool[*i].key == "dup" && o == "mine") {
+                failures.push("a candidate repeating the target's own mechanism was not vetoed".to_owned());
+            }
+            if !s.kept.iter().any(|r| pool[r.index].key == "new") {
+                failures.push("a candidate with a new mechanism was not kept".to_owned());
+            }
+        }
+        Err(e) => failures.push(format!("veto: {e:#}")),
+    }
+    // (2) the relative threshold, at 30 other problems (z) and at 3 (p99)
+    for others in [30usize, 3] {
+        let mut pool = vec![
+            card("q", "hub", "capability", "common", Some("hub mechanism")),
+            card(
+                "q",
+                "sparse",
+                "capability",
+                "rare filler words that make this goal long and weak",
+                Some("sparse mechanism"),
+            ),
+        ];
+        for i in 0..others {
+            pool.push(card("r", &format!("o{i}"), "problem", "common", None));
+        }
+        let target = card("p", "t", "problem", "common rare", None);
+        match rank("facet", &target, &pool).and_then(|r| screen("facet", &target, &pool, &[], r)) {
+            Ok(s) => {
+                let score = |key: &str| {
+                    rank("facet", &target, &pool)
+                        .ok()
+                        .and_then(|r| r.into_iter().find(|x| pool[x.index].key == key))
+                        .map_or(0.0, |x| x.score)
+                };
+                if score("sparse") >= score("hub") {
+                    failures.push(format!(
+                        "fixture: the sparse match must be the weaker ({others} problems)"
+                    ));
+                }
+                if s.kept.iter().any(|r| pool[r.index].key == "hub") {
+                    failures.push(format!(
+                        "a hub card matching {others} other problems as strongly was kept: no relative threshold"
+                    ));
+                }
+                if !s.kept.iter().any(|r| pool[r.index].key == "sparse") {
+                    failures.push(format!(
+                        "a sparse card's weak but distinctive match was dropped ({others} problems)"
+                    ));
+                }
+            }
+            Err(e) => failures.push(format!("threshold: {e:#}")),
+        }
+    }
+    failures
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_screen_vetoes_repeats_and_keeps_only_what_stands_out() {
+        assert_eq!(super::screen_selfcheck(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn below_uses_z_with_enough_problems_and_p99_with_few() {
+        let many: Vec<f64> = (0..30).map(|i| f64::from(i % 3)).collect();
+        assert!(super::below(10.0, &many).is_none());
+        assert!(super::below(2.0, &many).is_some());
+        assert!(super::below(1.0, &[0.0, 0.5]).is_none());
+        assert!(super::below(0.4, &[0.0, 0.5]).is_some());
+        assert!(
+            super::below(0.5, &[0.0, 0.5]).is_some(),
+            "level with p99 does not stand out"
+        );
+    }
 }

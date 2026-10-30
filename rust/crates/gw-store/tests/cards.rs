@@ -99,6 +99,15 @@ fn cards_cap_recollection_and_go_stale_with_their_quote() {
     };
     refused(&agent, &from_fact("f1", "CONFIRMED"));
     ok(&agent, &from_fact("f2", "INFERRED"));
+    // The memory project is recollection as a whole: even a doc unit there makes no CONFIRMED card.
+    server.namespace("proj_memory");
+    let memory = server.agent("proj_memory");
+    ok(
+        &memory,
+        "CREATE unit:doc SET locator = 'n.md#L1-1', hash = 'h1', kind = 'doc', text = 'it stays steady';",
+    );
+    refused(&memory, &card("mm1", "doc", "doc", "CONFIRMED", ""));
+    ok(&memory, &card("mm2", "doc", "doc", "INFERRED", ""));
     // Nobody deletes a card.
     refused(&agent, "DELETE card:d1;");
 

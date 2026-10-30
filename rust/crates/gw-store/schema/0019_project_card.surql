@@ -52,19 +52,22 @@ DEFINE FIELD OVERWRITE source_kind ON card TYPE string READONLY
 DEFINE FIELD OVERWRITE hash ON card TYPE string READONLY ASSERT $value = /^[0-9a-f]{64}$/;
 
 -- S0's rule on cards: text from memory, instructions, agent, skill or command files is an agent's
--- recollection or a prompt, never CONFIRMED; a card from a fact is CONFIRMED only when the fact is.
+-- recollection or a prompt, never CONFIRMED; a card from a fact is CONFIRMED only when the fact is. The memory
+-- project as a whole is recollection (owner decision 2026-10-30: shared, a bridge source, never above INFERRED).
 DEFINE FIELD OVERWRITE grade ON card TYPE string READONLY DEFAULT 'INFERRED'
   ASSERT $value IN ['CONFIRMED', 'INFERRED', 'UNKNOWN']
     AND ($value != 'CONFIRMED' OR $before != NONE
-      OR ($this.fact != NONE AND $this.fact.grade = 'CONFIRMED')
-      OR ($this.unit != NONE AND $this.source_kind NOT IN ['memory', 'instructions', 'agent', 'skill', 'command', 'quote', 'fact']));
+      OR (session::ns() != 'proj_memory' AND (
+        ($this.fact != NONE AND $this.fact.grade = 'CONFIRMED')
+        OR ($this.unit != NONE AND $this.source_kind NOT IN ['memory', 'instructions', 'agent', 'skill', 'command', 'quote', 'fact']))));
 DEFINE FIELD OVERWRITE status ON card TYPE string DEFAULT 'live' ASSERT $value IN ['live', 'stale'];
 DEFINE FIELD OVERWRITE stale_since ON card TYPE option<datetime>;
 DEFINE FIELD OVERWRITE at ON card TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE by ON card TYPE option<string> READONLY;
 DEFINE FIELD OVERWRITE machine ON card TYPE option<string> READONLY;
+-- Checked on create only: the stale event later runs as whoever changed the unit, owner included.
 DEFINE FIELD OVERWRITE written_by ON card TYPE option<record<member>> DEFAULT $auth.id READONLY
-  ASSERT $auth = NONE OR $value = $auth.id;
+  ASSERT $before != NONE OR $auth = NONE OR $value = $auth.id;
 
 DEFINE INDEX OVERWRITE card_unit ON card FIELDS unit;
 DEFINE INDEX OVERWRITE card_fact ON card FIELDS fact;
