@@ -47,8 +47,8 @@ and no AI model inside Groundworks.
 
 ## Roadmap
 
-- **Now:** a Groundworks desktop app, private and in progress. It's a copy of Nimbalyst with Groundworks built into
-  every session.
+- **Now:** a Groundworks desktop app, a copy of Nimbalyst with Groundworks built into every session. It's private
+  while in progress, and its first public release is being prepared.
 - **Next:**
   - "check your notes first" made automatic;
   - a smaller tool set per session;
