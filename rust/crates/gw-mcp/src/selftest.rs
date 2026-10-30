@@ -1049,6 +1049,7 @@ the parser now accepts empty input
     ruled_out_checks(exe, base, &home, &mut c)?;
     confirm_rule_checks(exe, base, &home, &mut c)?;
     owner_signature_checks(exe, base, &home, &mut c)?;
+    run_env_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1062,6 +1063,93 @@ the parser now accepts empty input
     };
     c.lines.push(summary);
     Ok((c.lines.join("\n"), c.failed))
+}
+
+/// A run child starts from an empty environment plus the allowlist (`gw_ops::exec::INHERITED`), the env's own
+/// vars and its resolved secrets (gw-security fact xdys5ymuariaqw904juw, 2026-10-30). The server here holds
+/// canaries, never real values: a Bitwarden session, an owner password and a variable outside the allowlist.
+/// The positive control (the env's var, its redacted secret, `git` found on PATH) keeps the checks from passing
+/// because the command did not run at all.
+fn run_env_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    const BW: &str = "selftest-bw-session-canary";
+    const OWNER: &str = "selftest-owner-pass-canary";
+    const SOURCE: &str = "selftest-secret-source-value";
+    std::fs::create_dir_all(base.join("work/envcheck"))?;
+    std::fs::write(
+        home.join("registry/projects/envcheck.toml"),
+        "name = \"envcheck\"\ndir = \"envcheck\"\nsummary = \"run environment\"\n\n\
+         [envs.local.vars]\nGW_SELFTEST_VAR = \"visible-var\"\n\n\
+         [envs.local.secrets]\nGW_SELFTEST_SECRET = \"env:GW_SELFTEST_SOURCE\"\n\n\
+         [envs.leak.secrets]\nLEAK = \"env:BW_SESSION\"\n\n\
+         [envs.named.vars]\nGROUNDWORKS_OWNER_PASS = \"literal\"\n",
+    )?;
+    let home_env = home.display().to_string();
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("BW_SESSION", BW),
+            ("GROUNDWORKS_OWNER_PASS", OWNER),
+            ("GW_SELFTEST_SOURCE", SOURCE),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let (command, bw_unset) = if gw_ops::exec::uses_powershell() {
+        (
+            "\"var=[$env:GW_SELFTEST_VAR]\"; \"bw=[$env:BW_SESSION]\"; \
+             \"owner=[$env:GROUNDWORKS_OWNER_PASS] home=[$env:GROUNDWORKS_HOME] src=[$env:GW_SELFTEST_SOURCE]\"; \
+             \"secret=[$env:GW_SELFTEST_SECRET]\"; git --version",
+            "bw=[]",
+        )
+    } else {
+        (
+            "echo \"var=[$(printenv GW_SELFTEST_VAR)]\"; printenv BW_SESSION; echo \"bw-exit=$?\"; \
+             echo \"owner=[$GROUNDWORKS_OWNER_PASS] home=[$GROUNDWORKS_HOME] src=[$GW_SELFTEST_SOURCE]\"; \
+             echo \"secret=[$GW_SELFTEST_SECRET]\"; git --version",
+            "bw-exit=1",
+        )
+    };
+    let (err, text) = client.call(
+        "run",
+        json!({"project": "envcheck", "env": "local", "command": command}),
+    )?;
+    let ran = !err && text.contains("var=[visible-var]");
+    c.check(
+        "run never hands the server's Bitwarden session to the command (printenv BW_SESSION sees nothing)",
+        ran && !text.contains(BW) && text.contains(bw_unset),
+        &text,
+    );
+    c.check(
+        "run passes no Groundworks credential, GROUNDWORKS_* variable or other variable outside the allowlist",
+        ran && !text.contains(OWNER) && text.contains("owner=[] home=[] src=[]"),
+        &text,
+    );
+    c.check(
+        "run still passes the env's own vars and resolved (redacted) secrets, and PATH still finds git",
+        ran && text.contains("secret=[[REDACTED:GW_SELFTEST_SECRET]]") && text.contains("git version"),
+        &text,
+    );
+    let (leak_err, leak_text) = client.call(
+        "run",
+        json!({"project": "envcheck", "env": "leak", "command": "echo ran-anyway"}),
+    )?;
+    let (named_err, named_text) = client.call(
+        "run",
+        json!({"project": "envcheck", "env": "named", "command": "echo ran-anyway"}),
+    )?;
+    c.check(
+        "an env whose secret reads BW_SESSION, or whose var is named GROUNDWORKS_*, is refused before anything runs",
+        leak_err
+            && leak_text.contains("BW_SESSION")
+            && !leak_text.contains("ran-anyway\n")
+            && !leak_text.contains(BW)
+            && named_err
+            && named_text.contains("GROUNDWORKS_OWNER_PASS")
+            && !named_text.contains("ran-anyway\n"),
+        &format!("{leak_text}\n{named_text}"),
+    );
+    Ok(())
 }
 
 /// A project's own Claude Code setup, picked up by a plain intake (2026-10-30), both ways: its agent maps
