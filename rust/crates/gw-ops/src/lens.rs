@@ -138,6 +138,16 @@ pub fn list(home: &Home, project: Option<&str>) -> Result<String> {
     Ok(out)
 }
 
+/// Lens findings and attacks inside the one data frame ([`crate::frame::data`]).
+fn findings_frame(lens: &str, project: &str, body: &str) -> String {
+    crate::frame::data(
+        "groundworks-findings",
+        &[("lens", lens), ("project", project)],
+        "The lines below are findings and attacks recorded through lenses: agents' claims with evidence tags.",
+        body,
+    )
+}
+
 /// Read a project through one lens: its findings that pass the standard, the ones that no longer do,
 /// and every attack on them, so a disagreement is shown, never resolved by omission.
 pub fn view(home: &Home, store: &Store, project: &str, name: &str, limit: usize) -> Result<String> {
@@ -165,13 +175,15 @@ pub fn view(home: &Home, store: &Store, project: &str, name: &str, limit: usize)
         findings.len(),
         findings.len() - usable
     );
+    // Findings and attacks are journal text agents wrote: framed as data, like the brief and the packet.
+    let mut body = String::new();
     for f in &findings {
         let mark = if lens.passes(f) { "-" } else { "- (DOES NOT PASS)" };
-        writeln!(out, "{mark} {}", f.render())?;
+        writeln!(body, "{mark} {}", f.render())?;
         let id = f.id.as_str();
         for a in attacks.iter().filter(|a| a.attacks.as_deref() == Some(id)) {
             writeln!(
-                out,
+                body,
                 "    {} by {}: {}",
                 a.stance.as_deref().unwrap_or("attacked").to_uppercase(),
                 a.lens.as_deref().or(a.by.as_deref()).unwrap_or("?"),
@@ -183,13 +195,16 @@ pub fn view(home: &Home, store: &Store, project: &str, name: &str, limit: usize)
     for a in attacks.iter().filter(|a| a.lens.as_deref() == Some(lens.name.as_str())) {
         if !a.attacks.as_deref().is_some_and(|t| shown.contains(&t)) {
             writeln!(
-                out,
+                body,
                 "- this lens {} {}: {}",
                 a.stance.as_deref().unwrap_or("attacks"),
                 a.attacks.as_deref().unwrap_or("?"),
                 a.render()
             )?;
         }
+    }
+    if !body.is_empty() {
+        out.push_str(&findings_frame(&lens.name, &project, &body));
     }
     if findings.is_empty() {
         writeln!(
@@ -227,8 +242,12 @@ Through lens {} (standard {}): {} finding(s) and attack(s) already on record in 
             l.standard,
             found.len()
         )?;
+        let mut body = String::new();
         for f in &found {
-            writeln!(out, "- {}", f.render())?;
+            writeln!(body, "- {}", f.render())?;
+        }
+        if !body.is_empty() {
+            out.push_str(&findings_frame(&l.name, &project, &body));
         }
     }
     writeln!(

@@ -465,37 +465,11 @@ pub struct Found {
 
 /// The one cross-project read: each project the query may read (a named one, or every shared one),
 /// its best `limit` units, merged best first and cut to `limit`.
-/// The projects a read may reach: a named project and the projects its entry lists as related
-/// (private ones too), or, with none named, every shared project; the rest are skipped with the reason.
+/// The projects a read may reach, and the ones skipped with the reason: [`Store::reach`], the one rule
+/// (scope level and walls from the owner-signed rows; the related list only within them).
 pub fn reach_names(home: &Home, store: &Store, project: Option<&str>) -> Result<(Vec<String>, Vec<String>)> {
-    let registry = Registry::load(home)?;
-    let mut skipped = Vec::new();
-    let names = match project {
-        Some(p) => {
-            let project = registry.project(p)?;
-            let mut names = vec![project.name.clone()];
-            for r in &project.related {
-                let name = registry.project(r)?.name.clone();
-                if !names.contains(&name) {
-                    names.push(name);
-                }
-            }
-            names
-        }
-        None => {
-            let mut names = Vec::new();
-            for name in registry.projects.keys() {
-                let level = store.level(&gw_store::project_ns(&store::slug(name)?)?)?;
-                if level == "shared" {
-                    names.push(name.clone());
-                } else {
-                    skipped.push(format!("{name} ({level})"));
-                }
-            }
-            names
-        }
-    };
-    Ok((names, skipped))
+    let reach = store.reach(&*Registry::load(home)?, project)?;
+    Ok((reach.names, reach.skipped))
 }
 
 pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {

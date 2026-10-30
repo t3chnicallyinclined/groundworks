@@ -230,6 +230,100 @@ impl Store {
         Ok(rows[0].as_str().unwrap_or("shared").to_owned())
     }
 
+    /// Every wall, as scope-name pairs (`proj_a`, `proj_b`), read from `global` as the agent (who may
+    /// read walls, never write them). A read that fails is an error: reach never assumes there are none.
+    pub fn walls(&self) -> Result<Vec<(String, String)>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let rows = self.retrying(|| Ok(global.query("SELECT a, b FROM wall;", &serde_json::Map::new(), Some(1))?))?;
+        rows[0]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| {
+                Ok((
+                    r["a"].as_str().context("a wall row without a")?.to_owned(),
+                    r["b"].as_str().context("a wall row without b")?.to_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    /// The one reach rule (idea-bridges slice B0; gw-security rulings 1 and 5, 2026-10-30): which projects
+    /// a read may combine, from the owner-signed rows in `global` (scope level and walls), never from the
+    /// agent-editable registry alone. search, ask, grep, the evals and any later bridge read call this.
+    ///
+    /// - A named project, and each project its entry lists as related unless that one is isolated or is
+    ///   walled from a project already in the read (the asked one first); private related stay readable,
+    ///   as a direct related read.
+    /// - No project named: every shared project, except both sides of any wall between two of them: a
+    ///   walled pair is never in one read, and neither side is picked over the other. Each is named with
+    ///   the cure (name a project).
+    ///
+    /// Every project left out is in `skipped` with why. Walls name scopes; this reads project-scope walls
+    /// (`proj_*`), the only kind a read combines.
+    pub fn reach(&self, registry: &crate::registry::Registry, project: Option<&str>) -> Result<Reach> {
+        let walls = self.walls()?;
+        let ns = |name: &str| -> Result<String> { Ok(gw_store::project_ns(&slug(name)?)?) };
+        let walled = |a: &str, b: &str| walls.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+        let mut reach = Reach::default();
+        match project {
+            Some(p) => {
+                let asked = registry.project(p)?;
+                reach.names.push(asked.name.clone());
+                for r in &asked.related {
+                    let name = registry.project(r)?.name.clone();
+                    if reach.names.contains(&name) {
+                        continue;
+                    }
+                    let scope = ns(&name)?;
+                    let level = self.level(&scope)?;
+                    if level == "isolated" {
+                        reach.skipped.push(format!("{name} (isolated)"));
+                        continue;
+                    }
+                    let mut wall = None;
+                    for n in &reach.names {
+                        if walled(&ns(n)?, &scope) {
+                            wall = Some(n.clone());
+                            break;
+                        }
+                    }
+                    match wall {
+                        Some(other) => reach.skipped.push(format!("{name} (walled from {other})")),
+                        None => reach.names.push(name),
+                    }
+                }
+            }
+            None => {
+                let mut shared = Vec::new();
+                for name in registry.projects.keys() {
+                    let level = self.level(&ns(name)?)?;
+                    if level == "shared" {
+                        shared.push((name.clone(), ns(name)?));
+                    } else {
+                        reach.skipped.push(format!("{name} ({level})"));
+                    }
+                }
+                for (name, scope) in &shared {
+                    let across: Vec<&str> = shared
+                        .iter()
+                        .filter(|(other, s)| other != name && walled(scope, s))
+                        .map(|(other, _)| other.as_str())
+                        .collect();
+                    if across.is_empty() {
+                        reach.names.push(name.clone());
+                    } else {
+                        reach.skipped.push(format!(
+                            "{name} (walled from {}: name a project to read it)",
+                            across.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(reach)
+    }
+
     /// The owner client for `ns`. The password is first checked against the owner login in
     /// `global`; only then is the owner login (re)created in `ns` with it.
     pub fn owner(&self, ns: &str, owner_pass: &str) -> Result<Db> {
@@ -1378,6 +1472,13 @@ impl Store {
             .query("CREATE wall SET a = $a, b = $b, why = $why;", &vars.0, Some(1))?;
         Ok(())
     }
+}
+
+/// What a read may combine ([`Store::reach`]): the projects in it, and each one left out with why.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Reach {
+    pub names: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 /// Bound variables for [`Db::query`]: values travel as JSON, never inside the statement text.
