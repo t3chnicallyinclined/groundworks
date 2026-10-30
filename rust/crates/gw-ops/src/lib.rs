@@ -4,6 +4,7 @@
 
 pub mod ask;
 pub mod attack;
+pub mod card;
 pub mod claude_setup;
 pub mod eval;
 pub mod eval_router;

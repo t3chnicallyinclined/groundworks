@@ -16,6 +16,8 @@ use gw_ops::store::{self, Quote, Store};
 
 /// The attack tools (verdicts and answers, schema 0018): their own router, merged in `new`.
 mod attack;
+/// The idea-bridge tools (cards, bridges, propose): their own router, merged in `new`.
+mod bridges;
 
 const INSTRUCTIONS: &str = "\
 Groundworks: the registry, journal, knowledge and tools for every project the owner runs.
@@ -301,7 +303,7 @@ impl Groundworks {
         Self {
             home: Arc::new(home),
             store: Arc::default(),
-            tool_router: Self::tool_router() + Self::attack_router(),
+            tool_router: Self::tool_router() + Self::attack_router() + Self::bridge_router(),
         }
     }
 

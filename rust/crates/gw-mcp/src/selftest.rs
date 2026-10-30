@@ -14,6 +14,7 @@ use gw_store::testkit::{AGENT_PASS, OWNER_PASS, ROOT_PASS, Throwaway};
 use serde_json::{Value, json};
 
 mod attack;
+mod bridges;
 
 /// The canary every hook input carries in the selftest (a cwd, a command, a tool input, a transcript
 /// line); it must appear in no telemetry row, env file or hook stderr afterwards (TELEMETRY-POLICY.md).
@@ -23,7 +24,7 @@ const CANARY: &str = "CANARY-5e1f9a";
 static HOOK_STDERR: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// The tools a session with a home must see, exactly.
-pub const TOOLS: [&str; 32] = [
+pub const TOOLS: [&str; 33] = [
     "answer",
     "answer_add",
     "ask",
@@ -31,6 +32,7 @@ pub const TOOLS: [&str; 32] = [
     "attack_judge",
     "attack_list",
     "bootstrap",
+    "card_add",
     "doctor",
     "env_show",
     "estate_scan",
@@ -1182,6 +1184,7 @@ the parser now accepts empty input
     owner_signature_checks(exe, base, &home, &mut c)?;
     run_env_checks(exe, base, &home, &mut c)?;
     attack::attack_checks(exe, base, &home, &owner, &mut c)?;
+    bridges::bridge_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
