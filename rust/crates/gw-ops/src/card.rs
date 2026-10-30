@@ -119,6 +119,9 @@ pub struct Card {
     pub solves: Option<String>,
     pub quote: String,
     pub hash: String,
+    /// sha256 of the quote: what a cached judgement is keyed on.
+    #[serde(default)]
+    pub quote_hash: String,
     pub grade: String,
     pub status: String,
     /// `path#La-b` of the quoted unit, or `fact:<key>`.
@@ -639,7 +642,7 @@ pub(crate) fn read_cards(
 ) -> Result<Vec<Card>> {
     let vars = vars.set("limit", limit);
     let sql = format!(
-        "SELECT record::id(id) AS key, kind, x, y, a, mech, <string> solves AS solves, quote, hash, grade, status, source_kind, \
+        "SELECT record::id(id) AS key, kind, x, y, a, mech, <string> solves AS solves, quote, quote_hash, hash, grade, status, source_kind, \
          <string> unit AS unit, <string> fact AS fact, unit.locator AS locator, lines, <string> at AS at \
          FROM card {filter} ORDER BY at LIMIT $limit;"
     );
@@ -731,6 +734,7 @@ mod tests {
             solves: None,
             quote: "q".into(),
             hash: "h".into(),
+            quote_hash: String::new(),
             grade: "CONFIRMED".into(),
             status: "live".into(),
             cite: None,

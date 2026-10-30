@@ -741,5 +741,135 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             && list.contains("project=\"memory\" grade=\"INFERRED\" source=\"memory: recollection, not evidence; capped at INFERRED\""),
         &format!("{text}\n{list}"),
     );
+
+    // ---- slice 14: the gate funnel and its judgement cache ------------------------------------------------------
+    // zeta holds one capability that answers alpha's memory problem by its goal words; its quote is edited later.
+    project(
+        base,
+        home,
+        "zeta",
+        &[(
+            "notes/z.md",
+            "# Zeta\n\nThe input display stays steady when we hold the last frame.\n",
+        )],
+        "",
+    )?;
+    let (err, text) = s.call("intake", json!({"project": "zeta"}))?;
+    if err {
+        bail!("intake zeta failed in the fixture: {text}");
+    }
+    let zeta_cap = json!({"kind": "capability", "x": "keep the input display steady", "mech": "hold the last frame",
+        "a": ["the last frame is still valid"], "quote": {"unit": "notes/z.md", "lines": [3, 3]}, "confidence": "INFERRED"});
+    let zeta = add(s, "zeta", zeta_cap.clone())?;
+    let funnel = |s: &mut Client, card: &str| -> Result<(bool, String)> {
+        s.call(
+            "funnel_batch",
+            json!({"project": "alpha", "target": fresh, "source": "zeta", "card": card}),
+        )
+    };
+    let asked = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix("ask judgement:"))
+            .filter_map(|l| l.split_whitespace().next())
+            .map(str::to_owned)
+            .collect()
+    };
+    let check_of = |text: &str, id: &str| -> String {
+        text.lines()
+            .find(|l| l.starts_with(&format!("ask judgement:{id} ")))
+            .and_then(|l| l.split("] ").nth(1))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let failures = gw_ops::funnel::floor_selfcheck();
+    c.check(
+        "14: below the score floor is never asked (floor 0.25 of the best, on synthetic scores)",
+        failures.is_empty(),
+        &failures.join("; "),
+    );
+    let (err, first) = funnel(s, &zeta)?;
+    let ids = asked(&first);
+    let assumption = ids
+        .iter()
+        .find(|i| check_of(&first, i).starts_with("assumption:"))
+        .cloned()
+        .unwrap_or_default();
+    let novelty = ids
+        .iter()
+        .find(|i| check_of(&first, i) == "novelty")
+        .cloned()
+        .unwrap_or_default();
+    let answer = |s: &mut Client, id: &str, verdict: &str, confidence: f64, grade: Option<&str>| {
+        let mut one = json!({"id": format!("judgement:{id}"), "verdict": verdict, "confidence": confidence,
+                             "why": "read in both quotes"});
+        if let Some(g) = grade {
+            one["grade"] = json!(g);
+        }
+        s.call(
+            "funnel_answer",
+            json!({"project": "alpha", "target": fresh, "answers": [one], "by": "selftest"}),
+        )
+    };
+    let (gerr, gtext) = answer(s, &assumption, "holds", 0.9, Some("CONFIRMED"))?;
+    let (err1, a1) = answer(s, &assumption, "holds", 0.9, None)?;
+    let (err2, a2) = answer(s, &novelty, "not_made", 0.4, None)?;
+    let (_, second) = funnel(s, &zeta)?;
+    c.check(
+        "14: an answered pair is not asked again: its judgement is served from the cache",
+        !err && ids.len() == 2
+            && !err1
+            && !err2
+            && second.contains(&format!("cached judgement:{assumption}:"))
+            && !asked(&second).contains(&assumption),
+        &format!("{first}\n{a1}\n{a2}\n{second}"),
+    );
+    let novelty_second = asked(&second);
+    c.check(
+        "14: a second look is asked only for the borderline answer (confidence under 0.6)",
+        a2.contains("borderline: a second look is owed")
+            && !a1.contains("borderline")
+            && novelty_second.len() == 1
+            && second.contains("[second look] novelty"),
+        &format!("{a1}\n{a2}\n{second}"),
+    );
+    let (err3, a3) = answer(
+        s,
+        novelty_second.first().map_or("", String::as_str),
+        "not_made",
+        0.8,
+        None,
+    )?;
+    let (_, third) = funnel(s, &zeta)?;
+    c.check(
+        "14: a cache hit never upgrades a grade: CONFIRMED is refused and the cached verdicts are INFERRED",
+        gerr && gtext.contains("never raises a grade")
+            && !err3
+            && asked(&third).is_empty()
+            && third.matches("(grade INFERRED)").count() == 0
+            && third.matches("; grade INFERRED)").count() == 2
+            && !third.contains("grade CONFIRMED"),
+        &format!("{gtext}\n{a3}\n{third}"),
+    );
+    // Edit the source quote's line: the card goes stale, the capability is carded again on the new words, and the
+    // cache, keyed on the quote, asks again.
+    std::fs::write(
+        base.join("work/zeta/notes/z.md"),
+        "# Zeta\n\nThe input display stays steady when we hold the last good frame.\n",
+    )?;
+    let (err, text) = s.call("intake", json!({"project": "zeta"}))?;
+    if err {
+        bail!("re-intake zeta failed: {text}");
+    }
+    let zeta2 = add(s, "zeta", zeta_cap)?;
+    let (_, fourth) = funnel(s, &zeta2)?;
+    let (_, stale) = funnel(s, &zeta)?;
+    c.check(
+        "14: editing a quote re-asks: the new quote's checks are open and the old judgement is not served",
+        asked(&fourth).len() == 2
+            && !fourth.contains("cached judgement:")
+            && !asked(&fourth).contains(&assumption)
+            && !stale.contains(&format!("cached judgement:{assumption}:")),
+        &format!("{fourth}\n{stale}"),
+    );
     Ok(())
 }

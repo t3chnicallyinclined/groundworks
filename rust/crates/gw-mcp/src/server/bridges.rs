@@ -68,8 +68,61 @@ pub struct BridgeProposeArgs {
     pub k: Option<usize>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct FunnelBatchArgs {
+    pub project: String,
+    /// The problem card of the project (`card:...`).
+    pub target: String,
+    /// Only this source: its project and card (`card:...`).
+    pub source: Option<String>,
+    pub card: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FunnelAnswerArgs {
+    pub project: String,
+    /// The problem card the batch was for.
+    pub target: String,
+    pub answers: Vec<gw_ops::funnel::AnswerIn>,
+    pub by: Option<String>,
+}
+
 #[tool_router(router = bridge_router, vis = "pub(super)")]
 impl Groundworks {
+    #[tool(
+        description = "The gate funnel for a problem card: the checks to answer (each source assumption, and novelty) for candidates above the score floor, at most 8 at a time, with both quotes as data; what the judgement cache already answered (reused until either quote changes); and what fell below the floor (never asked). Writes nothing."
+    )]
+    async fn funnel_batch(&self, args: Parameters<FunnelBatchArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            let only = a.source.as_deref().zip(a.card.as_deref());
+            gw_ops::funnel::batch(&home, &store, &a.project, &a.target, only)
+        })
+        .await
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Answer funnel checks: [{id, verdict, confidence 0-1, why}]. Each is cached as a judgement at INFERRED (UNKNOWN for verdict unknown), never higher; a first answer under 0.6 confidence or unknown gets one second look. A cached verdict still goes onto the bridge through bridge_advance."
+    )]
+    async fn funnel_answer(&self, args: Parameters<FunnelAnswerArgs>) -> Result<String, String> {
+        let a = args.0;
+        let (home, store) = (Arc::clone(&self.home), self.store().await?);
+        store::blocking(move || {
+            gw_ops::funnel::answer(
+                &home,
+                &store,
+                &a.project,
+                &a.target,
+                &a.answers,
+                a.by.as_deref().unwrap_or("agent"),
+            )
+        })
+        .await
+        .map_err(fail)
+    }
+
     #[tool(
         description = "Propose candidate bridges for a problem card: capabilities of the shared, unwalled projects ranked by BM25 per facet (no model). Writes nothing; each candidate is a hypothesis, served as data, to keep with bridge_add."
     )]

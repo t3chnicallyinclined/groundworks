@@ -372,6 +372,7 @@ pub fn selfcheck() -> Vec<String> {
         solves: None,
         quote: String::new(),
         hash: String::new(),
+        quote_hash: String::new(),
         grade: "INFERRED".to_owned(),
         status: "live".to_owned(),
         cite: None,

@@ -505,7 +505,7 @@ fn first_line(text: &str) -> &str {
 /// The novelty check, as a verdict with what was searched: the query, the reach it ran over, the top hits
 /// (locators and hashes only), and `made` hits: target-project text that already quotes the source card, names
 /// it, or holds every meaning word of its mechanism. A `not_made` verdict against such a hit is refused.
-fn novelty(store: &Store, r: &Reach, source: &Card, query: &str, verdict: &str) -> Result<Value> {
+pub(crate) fn novelty(store: &Store, r: &Reach, source: &Card, query: &str, verdict: &str) -> Result<Value> {
     let mut hits = Vec::new();
     let mut searched = Vec::new();
     let mut made = Vec::new();
@@ -1115,6 +1115,7 @@ pub fn screen_selfcheck() -> Vec<String> {
         solves: None,
         quote: String::new(),
         hash: String::new(),
+        quote_hash: String::new(),
         grade: "INFERRED".to_owned(),
         status: "live".to_owned(),
         cite: None,
