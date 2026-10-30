@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Groundworks: memory, rules and proof for AI coding agents</title>
+<meta name="description" content="Groundworks keeps what AI coding agents learn, cited and checked, and enforces the rules by machine instead of memory. MIT.">
+<meta property="og:title" content="Groundworks">
+<meta property="og:description" content="The memory, rules and tools AI coding agents use to work on every project, and to prove what they claim.">
+<meta property="og:image" content="https://t3chnicallyinclined.github.io/groundworks/brand/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="brand/favicon.ico">
+<link rel="apple-touch-icon" href="brand/icon-256.png">
+<style>
+:root{--blueprint:#0060A5;--electric:#0057FF;--orange:#F26B1D;--yellow:#F5C518;--black:#1F1A17;--paper:#F7F3EC;--night:#0F1A2E;--muted:#5C4A3D;--line:rgba(255,255,255,.14)}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--black);background:var(--paper)}
+a{color:var(--electric)}
+code{font-size:.92em}
+.wrap{max-width:980px;margin:0 auto;padding:0 20px}
+header{background:var(--blueprint);background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:32px 32px;color:#fff;padding:28px 0 40px;border-bottom:6px solid var(--yellow)}
+header img{display:block;width:100%;max-width:820px;height:auto;margin:0 auto;border-radius:10px}
+header p.lead{font-size:1.3rem;line-height:1.4;text-align:center;max-width:720px;margin:24px auto 0;font-weight:600}
+nav{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:22px}
+nav a{color:#fff;text-decoration:none;border:2px solid #fff;border-radius:999px;padding:8px 18px;font-weight:600;min-height:44px;display:inline-flex;align-items:center}
+nav a.primary{background:var(--orange);border-color:var(--orange);color:var(--black)}
+section{padding:44px 0;border-bottom:1px solid #e4ddd0}
+h2{font-size:1.7rem;margin:0 0 14px;letter-spacing:-.01em}
+h2::before{content:"";display:inline-block;width:14px;height:14px;background:var(--orange);border-radius:3px;margin-right:10px;vertical-align:middle}
+.why{display:grid;grid-template-columns:1fr 260px;gap:28px;align-items:start}
+.why img{width:100%;height:auto}
+ul.pain{padding-left:20px} ul.pain li{margin:6px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;margin-top:14px}
+.card{background:#fff;border:1px solid #e4ddd0;border-top:4px solid var(--blueprint);border-radius:10px;padding:16px}
+.card h3{margin:0 0 6px;font-size:1.05rem}
+.card p{margin:0;font-size:.95rem;color:var(--muted)}
+ol.loop li{margin:8px 0}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;margin-top:12px;background:#fff;font-size:.95rem}
+th,td{text-align:left;padding:10px 12px;border:1px solid #e4ddd0;vertical-align:top}
+th{background:var(--blueprint);color:#fff}
+.note{background:#fff8dc;border-left:5px solid var(--yellow);padding:12px 16px;border-radius:6px;margin-top:16px}
+pre{background:var(--night);color:var(--paper);padding:16px;border-radius:10px;overflow-x:auto;font-size:.88rem;line-height:1.5}
+footer{background:var(--night);color:#B8C2D6;padding:28px 0;font-size:.9rem}
+footer a{color:#5B9BFF}
+@media (max-width:720px){.why{grid-template-columns:1fr}.why img{max-width:220px;margin:0 auto}body{font-size:16px}}
+@media (prefers-color-scheme:dark){body{background:var(--night);color:var(--paper)}section{border-color:#24324f}.card,table{background:#172540;border-color:#24324f}th,td{border-color:#24324f}.card p{color:#B8C2D6}.note{background:#2a2510;color:var(--paper)}a{color:#5B9BFF}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <img src="brand/groundworks-logo.png" alt="Groundworks logo: a groundhog in an orange hard hat coming up out of a taped-off hole, drawn on blueprint paper" width="1600" height="897">
+    <p class="lead">The memory, rules and tools AI coding agents use to work on every project, and to prove what they claim.</p>
+    <nav>
+      <a class="primary" href="https://github.com/t3chnicallyinclined/groundworks">View on GitHub</a>
+      <a href="https://github.com/t3chnicallyinclined/groundworks/blob/main/plugin/README.md">Claude Code plugin</a>
+      <a href="https://github.com/t3chnicallyinclined/groundworks/blob/main/rust/docs/EVAL-2026-10.md">Eval report</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section><div class="wrap why">
+  <div>
+    <h2>Why we built it</h2>
+    <p>One person runs about twenty software and research projects with AI agents doing most of the typing. The agents are good. What kept going wrong was everything around a single session:</p>
+    <ul class="pain">
+      <li><b>They forget.</b> Each session starts cold, so a lesson learned on Monday is re-derived on Thursday, sometimes wrongly.</li>
+      <li><b>They claim without proof.</b> "Done" arrives before anything was run, and a confident wrong answer looks exactly like a right one.</li>
+      <li><b>Knowledge leaks.</b> Notes, tickets and chat logs pile up in different tools, and the next agent cannot find what the last one knew.</li>
+      <li><b>Nobody checks that the checks ran.</b> A green result over nothing is the most expensive bug there is.</li>
+    </ul>
+    <p>Groundworks started as an engine for reading one very large record, where a database refused any conclusion that did not cite evidence. The same idea turned out to be what every project needed: a place where what agents learn is kept, cited and checked, and where the rules are enforced by the machine instead of remembered by the model.</p>
+    <p>The mascot is the foreman. He digs, keeps the ledger of what was found, tapes off dead ends so nobody falls in twice, and never calls a job done until he has seen the proof.</p>
+  </div>
+  <img src="brand/mascot.png" alt="The Groundworks mascot: a groundhog in an orange hard hat and a caution-tape collar, paws on the rim of a hole" width="800" height="735">
+</div></section>
+
+<section><div class="wrap">
+  <h2>What it is now</h2>
+  <p>One Rust binary, <code>groundworks</code>, and a Claude Code plugin around it. Your data lives in a private home folder next to your projects, never in the repository.</p>
+  <div class="grid">
+    <div class="card"><h3>Registry</h3><p>Every project, its stack, its environments, and where its secrets live. References only, never values.</p></div>
+    <div class="card"><h3>Supervised store</h3><p>A local SurrealDB, restarted if it dies, exported nightly and restore-drilled. Each agent signs in as its own user.</p></div>
+    <div class="card"><h3>Intake</h3><p>Files, docs and commits become citable units with file, lines, hash, date and expert area.</p></div>
+    <div class="card"><h3>Evidence-gated journal</h3><p>Decisions, gotchas and dead ends per project. CONFIRMED needs a receipt, a quote found word for word, or an owner statement.</p></div>
+    <div class="card"><h3>Ask and answer</h3><p>A packet of the best candidates, recorded facts first. Every quote in the answer is checked by a program, and a passed answer is recorded for next time.</p></div>
+    <div class="card"><h3>Run and gate</h3><p>Commands run in a project's registered environment and leave a receipt. The gate runs the project's own proof.</p></div>
+    <div class="card"><h3>Team of experts</h3><p>Architect, engineer, SRE and security roles plus your domain experts, with a directory that routes each question.</p></div>
+    <div class="card"><h3>Hooks that run themselves</h3><p>Session start injects what is known. A deny list guards the shell and fails closed. Stop asks a session that changed things to record what it learned.</p></div>
+    <div class="card"><h3>Pulse</h3><p>Is knowledge growing, used, and backed up? No model, just store numbers, and a digest of only what is red.</p></div>
+    <div class="card"><h3>Selftest</h3><p>A throwaway home and store, every rule checked both ways: 105 checks, each shown red before it is trusted green.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>How we use it</h2>
+  <p>Every Claude Code session runs with the plugin on, in VS Code and in the terminal. The loop is the same in every project:</p>
+  <ol class="loop">
+    <li><b>Session start.</b> The hook names the project and injects what is already known, gotchas first.</li>
+    <li><b>Ask before deriving.</b> The agent asks Groundworks before it researches or rebuilds a conclusion.</li>
+    <li><b>Work through receipts.</b> Commands go through <code>run</code>, and changes are proved with <code>gate</code>.</li>
+    <li><b>Record before stopping.</b> Decisions, gotchas and dead ends go into the journal, tagged CONFIRMED, INFERRED or UNKNOWN.</li>
+    <li><b>Unattended.</b> The supervisor keeps the store up, exports it nightly, drills a restore and takes a pulse.</li>
+  </ol>
+  <div class="note">As of 30 October 2026: 18 projects, about 49,000 units, 155 live facts, nightly export and restore drill passing. The hooks went live on 29 October, so the usage numbers are days old, and the first digest says plainly that most of last week's commits happened outside a hooked session.</div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>What the evals showed</h2>
+  <p>Twelve pre-registered runs, graded blind against owner-approved answers.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Question set</th><th>Plain grep</th><th>Groundworks agent</th></tr>
+    <tr><td>47 questions answered plainly in the repos</td><td>35 to 39 correct</td><td>36 to 39 correct</td></tr>
+    <tr><td>20 lessons that live only in the owner's notes</td><td>8 correct, 8 confidently wrong</td><td>18 correct, 1 confidently wrong, about half the tokens</td></tr>
+  </table></div>
+  <p>Where grep can already find the text, Groundworks ties it. Where the lesson lives only in notes, it separates. Whether knowledge builds up in real daily use is the next thing to measure.</p>
+</div></section>
+
+<section><div class="wrap">
+  <h2>What is planned</h2>
+  <div class="grid">
+    <div class="card"><h3>A desktop window</h3><p>A private build on Nimbalyst (MIT): sessions, chat, changes, and a Groundworks health tab, with the plugin and hooks pinned on.</p></div>
+    <div class="card"><h3>Consult-first, forced</h3><p>A hint on every prompt with what is already known, and a store lookup before web research or delegation.</p></div>
+    <div class="card"><h3>Checks itself</h3><p>Red conditions sent to a notification and a webhook, with a heartbeat elsewhere so a dead machine is noticed too.</p></div>
+    <div class="card"><h3>Grow, then prune</h3><p>The store may grow. One command removes a project and all its data, dry run first, exported and drilled before it deletes.</p></div>
+    <div class="card"><h3>A fresh eval</h3><p>A new question set drawn from real asks, and the window compared against VS Code on it.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Install</h2>
+<pre>cargo install --path rust/crates/gw-mcp --locked
+claude plugin marketplace add &lt;path to the repository&gt;
+claude plugin install groundworks@groundworks
+groundworks selftest</pre>
+  <p>Then open a project in Claude Code and run <code>/groundworks:init</code>.</p>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  Groundworks is MIT licensed. SurrealDB, installed separately, is under the Business Source License 1.1.
+  <a href="https://github.com/t3chnicallyinclined/groundworks">Source on GitHub</a>.
+</div></footer>
+</body>
+</html>
