@@ -836,12 +836,43 @@ fn brief(cfg: &Panel) -> String {
 }
 
 /// Open (and lock) a panel in the project's store.
-pub fn open(store: &Store, project: &str, cfg: &Value, settings: Option<&Value>, by: &str) -> Result<String> {
+/// `experts` are the experts visible in `project` (`ops::visible_experts`): a seat whose lens names one of
+/// them gets that expert, its source shown; a seat whose lens names none is told so, since another
+/// project's own expert is not a lens here.
+pub fn open(
+    store: &Store,
+    project: &str,
+    cfg: &Value,
+    settings: Option<&Value>,
+    by: &str,
+    experts: &[crate::intake::Expert],
+) -> Result<String> {
     let panel = validate(cfg, settings)?;
     let config = serde_json::to_string(&panel)?;
     let digest = panel.digest();
     let id = store.panel_create(project, &config, &digest, by)?;
-    Ok(format!("{id} | LOCKED sha256={digest}\n{}", brief(&panel)))
+    let mut out = format!("{id} | LOCKED sha256={digest}\n{}", brief(&panel));
+    if let Some(line) = lenses_line(&panel, project, experts) {
+        out.push('\n');
+        out.push_str(&line);
+    }
+    Ok(out)
+}
+
+/// The seats' lenses resolved against the experts visible in `project`; None when no seat names a lens.
+fn lenses_line(cfg: &Panel, project: &str, experts: &[crate::intake::Expert]) -> Option<String> {
+    let seats: Vec<String> = cfg
+        .seats
+        .iter()
+        .filter_map(|s| {
+            let lens = s.lens.as_deref()?;
+            Some(match experts.iter().find(|e| e.name == lens) {
+                Some(e) => format!("{} = {lens} [{}]", s.id, e.source),
+                None => format!("{} = {lens} (not an expert visible in {project})", s.id),
+            })
+        })
+        .collect();
+    (!seats.is_empty()).then(|| format!("Lenses: {}", seats.join("; ")))
 }
 
 /// A panel as stored: config verified against its digest.

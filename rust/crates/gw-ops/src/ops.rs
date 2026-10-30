@@ -1249,6 +1249,31 @@ pub fn expert_dirs() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// The experts visible in `project` (init design S1): its own `.claude/agents/` (`project:<name>`, unless
+/// `[intake] claude_setup = false`), then every global expert it does not override by name, as
+/// [`crate::claude_setup::merge`] decides; with the project's setup report (disabled folders, reserved
+/// names). With no project, the global experts only, so a project's own expert is visible in its project
+/// and in no other.
+pub fn visible_experts(
+    home: &Home,
+    project: Option<&str>,
+) -> Result<(Vec<crate::intake::Expert>, crate::claude_setup::Local)> {
+    let mut global = crate::intake::load_experts(&expert_dirs())?;
+    let Some(name) = project else {
+        global.sort_by(|a, b| a.name.cmp(&b.name));
+        return Ok((global, Default::default()));
+    };
+    let registry = Registry::load(home)?;
+    let project = registry.project(name)?;
+    let dir = project.path(&home.workspace);
+    let local = if home.config.intake.claude_setup() && dir.is_dir() {
+        crate::claude_setup::project_experts(&dir, &project.name)?
+    } else {
+        Default::default()
+    };
+    Ok((crate::claude_setup::merge(&global, &local.experts), local))
+}
+
 /// Ingest one registered project: its files and last `max_commits` commits, organised by kind and
 /// by the experts whose definitions cite its paths. Also refreshes the expert directory.
 pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> Result<String> {
@@ -1559,13 +1584,36 @@ pub fn grep(home: &Home, store: &Store, project: Option<&str>, needle: &str, lim
     Ok(out)
 }
 
-/// The expert directory: every expert with its summary.
-pub fn experts() -> Result<String> {
-    let experts = crate::intake::load_experts(&expert_dirs())?;
-    Ok(experts
+/// The expert directory: one line per expert, `<name> [<source>]: <summary, at most 160 characters>`, the
+/// source being `global` or `project:<name>`. With a project, the experts visible there
+/// ([`visible_experts`]): its own, which win a name, then the global ones; then one line naming any of
+/// its agents that took a reserved team name, which are not loaded.
+pub fn experts(home: &Home, project: Option<&str>) -> Result<String> {
+    let (experts, local) = visible_experts(home, project)?;
+    let mut out: String = experts
         .iter()
-        .map(|e| format!("{}: {}\n", e.name, e.summary.chars().take(160).collect::<String>()))
-        .collect())
+        .map(|e| {
+            format!(
+                "{} [{}]: {}\n",
+                e.name,
+                e.source,
+                e.summary.chars().take(160).collect::<String>()
+            )
+        })
+        .collect();
+    if let (Some(project), false) = (project, local.reserved.is_empty()) {
+        writeln!(
+            out,
+            "reserved team names in {project}'s .claude/agents, not loaded (the team's definition stands): {}",
+            local
+                .reserved
+                .iter()
+                .map(|r| format!("{} ({})", r.name, r.file))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )?;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

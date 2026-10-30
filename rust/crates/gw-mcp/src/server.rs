@@ -87,12 +87,19 @@ pub struct NoteArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct LensArgs {
-    /// The lens (any expert's name). Without it, every lens is listed.
+    /// The lens (any expert visible in the project). Without it, every lens is listed.
     pub lens: Option<String>,
-    /// The project to read through the lens.
+    /// The project to read through the lens; without a lens, list the lenses visible in it.
     pub project: Option<String>,
     /// Newest N findings and attacks (default 100).
     pub limit: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ExpertListArgs {
+    /// List the experts visible in this project: its own (.claude/agents) and the global ones. Without it,
+    /// the global experts only.
+    pub project: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -555,16 +562,16 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Lenses: every expert is one. Without a lens, list them with their checks and standard. With a lens and a project, read the project through it: findings that pass its standard, those that no longer do, and every attack (disputes/supports) on them, kept side by side."
+        description = "Lenses: every expert is one. Without a lens, list them with their checks, standard and source: the global ones, or with a project the ones visible there (its own experts and the global ones). With a lens and a project, read the project through it: findings that pass its standard, those that no longer do, and every attack (disputes/supports) on them, kept side by side."
     )]
     async fn lens(&self, args: Parameters<LensArgs>) -> Result<String, String> {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
         store::blocking(move || match (a.lens.as_deref(), a.project.as_deref()) {
             (Some(lens), Some(project)) => gw_ops::lens::view(&home, &store, project, lens, a.limit.unwrap_or(100)),
-            (None, None) => gw_ops::lens::list(),
-            _ => Err(anyhow::anyhow!(
-                "give both lens and project to read through a lens, or neither to list lenses"
+            (None, project) => gw_ops::lens::list(&home, project),
+            (Some(_), None) => Err(anyhow::anyhow!(
+                "give a project to read through a lens (a lens reads one project), or no lens to list lenses"
             )),
         })
         .await
@@ -583,12 +590,14 @@ impl Groundworks {
                 .name
                 .clone();
             let settings = gw_ops::panel::owner_settings(&home)?;
+            let (experts, _) = ops::visible_experts(&home, Some(&project))?;
             gw_ops::panel::open(
                 &store,
                 &project,
                 &a.panel,
                 settings.as_ref(),
                 a.by.as_deref().unwrap_or("agent"),
+                &experts,
             )
         })
         .await
@@ -637,9 +646,15 @@ impl Groundworks {
         .map_err(fail)
     }
 
-    #[tool(description = "The expert directory: every expert agent with a summary of what it is expert in.")]
-    async fn expert_list(&self) -> Result<String, String> {
-        ops::experts().map_err(fail)
+    #[tool(
+        description = "The expert directory: one line per expert, `name [source]: summary`, source `global` or `project:<name>`. With a project, the experts visible there: its own (which win a name) and the global ones, plus a line naming any of its agents that took a reserved team name (gw-*, groundworks), which are not loaded."
+    )]
+    async fn expert_list(&self, args: Parameters<ExpertListArgs>) -> Result<String, String> {
+        let a = args.0;
+        let home = Arc::clone(&self.home);
+        store::blocking(move || ops::experts(&home, a.project.as_deref()))
+            .await
+            .map_err(fail)
     }
 
     #[tool(description = "Check the registry, templates, secret references, profile and store from this machine.")]

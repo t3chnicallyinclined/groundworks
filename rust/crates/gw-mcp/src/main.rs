@@ -177,8 +177,11 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
-    /// The expert directory.
-    Experts,
+    /// The expert directory: the global experts, or with --project the ones visible in that project.
+    Experts {
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Open an ask packet: the best candidates for a question, in full, numbered.
     Ask {
         question: String,
@@ -746,7 +749,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             .await?;
             (text, true)
         }
-        Command::Experts => (ops::experts()?, true),
+        Command::Experts { project } => (ops::experts(&home, project.as_deref())?, true),
         Command::Grep {
             pattern,
             project,

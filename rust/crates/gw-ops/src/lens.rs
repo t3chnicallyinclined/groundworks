@@ -2,7 +2,8 @@
 //! (tag v0.2.0): a lens has a charter, a standard (never looser than the store's rules), and reading
 //! through it shows what passes the standard and, as Python's `drift`, what no longer does.
 //!
-//! Stated deviations: a lens is an expert definition (`~/.claude/agents/*.md`), not an instance-config
+//! Stated deviations: a lens is an expert definition (`~/.claude/agents/*.md`, and in its own project a
+//! project's `.claude/agents/*.md`, since 2026-10-30), not an instance-config
 //! entry, so every expert is a lens and there is one list of them. Its checks are the bold lead words of
 //! the bullets under `## What you check`; its standard is the frontmatter `lens-standard:` (CONFIRMED, or
 //! the default INFERRED: CONFIRMED or INFERRED, and live). Findings are facts that name the lens, and
@@ -15,7 +16,7 @@ use std::fmt::Write as _;
 use anyhow::{Result, bail};
 
 use crate::home::Home;
-use crate::intake::{Expert, load_experts};
+use crate::intake::Expert;
 use crate::registry::Registry;
 use crate::store::{FactRow, Store};
 
@@ -25,6 +26,8 @@ pub struct Lens {
     pub checks: Vec<String>,
     /// "CONFIRMED" or "INFERRED".
     pub standard: &'static str,
+    /// Where the expert is defined: `global` or `project:<name>`.
+    pub source: String,
 }
 
 impl Lens {
@@ -59,6 +62,7 @@ impl Lens {
             summary: e.summary.clone(),
             checks,
             standard,
+            source: e.source.clone(),
         }
     }
 
@@ -85,23 +89,33 @@ fn frontmatter<'a>(text: &'a str, key: &str) -> Option<&'a str> {
         .map(|v| v.trim().trim_matches('"'))
 }
 
-pub fn all() -> Result<Vec<Lens>> {
-    Ok(load_experts(&crate::ops::expert_dirs())?
+/// The lenses visible in `project` (its own experts and the global ones, [`crate::ops::visible_experts`]),
+/// or the global ones when no project is named.
+pub fn all(home: &Home, project: Option<&str>) -> Result<Vec<Lens>> {
+    Ok(crate::ops::visible_experts(home, project)?
+        .0
         .iter()
         .map(Lens::from_expert)
         .collect())
 }
 
-pub fn find(name: &str) -> Result<Lens> {
-    match all()?.into_iter().find(|l| l.name == name) {
+pub fn find(home: &Home, project: Option<&str>, name: &str) -> Result<Lens> {
+    match all(home, project)?.into_iter().find(|l| l.name == name) {
         Some(l) => Ok(l),
-        None => bail!("no lens {name:?}: every expert in the expert directory is a lens (expert_list)"),
+        None => match project {
+            Some(p) => bail!(
+                "no lens {name:?} in {p}: its lenses are its own experts and the global ones (expert_list project={p})"
+            ),
+            None => bail!(
+                "no lens {name:?}: every global expert is a lens (expert_list; a project's own experts need its project)"
+            ),
+        },
     }
 }
 
-/// Every lens, with its checks and standard.
-pub fn list() -> Result<String> {
-    let lenses = all()?;
+/// Every lens visible in `project` (or every global one), with its checks, standard and source.
+pub fn list(home: &Home, project: Option<&str>) -> Result<String> {
+    let lenses = all(home, project)?;
     if lenses.is_empty() {
         return Ok("no lenses: no expert definitions were found".into());
     }
@@ -109,7 +123,7 @@ pub fn list() -> Result<String> {
     for l in &lenses {
         writeln!(
             out,
-            "- {} (standard {}{}): checks {}",
+            "- {} (standard {}{}): checks {} [{}]",
             l.name,
             l.standard,
             if l.standard == "INFERRED" { " or CONFIRMED" } else { "" },
@@ -117,7 +131,8 @@ pub fn list() -> Result<String> {
                 "(none listed; asks its summary)".to_owned()
             } else {
                 l.checks.join("; ")
-            }
+            },
+            l.source
         )?;
     }
     Ok(out)
@@ -127,7 +142,7 @@ pub fn list() -> Result<String> {
 /// and every attack on them, so a disagreement is shown, never resolved by omission.
 pub fn view(home: &Home, store: &Store, project: &str, name: &str, limit: usize) -> Result<String> {
     let project = Registry::load(home)?.project(project)?.name.clone();
-    let lens = find(name)?;
+    let lens = find(home, Some(&project), name)?;
     let rows = store.lens_findings(&project, &lens.name, limit.clamp(1, 500))?;
     let (findings, attacks): (Vec<&FactRow>, Vec<&FactRow>) = rows
         .iter()
@@ -190,7 +205,7 @@ pub fn view(home: &Home, store: &Store, project: &str, name: &str, limit: usize)
 /// Open an ask packet through a lens: its question (or the lens's checks), tagged with the lens, followed by
 /// what the lens has already found there, so a reader attacks or adds rather than repeats.
 pub fn ask(home: &Home, store: &Store, lens: &str, question: Option<&str>, q: crate::ask::Query<'_>) -> Result<String> {
-    let l = find(lens)?;
+    let l = find(home, q.project, lens)?;
     let asked = question
         .map(str::trim)
         .filter(|t| !t.is_empty())

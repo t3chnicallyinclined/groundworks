@@ -1038,6 +1038,7 @@ the parser now accepts empty input
     supervisor_checks(exe, base, &mut c)?;
     claude_setup_checks(exe, base, &home, &mut c)?;
     init_safety_checks(exe, base, &home, &mut c)?;
+    project_expert_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1424,6 +1425,100 @@ fn init_safety_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> R
             && !err2
             && kept.contains("[fact] CONFIRMED rollback resimulates"),
         &format!("{kept}\n{capped}"),
+    );
+    Ok(())
+}
+
+/// The init design's S1 (2026-10-30), both ways: lens, expert_list and panel_open read the experts visible
+/// in the project named (its own `.claude/agents` and the global ones). demo's own expert (`demo-local`,
+/// written by the setup checks) is a lens and an expert in demo, and in red and in the global list it is not.
+fn project_expert_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    let (home_env, experts_env, claude_env) = (
+        home.display().to_string(),
+        base.join("experts").display().to_string(),
+        base.join("claude").display().to_string(),
+    );
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let s = &mut client;
+
+    let (err, demo) = s.call("lens", json!({"project": "demo"}))?;
+    let (err_red, red) = s.call("lens", json!({"project": "red"}))?;
+    let (err_all, all) = s.call("lens", json!({}))?;
+    c.check(
+        "the lens list of a project shows its own expert with its source; another project's list and the global list do not",
+        !err && !err_red
+            && !err_all
+            && demo.contains("- demo-local (standard INFERRED or CONFIRMED)")
+            && demo.contains("[project:demo]")
+            && demo.contains("checks Rollback [global]")
+            && !red.contains("demo-local")
+            && red.contains("selftest-reviewer")
+            && !all.contains("demo-local"),
+        &format!("{demo}\n--\n{red}\n--\n{all}"),
+    );
+
+    let (err, demo) = s.call("expert_list", json!({"project": "demo"}))?;
+    let (err_red, red) = s.call("expert_list", json!({"project": "red"}))?;
+    let (err_all, all) = s.call("expert_list", json!({}))?;
+    c.check(
+        "expert_list with a project tags each expert's source and names the reserved agents it did not load",
+        !err && !err_red
+            && !err_all
+            && demo.contains("demo-local [project:demo]: The demo's own expert.")
+            && demo.contains("gw-security [global]: The team's security engineer.")
+            && demo.contains(
+                "reserved team names in demo's .claude/agents, not loaded (the team's definition stands): gw-security (.claude/agents/gw-security.md)",
+            )
+            && !red.contains("demo-local")
+            && red.contains("selftest-expert [global]: Owns the demo notes and guide.")
+            && !red.contains("reserved team names")
+            && !all.contains("demo-local")
+            && all.contains("selftest-reviewer [global]: Reviews the demo."),
+        &format!("{demo}\n--\n{red}\n--\n{all}"),
+    );
+
+    let (err, view) = s.call("lens", json!({"lens": "demo-local", "project": "demo"}))?;
+    let (err_red, refused) = s.call("lens", json!({"lens": "demo-local", "project": "red"}))?;
+    let (err_ask, asked) = s.call(
+        "ask",
+        json!({"question": "what does the parser reject", "project": "red", "lens": "demo-local"}),
+    )?;
+    c.check(
+        "a project's own expert reads its project as a lens, and is no lens in another project",
+        !err && view.starts_with("lens demo-local on demo")
+            && err_red
+            && refused.contains("no lens \"demo-local\" in red")
+            && err_ask
+            && asked.contains("no lens \"demo-local\" in red"),
+        &format!("{view}\n--\n{refused}\n--\n{asked}"),
+    );
+
+    let panel = |project: &str| {
+        json!({"project": project, "panel": {"panel_id": format!("selftest-lenses-{project}"), "target": "notes.txt",
+               "question": "Is the note right?", "options": ["affirm", "reverse"],
+               "objection_categories": ["record", "risk", "cost"],
+               "seats": [{"id": "seat_x", "lens": "demo-local"}, {"id": "seat_y", "lens": "selftest-reviewer"},
+                         {"id": "seat_z"}]}})
+    };
+    let (err, demo) = s.call("panel_open", panel("demo"))?;
+    let (err_red, red) = s.call("panel_open", panel("red"))?;
+    c.check(
+        "panel_open resolves seat lenses against the project's experts: its own in it, not in another",
+        !err && !err_red
+            && demo.contains("Lenses: seat_x = demo-local [project:demo]; seat_y = selftest-reviewer [global]")
+            && red.contains(
+                "Lenses: seat_x = demo-local (not an expert visible in red); seat_y = selftest-reviewer [global]",
+            ),
+        &format!("{demo}\n--\n{red}"),
     );
     Ok(())
 }
