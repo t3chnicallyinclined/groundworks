@@ -516,6 +516,9 @@ enum CostAction {
         out: std::path::PathBuf,
         #[arg(long)]
         flat: bool,
+        /// The run's key salt (hex); a random one when absent. Give the oracle the same salt.
+        #[arg(long)]
+        salt: Option<String>,
     },
 }
 
@@ -659,17 +662,22 @@ fn cost(
             until,
             out,
             flat,
+            salt,
         }) => {
             opts.cache = false;
             opts.flat_subagents = flat;
             let started = std::time::Instant::now();
             let (since, until) = (meter::arg_time(&since)?, meter::arg_time(&until)?);
             let corpus = meter::load(home, store, &opts)?;
-            let totals = meter::folder_totals(&corpus, since, until);
+            let salt = match salt {
+                Some(s) => s,
+                None => meter::random_salt()?,
+            };
+            let totals = meter::folder_totals(&corpus, since, until, &salt);
             std::fs::write(&out, serde_json::to_string_pretty(&totals)?)?;
             Ok((
                 format!(
-                    "{} folder(s), {} transcript(s), {} ms on {}; written to {}",
+                    "{} folder(s), {} transcript(s), {} ms on {}; keys salted with {salt}; written to {}",
                     totals.len(),
                     corpus.stats.files,
                     started.elapsed().as_millis(),

@@ -298,8 +298,9 @@ pub struct ReadStats {
     pub search_bytes_after_ask: u64,
 }
 
-/// Everything the meter keeps of one transcript file. Counts, times, ids and names only.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Everything the meter keeps of one transcript file. Counts, times, ids and names only. No `Debug`:
+/// with `--rereads` it holds keyed Read hashes in memory, which nothing may print (gw-security 2026-10-30).
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct FileScan {
     pub session: String,
     /// The subagent's file stem (and its sub-folder under `subagents/`), None for the main session.
@@ -366,6 +367,9 @@ impl FileScan {
         self.reads.reread_files = files;
         self.reads.reread_calls = calls;
         self.reads.reread_bytes = bytes;
+        // The hashes have done their job: nothing keeps them past the file.
+        self.read_keys.clear();
+        self.read_ids.clear();
     }
 
     /// The label most turns carry (the first line's when there are none).
@@ -608,8 +612,10 @@ impl<'de> Deserialize<'de> for Marked {
     }
 }
 
-/// A tool input, read only with [`Reads::rereads`]: a hash of (file_path, offset, limit), the path held
-/// in memory for the hash and dropped; every other field is skipped unread.
+/// A tool input, read only with [`Reads::rereads`]: a keyed hash of (file_path, offset, limit), the path
+/// held in memory for the hash and dropped; every other field is skipped unread. An input that is not an
+/// object, or a file_path that is not a string, gives no key and costs the line nothing (the line's
+/// usage still counts).
 struct ReadKey(Option<u64>);
 
 impl<'de> Deserialize<'de> for ReadKey {
@@ -617,23 +623,73 @@ impl<'de> Deserialize<'de> for ReadKey {
         if !reads().rereads {
             return IgnoredAny::deserialize(d).map(|_| ReadKey(None));
         }
-        #[derive(Deserialize)]
-        struct Input<'a> {
-            #[serde(borrow, default)]
-            file_path: Option<Cow<'a, str>>,
-            #[serde(default)]
-            offset: Option<Value>,
-            #[serde(default)]
-            limit: Option<Value>,
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ReadKey;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a tool input")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<ReadKey, A::Error> {
+                let (mut path, mut offset, mut limit) = (None, String::new(), String::new());
+                while let Some(key) = m.next_key::<Cow<'de, str>>()? {
+                    match key.as_ref() {
+                        "file_path" => path = m.next_value::<Value>()?.as_str().map(str::to_owned),
+                        "offset" => offset = m.next_value::<Value>()?.to_string(),
+                        "limit" => limit = m.next_value::<Value>()?.to_string(),
+                        _ => {
+                            m.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ReadKey(path.map(|p| read_hash(&p, &offset, &limit))))
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut s: A) -> Result<ReadKey, A::Error> {
+                while s.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(ReadKey(None))
+            }
+            fn visit_str<E: de::Error>(self, _: &str) -> Result<ReadKey, E> {
+                Ok(ReadKey(None))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<ReadKey, E> {
+                Ok(ReadKey(None))
+            }
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<ReadKey, E> {
+                Ok(ReadKey(None))
+            }
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<ReadKey, E> {
+                Ok(ReadKey(None))
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<ReadKey, E> {
+                Ok(ReadKey(None))
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<ReadKey, E> {
+                Ok(ReadKey(None))
+            }
         }
-        let input = Input::deserialize(d)?;
-        Ok(ReadKey(input.file_path.map(|p| {
-            let p = p.to_lowercase().replace('\\', "/");
-            let off = input.offset.map(|v| v.to_string()).unwrap_or_default();
-            let lim = input.limit.map(|v| v.to_string()).unwrap_or_default();
-            hash64(&[p.as_bytes(), b"\0", off.as_bytes(), b"\0", lim.as_bytes()])
-        })))
+        d.deserialize_any(V)
     }
+}
+
+/// A random key per process for the Read path hash (gw-security 2026-10-30): the hash lives in memory
+/// only, and without the key it cannot confirm a guessed path even if one ever leaked.
+static READ_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(|| {
+    let mut key = [0u8; 32];
+    getrandom::fill(&mut key).expect("OS randomness for the meter's Read key");
+    key
+});
+
+/// The keyed hash of one Read: (path, case- and separator-folded; offset; limit) under [`READ_KEY`].
+pub fn read_hash(path: &str, offset: &str, limit: &str) -> u64 {
+    let path = path.to_lowercase().replace('\\', "/");
+    hash64(&[
+        READ_KEY.as_slice(),
+        b"\0",
+        path.as_bytes(),
+        b"\0",
+        offset.as_bytes(),
+        b"\0",
+        limit.as_bytes(),
+    ])
 }
 
 fn hash64(parts: &[&[u8]]) -> u64 {
@@ -1239,7 +1295,9 @@ pub fn price_turn(model: &str, input: u64, cache_write: u64, cache_read: u64, ou
 /// The numbers for one scope (a label, or everything) over one span. Docs: docs/METRICS.md, `cost`.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Kpis {
+    /// Claude Code session ids with a priced turn in scope (a main transcript and its subagents are one).
     pub sessions: u64,
+    /// Transcript files (main and subagent) with a priced turn in scope.
     pub contexts: u64,
     pub turns: u64,
     pub human_turns: u64,
@@ -1249,6 +1307,7 @@ pub struct Kpis {
     pub output: u64,
     /// input + cache read + cache write + output.
     pub tokens: u64,
+    /// tokens / sessions, subagent tokens included.
     pub tokens_per_session: f64,
     /// tokens / human turns; 0 when there were none.
     pub tokens_per_human_turn: f64,
@@ -1494,6 +1553,50 @@ pub struct AskUse {
     pub gw_tokens_per_passed: Option<f64>,
 }
 
+/// What a "session" is, counted (all time, fenced transcripts excluded). A session is one Claude Code
+/// session id: its main transcript `<id>.jsonl` and every subagent transcript under `<id>/subagents/`,
+/// counted when at least one of them holds a priced turn. It is not the hooks' session row.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranscriptCounts {
+    pub main: u64,
+    pub subagent: u64,
+    pub main_with_turns: u64,
+    pub subagent_with_turns: u64,
+    /// Distinct session ids with a priced turn in any of their transcripts.
+    pub sessions: u64,
+    /// Of those, sessions whose turns are all in subagent transcripts (the main transcript pruned or empty).
+    pub sessions_subagent_only: u64,
+}
+
+pub fn transcript_counts(c: &Corpus) -> TranscriptCounts {
+    let mut t = TranscriptCounts::default();
+    let mut with_main: HashSet<&str> = HashSet::new();
+    let mut any: HashSet<&str> = HashSet::new();
+    for (i, f) in c.scans.iter().enumerate() {
+        if f.fenced {
+            continue;
+        }
+        let main = c.sources[i].main;
+        let has = c.kept[i].iter().any(|k| *k);
+        if main {
+            t.main += 1;
+            t.main_with_turns += u64::from(has);
+        } else {
+            t.subagent += 1;
+            t.subagent_with_turns += u64::from(has);
+        }
+        if has {
+            any.insert(f.session.as_str());
+            if main {
+                with_main.insert(f.session.as_str());
+            }
+        }
+    }
+    t.sessions = any.len() as u64;
+    t.sessions_subagent_only = any.difference(&with_main).count() as u64;
+    t
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CostLine {
     pub at: String,
@@ -1502,6 +1605,8 @@ pub struct CostLine {
     pub reads: Reads,
     pub bytes_per_token: f64,
     pub scan: ScanStats,
+    #[serde(default)]
+    pub transcripts: TranscriptCounts,
     pub totals: Totals,
     pub per_project: BTreeMap<String, ProjectCost>,
     pub asks: AskUse,
@@ -1629,6 +1734,7 @@ pub fn take(home: &Home, store: &Store, opts: &Options) -> Result<CostLine> {
         reads: r,
         bytes_per_token: BYTES_PER_TOKEN,
         scan: corpus.stats.clone(),
+        transcripts: transcript_counts(&corpus),
         totals,
         per_project,
         asks,
@@ -1785,10 +1891,16 @@ pub fn render(line: &CostLine) -> String {
     );
     let _ = writeln!(
         out,
-        "reads: overhead {} | rereads {} (both off until gw-security signs them); token estimates use {} bytes/token",
+        "reads: overhead {} | rereads {} (rereads off by default until its gw-security changes land); token estimates use {} bytes/token",
         if line.reads.overhead { "ON" } else { "off" },
         if line.reads.rereads { "ON" } else { "off" },
         line.bytes_per_token
+    );
+    let t = &line.transcripts;
+    let _ = writeln!(
+        out,
+        "sessions = Claude Code session ids (a main transcript and its subagent transcripts) with a priced turn: {} all time, from {} main transcripts ({} with a turn) and {} subagent transcripts ({} with a turn); {} session(s) have turns only in subagents",
+        t.sessions, t.main, t.main_with_turns, t.subagent, t.subagent_with_turns, t.sessions_subagent_only
     );
     for (label, k) in [
         (format!("{}d", line.window_days), w),
@@ -1797,7 +1909,7 @@ pub fn render(line: &CostLine) -> String {
     ] {
         let _ = writeln!(
             out,
-            "{label:>4}  sessions {} | human turns {} | tokens {} (in {}, cache read {}, cache write {}, out {}) | per human turn {} | per session {} | main ctx p90 {} | ${:.0} ({} unpriced turns)",
+            "{label:>4}  sessions {} | human turns {} | tokens {} (in {}, cache read {}, cache write {}, out {}) | per human turn {} | per session (with its subagents) {} | main ctx p90 {} | ${:.0} ({} unpriced turns)",
             k.sessions,
             k.human_turns,
             fmt_n(k.tokens as f64),
@@ -2270,16 +2382,25 @@ fn is_json(p: &Path) -> bool {
     p.extension().is_some_and(|e| e == "json")
 }
 
+/// A fresh salt for one differential run (16 random bytes, hex).
+pub fn random_salt() -> Result<String> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("no OS randomness: {e}"))?;
+    Ok(crate::store::hex(&b))
+}
+
 /// The differential's half: per transcript folder, its totals over [since, until), keyed by the first 12
-/// hex of sha256(folder name) so no folder name is printed or written.
-pub fn folder_totals(c: &Corpus, since: i64, until: i64) -> BTreeMap<String, [u64; 5]> {
+/// hex of sha256(salt, folder name) with a salt chosen per run, so no folder name is printed or written
+/// and a key from one run confirms nothing in another (gw-security 2026-10-30).
+pub fn folder_totals(c: &Corpus, since: i64, until: i64, salt: &str) -> BTreeMap<String, [u64; 5]> {
     let span = Span(since, until);
     let mut out: BTreeMap<String, [u64; 5]> = BTreeMap::new();
     for (i, t) in c.turns() {
         if !span.has(t.1) {
             continue;
         }
-        let key = crate::store::sha256_hex(&[c.folders[c.sources[i].folder].as_bytes()])[..12].to_owned();
+        let key = crate::store::sha256_hex(&[salt.as_bytes(), b"\0", c.folders[c.sources[i].folder].as_bytes()])[..12]
+            .to_owned();
         let e = out.entry(key).or_default();
         e[0] += 1;
         e[1] += t.4;
@@ -2618,6 +2739,129 @@ mod tests {
         // A different fingerprint ignores the cache.
         let other = corpus(&home, &root, Reads::default(), Some((&cache, "other")));
         assert_eq!(other.stats.files_cached, 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_session_is_a_main_transcript_with_its_subagents_and_fenced_files_are_not_counted() {
+        let (base, home) = fixture("sessions");
+        let root = transcripts(&base);
+        let c = corpus(&home, &root, Reads::default(), None);
+        // demo's main + its nested subagent are one session; the root's clean transcript is another;
+        // the wandering transcript was dropped by the fence and is counted nowhere.
+        assert_eq!(
+            transcript_counts(&c),
+            TranscriptCounts {
+                main: 2,
+                subagent: 1,
+                main_with_turns: 2,
+                subagent_with_turns: 1,
+                sessions: 2,
+                sessions_subagent_only: 0,
+            }
+        );
+        let all = kpis(&c, None, Span::ALL, Reads::default(), &BTreeMap::new());
+        assert_eq!((all.sessions, all.contexts), (2, 3));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rereads_on_or_off_the_totals_are_the_same_even_for_inputs_that_are_not_objects() {
+        let (base, home) = fixture("odd");
+        let root = transcripts(&base);
+        let demo = base.join("ws/demo");
+        let odd = [
+            json!([{"type": "tool_use", "id": "o1", "name": "Read", "input": "not an object"}]),
+            json!([{"type": "tool_use", "id": "o2", "name": "Read", "input": {"file_path": 42, "offset": [1]}}]),
+            json!([{"type": "tool_use", "id": "o3", "name": "Read", "input": [1, 2]}]),
+        ];
+        let body: String = odd
+            .into_iter()
+            .enumerate()
+            .map(|(n, blocks)| {
+                assistant(
+                    &demo,
+                    &format!("2026-10-20T12:00:0{n}.000Z"),
+                    &format!("odd{n}"),
+                    &format!("odd{n}"),
+                    "claude-opus-5-5",
+                    [1, 0, 0, 1],
+                    blocks,
+                )
+            })
+            .collect();
+        std::fs::write(
+            root.join(slug_form(&demo.display().to_string())).join("odd.jsonl"),
+            body,
+        )
+        .unwrap();
+        let on = Reads {
+            overhead: true,
+            rereads: true,
+        };
+        let off = kpis(
+            &corpus(&home, &root, Reads::default(), None),
+            None,
+            Span::ALL,
+            Reads::default(),
+            &BTreeMap::new(),
+        );
+        let with = kpis(&corpus(&home, &root, on, None), None, Span::ALL, on, &BTreeMap::new());
+        assert_eq!((off.turns, off.tokens), (with.turns, with.tokens));
+        assert_eq!(
+            off.tokens,
+            135 + 12 + 5 + 3 + 6,
+            "the three odd lines still count their usage"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn no_read_hash_reaches_cost_jsonl_or_the_cache() {
+        let (base, home) = fixture("leak");
+        let root = transcripts(&base);
+        let on = Reads {
+            overhead: true,
+            rereads: true,
+        };
+        let cache = cache_path(&home);
+        let c = corpus(&home, &root, on, Some((&cache, "fp")));
+        let mut line = CostLine::default();
+        line.totals.all_time = kpis(&c, None, Span::ALL, on, &BTreeMap::new());
+        line.transcripts = transcript_counts(&c);
+        assert_eq!(
+            line.totals.all_time.reread_calls,
+            Some(2),
+            "the fixture's file was read three times"
+        );
+        let written = record(&home, &line).unwrap();
+        let path = format!("{}/notes.txt", base.join("ws/demo").display());
+        let h = read_hash(&path, "", "");
+        let forms = [
+            h.to_string(),
+            format!("{h:016x}"),
+            format!("{h:x}"),
+            (h as i64).to_string(),
+        ];
+        for file in [written, cache] {
+            let bytes = std::fs::read_to_string(&file).unwrap();
+            assert!(!bytes.is_empty());
+            for f in &forms {
+                assert!(!bytes.contains(f.as_str()), "a Read hash reached {}", file.display());
+            }
+        }
+        // The key is per process: the same path hashes differently under another key (here, none).
+        assert_ne!(
+            h,
+            hash64(&[
+                b"\0",
+                path.to_lowercase().replace('\\', "/").as_bytes(),
+                b"\0",
+                b"",
+                b"\0",
+                b""
+            ])
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
