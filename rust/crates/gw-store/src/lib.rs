@@ -81,6 +81,10 @@ pub const SCHEMA: &[(&str, &str)] = &[
         "0014_global_telemetry.surql",
         include_str!("../schema/0014_global_telemetry.surql"),
     ),
+    (
+        "0015_global_client_window.surql",
+        include_str!("../schema/0015_global_client_window.surql"),
+    ),
 ];
 
 /// Created by the migration engine itself, before the first file, so the version can be read on any database.
@@ -267,6 +271,22 @@ pub fn current_version(root: &Db) -> Result<Option<Value>> {
     root.sql(BOOTSTRAP, None)?;
     let rows = root.sql("SELECT * FROM ONLY schema_version:current;", Some(1))?;
     Ok(rows.into_iter().next().filter(|v| !v.is_null()))
+}
+
+/// Whether the namespace `db` is on already holds every compiled-in migration of its scope, read through
+/// any connection allowed to select `schema_version` (a member is). Read-only: no bootstrap, no root, so
+/// a short-lived process (a hook) can skip the root migration round trips when there is nothing to do.
+/// A never-migrated database, another product or major, or a missing file reads as false.
+pub fn is_current(db: &Db, ns: &str) -> Result<bool> {
+    let scope = scope_of(ns)?;
+    let latest = migrations(scope, SCHEMA)?.last().map_or(0, |(n, _, _)| *n);
+    let rows = db.sql("SELECT * FROM ONLY schema_version:current;", Some(1))?;
+    Ok(rows.first().is_some_and(|v| {
+        v["product"] == PRODUCT
+            && v["scope"] == scope.as_str()
+            && v["major"].as_i64() == Some(SCHEMA_MAJOR)
+            && v["applied"].as_i64() == Some(latest)
+    }))
 }
 
 /// Apply every migration of `scope` above the recorded one, in order, from `files`. Returns the

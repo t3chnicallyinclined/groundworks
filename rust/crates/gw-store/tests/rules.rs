@@ -4,7 +4,7 @@
 
 use gw_core::db::{Db, DbError};
 use gw_store::testkit::Throwaway;
-use gw_store::{GLOBAL_NS, SCHEMA, Scope, connect_member, current_version, migrate};
+use gw_store::{GLOBAL_NS, SCHEMA, Scope, connect_member, current_version, is_current, migrate};
 
 /// One server with `global`, `proj_a` and `proj_b` migrated, and `owner1`/`agent1` in each.
 struct Estate {
@@ -86,6 +86,29 @@ fn migrations_apply_once_and_a_failed_file_rolls_back() {
         tables["tables"].get("ok_table").is_none(),
         "the failed file's first statement rolled back"
     );
+}
+
+/// The hooks' fast path trusts `is_current` to skip root: it must say yes only on a namespace that holds
+/// every file, read as a member, and no on one a file behind or never migrated.
+#[test]
+fn is_current_reads_true_only_when_every_file_is_applied() {
+    let estate = Estate::new();
+    assert!(is_current(&estate.agent(GLOBAL_NS), GLOBAL_NS).unwrap());
+    assert!(is_current(&estate.agent("proj_a"), "proj_a").unwrap());
+    // A namespace one file behind (as when a newer binary meets an older store) is not current.
+    let root = estate.root("proj_b");
+    root.sql("UPDATE schema_version:current SET applied -= 1;", None)
+        .unwrap();
+    assert!(!is_current(&estate.agent("proj_b"), "proj_b").unwrap());
+    // Never migrated: no row (or no table) is not current, whatever the error path says.
+    let fresh = estate.root("proj_fresh");
+    fresh
+        .sql(
+            "DEFINE NAMESPACE IF NOT EXISTS proj_fresh; USE NS proj_fresh; DEFINE DATABASE IF NOT EXISTS gw;",
+            None,
+        )
+        .unwrap();
+    assert!(!is_current(&fresh, "proj_fresh").unwrap_or(false));
 }
 
 #[test]

@@ -252,6 +252,24 @@ fn build_home(base: &Path, url: &str) -> Result<PathBuf> {
         include_str!("../../../../plugin/hooks/hooks.json"),
     )?;
     std::fs::write(cache.join("deny.toml"), gw_ops::hook::DEFAULT_RULES)?;
+    let plugin_root = claude.join("plugins/cache/groundworks/groundworks/0.5.0");
+    std::fs::create_dir_all(plugin_root.join(".claude-plugin"))?;
+    std::fs::create_dir_all(plugin_root.join("agents"))?;
+    std::fs::write(
+        plugin_root.join(".claude-plugin/plugin.json"),
+        include_str!("../../../../plugin/.claude-plugin/plugin.json"),
+    )?;
+    std::fs::write(
+        plugin_root.join("agents/groundworks.md"),
+        include_str!("../../../../plugin/agents/groundworks.md"),
+    )?;
+    // The same plugin with `"agents": "./agents/"`, which Claude Code 2.1.300 rejects (dropping the plugin).
+    let dirform = base.join("claude-dirform");
+    copy_dir(&claude, &dirform)?;
+    let dirform_manifest = dirform.join("plugins/cache/groundworks/groundworks/0.5.0/.claude-plugin/plugin.json");
+    let mut manifest: Value = serde_json::from_str(include_str!("../../../../plugin/.claude-plugin/plugin.json"))?;
+    manifest["agents"] = json!("./agents/");
+    std::fs::write(&dirform_manifest, manifest.to_string())?;
     std::fs::create_dir_all(claude.join("agents"))?;
     std::fs::write(
         claude.join("agents/stamped.md"),
@@ -772,6 +790,7 @@ the parser now accepts empty input
         "doctor finds no failures: store, installed plugin with hooks, stamped agents, VS Code server, machine",
         !err && text.contains("ok   store")
             && text.contains("ok   plugin")
+            && text.contains("ok   manifest")
             && text.contains("ok   agents: all 1")
             && text.contains("ok   vscode")
             && text.contains("ok   machine: SELFTEST")
@@ -803,9 +822,30 @@ the parser now accepts empty input
             && bad_text.contains("FAIL agents: 1 of 1")
             && bad_text.contains("unstamped.md")
             && bad_text.contains("warn vscode")
+            && bad_text.contains("FAIL manifest")
             && bad_text.contains("
-2 failure(s), "),
+3 failure(s), "),
         &bad_text,
+    );
+    let dirform = Command::new(exe)
+        .arg("doctor")
+        .env("GROUNDWORKS_HOME", &home_env)
+        .env("GROUNDWORKS_MACHINE", "SELFTEST")
+        .env("GROUNDWORKS_CLAUDE_DIR", base.join("claude-dirform"))
+        .env("GROUNDWORKS_VSCODE_MCP", base.join("mcp.json"))
+        .env_remove("GROUNDWORKS_START")
+        .stdin(Stdio::null())
+        .output()?;
+    let dirform_text = String::from_utf8_lossy(&dirform.stdout);
+    c.check(
+        "doctor FAILS on a plugin manifest that names its agents as a directory (Claude Code 2.1.300 drops the whole plugin)",
+        !dirform.status.success()
+            && dirform_text.contains("FAIL manifest")
+            && dirform_text.contains("not a .md file")
+            && dirform_text.contains("ok   plugin")
+            && dirform_text.contains("
+1 failure(s), "),
+        &dirform_text,
     );
 
     hook_checks(exe, base, &home, &owner, &mut c)?;
@@ -918,13 +958,14 @@ the parser now accepts empty input
             && w.journal_writes >= 3
             && w.writes_by_kind.get("gotcha").is_some_and(|n| *n >= 1)
             && w.store_rejections >= 2
-            && demo_use.is_some_and(|d| d.sessions >= 1 && d.commits == Some(1) && d.commits_without_sessions == Some(0)),
+            && demo_use.is_some_and(|d| d.sessions >= 1 && d.commits == Some(1) && d.commits_without_sessions == Some(0) && d.commits_unseen == Some(0)),
         &serde_json::to_string(&pulse.use_)?,
     );
     let red = gw_ops::pulse::digest(&pulse);
     c.check(
         "the digest is red on the hook error the broken deny list caused, and on nothing about demo's commits",
-        red.iter().any(|l| l.contains("hook_errors")) && !red.iter().any(|l| l.contains("demo:")),
+        red.iter().any(|l| l.contains("hook_errors"))
+            && !red.iter().any(|l| l.contains("demo:") && l.contains("commit")),
         &red.join(" | "),
     );
     let rendered = gw_ops::pulse::render(&pulse);
@@ -1035,6 +1076,7 @@ fn hook(
         "GROUNDWORKS_DENY_RULES",
         "GROUNDWORKS_START",
         "GROUNDWORKS_CLIENT",
+        "CLAUDE_CODE_ENTRYPOINT",
         "CLAUDE_ENV_FILE",
     ] {
         cmd.env_remove(key);
@@ -1209,6 +1251,73 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         again["hookSpecificOutput"]["additionalContext"].is_string()
             && owner.sessions_since(None)?.len() == sessions.len(),
         &again.to_string(),
+    );
+    // Outside any project, so these rows do not move demo's numbers in the pulse below.
+    let client_dir = base.join("client-probe");
+    std::fs::create_dir_all(&client_dir)?;
+    let client_cwd = client_dir.display().to_string();
+    let client_of = |id: &str, client: &str, entrypoint: Option<&str>| -> Result<String> {
+        let mut env = vec![("GROUNDWORKS_CLIENT", client)];
+        if let Some(e) = entrypoint {
+            env.push(("CLAUDE_CODE_ENTRYPOINT", e));
+        }
+        hook(
+            exe,
+            home,
+            "SessionStart",
+            &json!({"session_id": id, "cwd": client_cwd, "source": "startup"}),
+            &env,
+            None,
+        )?;
+        Ok(owner
+            .sessions_since(None)?
+            .iter()
+            .find(|r| r["id"].as_str().is_some_and(|i| i.contains(id)))
+            .and_then(|r| r["client"].as_str().map(str::to_owned))
+            .unwrap_or_default())
+    };
+    let (window, bogus, vscode) = (
+        client_of("s-client-window", "gw-window", None)?,
+        client_of("s-client-bogus", "not-a-client", None)?,
+        client_of("s-client-vscode", "", Some("claude-vscode"))?,
+    );
+    c.check(
+        "GROUNDWORKS_CLIENT=gw-window is recorded as gw-window (schema 0015); a name off the list is other; the entrypoint names vscode",
+        window == "gw-window" && bogus == "other" && vscode == "vscode",
+        &format!("{window} {bogus} {vscode}"),
+    );
+    // A linked git worktree of demo, beside the workspace as Nimbalyst lays them out (`<ws>_worktrees/<name>`).
+    let worktree = base.join("work_worktrees").join("feature");
+    let added = Command::new("git")
+        .args(["-C", &demo_s, "worktree", "add", "--detach", "-q"])
+        .arg(&worktree)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?
+        .success();
+    let out = hook(
+        exe,
+        home,
+        "SessionStart",
+        &json!({"session_id": "s-worktree", "cwd": worktree.join("docs").display().to_string(), "source": "startup"}),
+        &[],
+        None,
+    )?;
+    let wt_row = owner
+        .sessions_since(None)?
+        .into_iter()
+        .find(|r| r["id"].as_str().is_some_and(|id| id.contains("s-worktree")));
+    c.check(
+        "SessionStart in a git worktree of a registered project injects that project's journal and records the session against it",
+        added
+            && out["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("<groundworks-journal project=\"demo\""))
+            && wt_row
+                .as_ref()
+                .is_some_and(|r| r["project"] == "demo" && r["cwd_class"] == "registered"),
+        &format!("added={added} {out} {wt_row:?}"),
     );
 
     let fenced = base.join("work/fenced-matter").join(CANARY);
@@ -1557,6 +1666,38 @@ fn hook_checks(exe: &Path, base: &Path, home: &Path, owner: &Store, c: &mut Chec
         "a session that changed nothing is not asked to write",
         out["decision"] == "approve",
         &out.to_string(),
+    );
+    // One Bash tool_use in the transcript. Denied by PreToolUse in one session, it is not work; run in
+    // another (no deny row), it is, and that session is asked to write.
+    let one_bash = base.join("transcript-bash.jsonl");
+    std::fs::write(
+        &one_bash,
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "timestamp": since, "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {}}]}})
+        ),
+    )?;
+    let stop_for = |sid: &str| json!({"session_id": sid, "cwd": stop_cwd, "transcript_path": one_bash.display().to_string(), "stop_hook_active": false});
+    let denied = hook(
+        exe,
+        home,
+        "PreToolUse",
+        &json!({"session_id": "s-denied-bash", "cwd": demo_s, "tool_name": "Bash", "tool_input": {"command": "git push origin main"}}),
+        &[],
+        Some(&rules_path),
+    )?;
+    let after_deny = hook(exe, home, "Stop", &stop_for("s-denied-bash"), &session_env, None)?;
+    let ran = hook(exe, home, "Stop", &stop_for("s-ran-bash"), &session_env, None)?;
+    c.check(
+        "a session whose only Bash call was denied is not asked to write; the same call run (no deny row) is",
+        denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+            && after_deny["decision"] == "approve"
+            && ran["decision"] == "block"
+            && owner
+                .hook_events_since(None)?
+                .iter()
+                .any(|e| e["session"] == "s-denied-bash" && e["hook"] == "Stop" && e["tool_uses"]["denied"] == 1),
+        &format!("{denied} {after_deny} {ran}"),
     );
     owner.add_fact(
         &demo,

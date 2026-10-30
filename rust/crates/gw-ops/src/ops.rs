@@ -840,6 +840,19 @@ pub fn environment_checks(claude: &Path, vscode_mcp: Option<&Path>) -> Vec<Strin
                 cache.display()
             )),
             Some(newest) => {
+                let problems = plugin_manifest_problems(newest);
+                if problems.is_empty() {
+                    lines.push(format!(
+                        "ok   manifest: {} lists its agents as .md files",
+                        newest.join(".claude-plugin").join("plugin.json").display()
+                    ));
+                } else {
+                    lines.push(format!(
+                        "FAIL manifest: {}: {} (claude plugin update groundworks@groundworks)",
+                        newest.display(),
+                        problems.join("; ")
+                    ));
+                }
                 let hooks = newest.join("hooks").join("hooks.json");
                 let rules = newest.join("hooks").join("deny.toml");
                 if hooks.is_file() && rules.is_file() {
@@ -913,6 +926,59 @@ pub fn environment_checks(claude: &Path, vscode_mcp: Option<&Path>) -> Vec<Strin
         }
     }
     lines
+}
+
+/// What is wrong with the plugin manifest under `plugin_root` (`.claude-plugin/plugin.json`), one line
+/// each; empty means every Claude Code we know of loads it. Measured 2026-10-29 (Phase 1 of the window
+/// plan): Claude Code 2.1.300 rejects `"agents": "./agents/"` ("must end with .md") and drops the WHOLE
+/// plugin without a word (no hooks, no MCP server), while 2.1.312 accepts it. So `agents` must be a
+/// `.md` path or a list of them, each present, and every `agents/*.md` on disk must be listed.
+pub fn plugin_manifest_problems(plugin_root: &Path) -> Vec<String> {
+    let path = plugin_root.join(".claude-plugin").join("plugin.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return vec!["no .claude-plugin/plugin.json".to_owned()];
+    };
+    let manifest: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("plugin.json does not parse ({e})")],
+    };
+    let mut problems = Vec::new();
+    let listed: Vec<&str> = match &manifest["agents"] {
+        serde_json::Value::Null => Vec::new(),
+        serde_json::Value::String(one) => vec![one.as_str()],
+        serde_json::Value::Array(items) => items.iter().map(|v| v.as_str().unwrap_or("")).collect(),
+        other => {
+            problems.push(format!("agents is {other}, not a .md path or a list of them"));
+            Vec::new()
+        }
+    };
+    for entry in &listed {
+        if !entry.ends_with(".md") {
+            problems.push(format!(
+                "agents entry {entry:?} is not a .md file (the directory form is rejected by Claude Code 2.1.300, which then drops the whole plugin)"
+            ));
+        } else if !plugin_root.join(entry).is_file() {
+            problems.push(format!("agents entry {entry:?} is not in the plugin"));
+        }
+    }
+    let on_disk = agent_files(&plugin_root.join("agents")).unwrap_or_default();
+    for file in on_disk {
+        let rel = format!("./agents/{}", file.file_name().unwrap_or_default().to_string_lossy());
+        if !listed
+            .iter()
+            .any(|l| l.trim_start_matches("./") == rel.trim_start_matches("./"))
+        {
+            problems.push(format!(
+                "{rel} is in the plugin and not listed under agents (it would not load)"
+            ));
+        }
+    }
+    if let Some(hooks) = manifest["hooks"].as_str()
+        && !plugin_root.join(hooks).is_file()
+    {
+        problems.push(format!("hooks {hooks:?} is not in the plugin"));
+    }
+    problems
 }
 
 /// `0.10.2` sorts after `0.9.0`: numeric fields, then the text as a tie-break.
@@ -1552,6 +1618,12 @@ knowledge base on\"): re_kb is ON again -- SurrealDB on\n127.0.0.1:8001 (ns `re`
         std::fs::create_dir_all(cache.join("0.10.0/hooks")).unwrap();
         std::fs::write(cache.join("0.10.0/hooks/hooks.json"), "{}").unwrap();
         std::fs::write(cache.join("0.10.0/hooks/deny.toml"), "").unwrap();
+        std::fs::create_dir_all(cache.join("0.10.0/.claude-plugin")).unwrap();
+        std::fs::write(
+            cache.join("0.10.0/.claude-plugin/plugin.json"),
+            r#"{"name": "groundworks", "hooks": "./hooks/hooks.json"}"#,
+        )
+        .unwrap();
         std::fs::write(claude.join("agents/plain.md"), stamp_text("# plain\n").unwrap()).unwrap();
         std::fs::write(
             &mcp,
@@ -1564,6 +1636,53 @@ knowledge base on\"): re_kb is ON again -- SurrealDB on\n127.0.0.1:8001 (ns `re`
         // No Claude Code here at all is a warning, not a pass; no APPDATA is a warning too.
         let lines = environment_checks(&base.join("nowhere"), None);
         assert_eq!(lines.iter().filter(|l| l.starts_with("warn")).count(), 2, "{lines:?}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn the_shipped_plugin_manifest_loads_and_the_directory_form_is_red() {
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../plugin");
+        assert_eq!(plugin_manifest_problems(&shipped), Vec::<String>::new());
+        let base = std::env::temp_dir().join(format!("gw-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".claude-plugin")).unwrap();
+        std::fs::create_dir_all(base.join("agents")).unwrap();
+        std::fs::create_dir_all(base.join("hooks")).unwrap();
+        std::fs::write(
+            base.join("agents/a.md"),
+            "# a
+",
+        )
+        .unwrap();
+        std::fs::write(base.join("hooks/hooks.json"), "{}").unwrap();
+        let manifest = |agents: &str| {
+            std::fs::write(
+                base.join(".claude-plugin/plugin.json"),
+                format!(r#"{{"name": "groundworks", "agents": {agents}, "hooks": "./hooks/hooks.json"}}"#),
+            )
+            .unwrap();
+            plugin_manifest_problems(&base)
+        };
+        let red = manifest(r#""./agents/""#);
+        assert!(
+            red.iter()
+                .any(|p| p.contains("not a .md file") && p.contains("2.1.300")),
+            "{red:?}"
+        );
+        assert!(
+            red.iter()
+                .any(|p| p.contains("./agents/a.md") && p.contains("not listed")),
+            "{red:?}"
+        );
+        assert!(manifest(r#"["./agents/a.md"]"#).is_empty());
+        assert!(manifest(r#""./agents/a.md""#).is_empty());
+        assert!(
+            manifest(r#"["./agents/missing.md", "./agents/a.md"]"#)
+                .iter()
+                .any(|p| p.contains("missing.md") && p.contains("not in the plugin"))
+        );
+        std::fs::remove_file(base.join(".claude-plugin/plugin.json")).unwrap();
+        assert_eq!(plugin_manifest_problems(&base), ["no .claude-plugin/plugin.json"]);
         std::fs::remove_dir_all(&base).unwrap();
     }
 

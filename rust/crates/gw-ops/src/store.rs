@@ -186,6 +186,20 @@ impl Store {
                 "{ns} is isolated: it has a store of its own, and this store will not open it"
             );
         }
+        // Fast path: the agent login already works and the namespace holds every file, so the root
+        // round trips (each a password hash on the server) and the re-provision are skipped. Measured
+        // 2026-10-29: they were most of a hook's 200-320 ms. Any failure falls through to the full path,
+        // which creates, migrates and re-provisions exactly as before.
+        let member = connect_member(&self.url, ns, AGENT, &self.agent_pass(ns))?;
+        if gw_store::is_current(&member, ns).unwrap_or(false) {
+            return Ok(Arc::clone(
+                self.agents
+                    .lock()
+                    .expect("agent cache poisoned")
+                    .entry(ns.to_owned())
+                    .or_insert(Arc::new(member)),
+            ));
+        }
         let db = self.retrying(|| {
             let root = self.root(ns)?;
             open_namespace(&root, ns).with_context(|| format!("migrating {ns}"))?;
@@ -1238,6 +1252,27 @@ impl Store {
             "started_at",
             days,
         )
+    }
+
+    /// PreToolUse calls the hooks denied in session `session` at or after `since` (RFC 3339): the tool
+    /// calls that changed nothing, which the Stop hook does not count as work.
+    pub fn session_denies_since(&self, session: &str, since: &str) -> Result<u64> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("sid", session).set("since", rfc3339(since)?);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE count() FROM hook_event WHERE session = $sid AND hook = 'PreToolUse' \
+                 AND decision = 'deny' AND at >= <datetime>$since GROUP ALL;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0]
+            .as_array()
+            .and_then(|a| a.first())
+            .or(Some(&rows[0]))
+            .and_then(Value::as_u64)
+            .unwrap_or(0))
     }
 
     /// Hook events in the last `days` (all when None), oldest first.

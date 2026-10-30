@@ -37,6 +37,9 @@ pub const DENY_CONVERSION_SECS: i64 = 600;
 pub const WRITE_RATE_MIN_SESSIONS: u64 = 3;
 /// Below this share of sessions writing, a project is red.
 pub const WRITE_RATE_RED: f64 = 0.5;
+/// A commit is seen when a hook row or a `run`/`gate` receipt of its project lies this close to it, either
+/// side. A commit made through a hooked session's Bash call has its PreToolUse row seconds before it.
+pub const COMMIT_COVER_SECS: i64 = 900;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProjectPulse {
@@ -88,6 +91,12 @@ pub struct UseNumbers {
     /// `commits` when the span had commits and no session: work happened with no hook running (a
     /// Copilot or VS Code session, or a session with the plugin off). None when commits is None.
     pub commits_without_sessions: Option<u64>,
+    /// Commits with no hook row and no receipt of their project within COMMIT_COVER_SECS: work no hooked
+    /// session accounts for, even in a span that had hooked sessions (Phase 1 of the window plan: a
+    /// session with the plugin off committed beside hooked ones and the pulse stayed green). None when
+    /// commits is None.
+    #[serde(default)]
+    pub commits_unseen: Option<u64>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -229,8 +238,8 @@ fn take_use(home: &Home, store: &Store, registry: &Registry, now: &str) -> Resul
     // The receipts, journal rows and commits are per project; the telemetry rows carry the project name.
     let mut receipts: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut journal: BTreeMap<String, Vec<(String, String, String, String)>> = BTreeMap::new();
-    let mut commits_window: BTreeMap<String, Option<u64>> = BTreeMap::new();
-    let mut commits_all: BTreeMap<String, Option<u64>> = BTreeMap::new();
+    let mut commits_window: BTreeMap<String, Option<Vec<i64>>> = BTreeMap::new();
+    let mut commits_all: BTreeMap<String, Option<Vec<i64>>> = BTreeMap::new();
     for (name, project) in &registry.projects {
         receipts.insert(name.clone(), store.receipt_times_since(name, None).unwrap_or_default());
         let rows = store.facts_query(name, None, None, 100_000).unwrap_or_default();
@@ -248,12 +257,12 @@ fn take_use(home: &Home, store: &Store, registry: &Registry, now: &str) -> Resul
                 .collect(),
         );
         let dir = project.path(&home.workspace);
-        commits_window.insert(name.clone(), git_commits_since(&dir, &window_since));
+        commits_window.insert(name.clone(), git_commit_times_since(&dir, &window_since));
         commits_all.insert(
             name.clone(),
             telemetry_since
                 .as_deref()
-                .and_then(|since| git_commits_since(&dir, since)),
+                .and_then(|since| git_commit_times_since(&dir, since)),
         );
     }
     let scope = |project: Option<&str>, since: Option<&str>| {
@@ -291,7 +300,8 @@ pub struct UseInput<'a> {
     pub rejections: &'a [Value],
     pub receipts: &'a BTreeMap<String, Vec<String>>,
     pub journal: &'a BTreeMap<String, Vec<(String, String, String, String)>>,
-    pub commits: &'a BTreeMap<String, Option<u64>>,
+    /// Each project's commit times (epoch seconds) in the span; None when it has no repository here.
+    pub commits: &'a BTreeMap<String, Option<Vec<i64>>>,
 }
 
 /// The use numbers for `project` (None: every project and the sessions outside any) since `since`
@@ -387,12 +397,36 @@ pub fn use_numbers(input: UseInput<'_>, project: Option<&str>, since: Option<&st
     n.store_rejections = input.rejections.iter().filter(|r| in_scope(r, "at")).count() as u64;
     let mut commits: Option<u64> = None;
     let mut bypassed: Option<u64> = None;
-    for (name, count) in input.commits {
+    let mut unseen: Option<u64> = None;
+    for (name, times) in input.commits {
         if project.is_some_and(|p| p != name) {
             continue;
         }
-        if let Some(c) = count {
+        if let Some(times) = times {
+            let c = &(times.len() as u64);
             commits = Some(commits.unwrap_or(0) + c);
+            // Every hook row and receipt of this project, whatever the span: a commit at the window's
+            // edge may be covered by a row just before it.
+            let mut marks: Vec<i64> = input
+                .events
+                .iter()
+                .filter(|e| e["project"] == name.as_str())
+                .filter_map(|e| e["at"].as_str().and_then(epoch_secs))
+                .chain(
+                    input
+                        .receipts
+                        .get(name)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|t| epoch_secs(t)),
+                )
+                .collect();
+            marks.sort_unstable();
+            let covered = |t: i64| {
+                let i = marks.partition_point(|m| *m < t - COMMIT_COVER_SECS);
+                marks.get(i).is_some_and(|m| *m <= t + COMMIT_COVER_SECS)
+            };
+            unseen = Some(unseen.unwrap_or(0) + times.iter().filter(|t| !covered(**t)).count() as u64);
             let sessions_here = session_ids.len() as u64;
             let sessions_here = if project.is_some() {
                 sessions_here
@@ -409,6 +443,7 @@ pub fn use_numbers(input: UseInput<'_>, project: Option<&str>, since: Option<&st
     }
     n.commits = commits;
     n.commits_without_sessions = bypassed;
+    n.commits_unseen = unseen;
     n
 }
 
@@ -432,24 +467,26 @@ fn percentile(sorted: &[i64], p: usize) -> i64 {
     sorted[rank - 1]
 }
 
-/// Commits on every branch of the repository at `dir` since `since` (RFC 3339); None when `dir` is not
-/// a git repository on this machine.
-pub fn git_commits_since(dir: &Path, since: &str) -> Option<u64> {
+/// The commit times (epoch seconds, committer date) on every branch of the repository at `dir` since
+/// `since` (RFC 3339); None when `dir` is not a git repository on this machine.
+pub fn git_commit_times_since(dir: &Path, since: &str) -> Option<Vec<i64>> {
     if !dir.join(".git").exists() {
         return None;
     }
     let out = std::process::Command::new("git")
         .args(["--no-optional-locks", "-C"])
         .arg(dir)
-        .args(["rev-list", "--count", "--all", &format!("--since={since}")])
+        .args(["log", "--all", "--format=%ct", &format!("--since={since}")])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok())
-        .flatten()
+    out.status.success().then(|| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .collect()
+    })
 }
 
 /// The red conditions of this pulse, one line each (docs/METRICS.md). Empty means nothing is red, which
@@ -476,6 +513,14 @@ pub fn digest(p: &Pulse) -> Vec<String> {
             red.push(format!(
                 "RED {name}: {b} commit(s) in {}d with no session: work bypassed the hooks (Copilot/VS Code, or plugin off)",
                 u.window_days
+            ));
+        } else if let Some(b) = pu.window.commits_unseen
+            && b > 0
+        {
+            red.push(format!(
+                "RED {name}: {b} commit(s) in {}d with no hook row or receipt within {} min: a session beside the hooked ones bypassed them (plugin off, or a client without hooks)",
+                u.window_days,
+                COMMIT_COVER_SECS / 60
             ));
         }
         if pu.window.sessions >= WRITE_RATE_MIN_SESSIONS && pu.window.write_rate < WRITE_RATE_RED {
@@ -582,7 +627,7 @@ pub fn render(p: &Pulse) -> String {
         let _ = writeln!(
             s,
             "hooks ({label:>3})  sessions {} (wrote {}, rate {:.2}) | stop blocks {} (converted {}) | denies {} (converted {}) | hook errors {} | latency p50 {} ms p95 {} ms\n\
-             journal ({label:>3})  writes {} (CONFIRMED {:.0}%) | by kind: {} | by confidence: {} | by agent: {} | store rejections {} | commits {} (without a session: {})",
+             journal ({label:>3})  writes {} (CONFIRMED {:.0}%) | by kind: {} | by confidence: {} | by agent: {} | store rejections {} | commits {} (without a session: {}, unseen by any hook: {})",
             n.sessions,
             n.sessions_that_wrote,
             n.write_rate,
@@ -601,6 +646,7 @@ pub fn render(p: &Pulse) -> String {
             n.store_rejections,
             n.commits.map_or("n/a".to_owned(), |c| c.to_string()),
             n.commits_without_sessions.map_or("n/a".to_owned(), |c| c.to_string()),
+            n.commits_unseen.map_or("n/a".to_owned(), |c| c.to_string()),
         );
     }
     if let Some(since) = &u.telemetry_since {
@@ -839,9 +885,19 @@ mod tests {
                 )],
             ),
         ]);
+        let at = |ts: &str| epoch_secs(ts).unwrap();
+        // demo: two commits beside its hooked sessions' rows, one at 15:00 with no hook row near it
+        // (Phase 1: a session with the plugin off, beside hooked ones). other: five, no session this week.
         let commits = BTreeMap::from([
-            ("demo".to_owned(), Some(3)),
-            ("other".to_owned(), Some(5)),
+            (
+                "demo".to_owned(),
+                Some(vec![
+                    at("2026-10-29T10:35:00Z"),
+                    at("2026-10-29T11:16:00Z"),
+                    at("2026-10-29T15:00:00Z"),
+                ]),
+            ),
+            ("other".to_owned(), Some(vec![at("2026-10-25T09:00:00Z"); 5])),
             ("norepo".to_owned(), None),
         ]);
         let input = UseInput {
@@ -873,6 +929,11 @@ mod tests {
         assert!((demo.confirmed_share - 0.5).abs() < 1e-9);
         assert_eq!(demo.store_rejections, 1, "the 10-20 rejection is outside the window");
         assert_eq!((demo.commits, demo.commits_without_sessions), (Some(3), Some(0)));
+        assert_eq!(
+            demo.commits_unseen,
+            Some(1),
+            "10:35 is beside a Stop row, 11:16 beside a receipt; 15:00 has nothing within 15 min"
+        );
         let input = UseInput {
             sessions: &sessions,
             events: &events,
@@ -888,6 +949,7 @@ mod tests {
             (Some(5), Some(5)),
             "commits with no session in the window are bypassed work"
         );
+        assert_eq!(other.commits_unseen, Some(5));
         let input = UseInput {
             sessions: &sessions,
             events: &events,
@@ -905,6 +967,11 @@ mod tests {
             (all.commits, all.commits_without_sessions),
             (Some(8), Some(0)),
             "other had a session all time"
+        );
+        assert_eq!(
+            all.commits_unseen,
+            Some(6),
+            "but no hook row is near any of other's commits"
         );
         let input = UseInput {
             sessions: &sessions,
@@ -965,8 +1032,31 @@ mod tests {
                 all_time: UseNumbers::default(),
             },
         );
+        p.use_.per_project.insert(
+            "beside".to_owned(),
+            ProjectUse {
+                window: UseNumbers {
+                    sessions: 1,
+                    sessions_that_wrote: 1,
+                    write_rate: 1.0,
+                    commits: Some(2),
+                    commits_without_sessions: Some(0),
+                    commits_unseen: Some(1),
+                    ..UseNumbers::default()
+                },
+                all_time: UseNumbers::default(),
+            },
+        );
         let red = digest(&p);
-        assert_eq!(red.len(), 5, "{red:?}");
+        assert_eq!(red.len(), 6, "{red:?}");
+        assert!(
+            red.iter()
+                .any(|l| l.contains("beside: 1 commit(s)") && l.contains("no hook row"))
+        );
+        assert!(
+            !red.iter().any(|l| l.contains("bypassed:") && l.contains("no hook row")),
+            "a project with no session at all is named once, by the older line"
+        );
         assert!(red.iter().any(|l| l.contains("machine unknown")));
         assert!(red.iter().any(|l| l.contains("hook_errors 2")));
         assert!(red.iter().any(|l| l.contains("bypassed: 4 commit(s)")));

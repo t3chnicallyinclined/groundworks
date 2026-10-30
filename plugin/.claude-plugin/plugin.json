@@ -6,6 +6,8 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "outputStyles": "./output-styles/",
-  "agents": "./agents/",
+  "agents": [
+    "./agents/groundworks.md"
+  ],
   "hooks": "./hooks/hooks.json"
 }

@@ -42,15 +42,16 @@ too (`project` null); the per-project numbers do not.
 | `denies` | `PreToolUse` rows with `decision = deny` (every rule, including `rules-unloadable`, `store-down` and `hook-selfedit-file`) | — |
 | `denies_converted` | denies followed within 10 minutes by a `run` receipt in the same project: the agent took the sanctioned path | — |
 | `hook_errors` | hook rows with an `error_code` | **> 0 in the window**: a hook failed internally; `error_code` names the kind (`store_down`, `regex_compile`, `transcript_unreadable`, ...) |
-| `hook_latency_p50_ms`, `hook_latency_p95_ms` | nearest-rank percentiles of `latency_ms` over the scope's hook rows | — (watch p95: hooks run on every Bash call) |
+| `hook_latency_p50_ms`, `hook_latency_p95_ms` | nearest-rank percentiles of `latency_ms` over the scope's hook rows (measured inside the hook: process start, about 40 ms on Windows, is not in it) | — (watch p95: hooks run on every Bash call; the window plan's limit is 300 ms wall) |
 | `journal_writes` | `fact` rows of every kind recorded in the span | — |
 | `writes_by_kind` | the same, by `decision` / `gotcha` / `status` / `fact` / `eliminated` | — |
 | `writes_by_confidence` | the same, by `CONFIRMED` / `INFERRED` / `UNKNOWN` | — |
 | `writes_by_agent` | the same, by the free-text `by` (not a signed identity; `[owner]`/`[agent]` in the injected brief is) | — |
 | `confirmed_share` | CONFIRMED writes / `journal_writes` | — (should rise over weeks; a receipt or quote is what makes it CONFIRMED) |
 | `store_rejections` | `rejection` rows in the span | **rising week on week**: `use.window.store_rejections > use.rejections_previous_week` (and > 0). A burst from one agent is a prompt-injection or confused-agent signal |
-| `commits` | git commits on every branch of the project's local repository in the span; `null` when there is no repository here | — |
+| `commits` | git commits on every branch of the project's local repository in the span (`git log --all --format=%ct`, committer time); `null` when there is no repository here | — |
 | `commits_without_sessions` | `commits` when the span had commits and **no session** for that project, else 0; `null` with `commits` | **> 0 in the window**: work happened with no hook running: a Copilot or VS Code session (no hooks there; only the store's own rules and this cross-check apply), or the plugin off |
+| `commits_unseen` | commits with **no `hook_event` row and no `run`/`gate` receipt of the same project within 15 minutes** either side of the commit's time (`COMMIT_COVER_SECS`); `null` with `commits`. A commit made through a hooked session's Bash call has its PreToolUse row seconds before it | **> 0 in the window**: a session beside the hooked ones did work the hooks never saw (the plugin off in one window, a client without hooks, a terminal). This is the red arm `commits_without_sessions` lacked: the 2026-10-29 window probe ran a session with the plugin disabled beside hooked sessions of the same project; it left 0 rows, its commit fell in a week that had sessions, and the pulse stayed green. The digest names a project once: by `commits_without_sessions` when it had no session at all, else by this |
 
 Other red conditions in the digest:
 
@@ -66,7 +67,10 @@ Other red conditions in the digest:
   low rate with `blocks_converted` near `blocks_at_stop` means the gate works and agents comply; a low
   rate with `blocks_converted` far below `blocks_at_stop` means they end anyway (warn mode, or sessions
   killed), and the hook_event rows say which.
-- `commits_without_sessions` is the deadman: the only signal for sessions the hooks cannot see.
+- `commits_without_sessions` and `commits_unseen` are the deadman: the only signals for sessions the hooks
+  cannot see. Their limits, stated: work that is never committed is not seen at all; a hookless session that
+  commits within 15 minutes of a hooked session's row in the same project is counted as seen; commits made
+  on another machine and fetched here count as unseen on this one (`--all` includes remote-tracking refs).
 - `denies` by `rule_id` (query `hook_event` directly) says which bypasses agents reach for; a rule that
   never fires costs nothing, a rule that fires daily is either doing its job or needs a sanctioned path.
 - `store_rejections` by `reason` says what the store refused: `confirmed-needs-evidence` is Layer 0

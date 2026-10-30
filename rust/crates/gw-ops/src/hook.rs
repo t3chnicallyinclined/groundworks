@@ -328,17 +328,23 @@ pub struct ToolUses {
     pub run: u64,
     /// Groundworks `journal_add` (through the MCP server).
     pub mcp_write: u64,
+    /// Tool calls the PreToolUse hook denied in this session (its own `hook_event` rows, not the
+    /// transcript). Decision 2026-10-29: a denied call changed nothing, so it is not work.
+    pub denied: u64,
 }
 
 impl ToolUses {
     /// Tool uses that change something outside the conversation; the Stop hook asks for a journal entry
-    /// when this is above zero and the journal did not move.
+    /// when this is above zero and the journal did not move. A call the hooks denied is not work: the
+    /// transcript still shows its tool_use block, so the session's deny count is taken off. An allowed
+    /// Bash call still counts, read-only or not (the hook cannot tell without reading its input).
     pub fn work(&self) -> u64 {
-        self.edit + self.write + self.bash + self.run
+        (self.edit + self.write + self.bash + self.run).saturating_sub(self.denied)
     }
 
     pub fn json(&self) -> Value {
-        json!({"edit": self.edit, "write": self.write, "bash": self.bash, "run": self.run, "mcp_write": self.mcp_write})
+        json!({"edit": self.edit, "write": self.write, "bash": self.bash, "run": self.run, "mcp_write": self.mcp_write,
+               "denied": self.denied})
     }
 }
 
@@ -599,11 +605,45 @@ fn home_for(cwd: Option<&Path>) -> Result<Option<Home>> {
     }
 }
 
-/// The registered project whose directory is `cwd` or holds it (the deepest one when nested).
+/// The registered project whose directory is `cwd` or holds it (the deepest one when nested). A linked
+/// git worktree (a Nimbalyst `<ws>_worktrees/<name>` session, or any `git worktree add`) that is not
+/// registered itself resolves through its main repository: the same place inside the main checkout.
 pub fn project_for(home: &Home, cwd: Option<&Path>) -> Option<String> {
     let cwd = cwd?;
     let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let registry = Registry::load(home).ok()?;
+    project_at(home, &registry, &cwd).or_else(|| project_at(home, &registry, &main_checkout_path(&cwd)?))
+}
+
+/// Where `dir`, inside a linked git worktree, sits in the main checkout; None when `dir` is in no
+/// worktree (or in the main checkout itself, or in a bare repository's worktree). Reads the two files
+/// git writes (`<worktree>/.git`: `gitdir: <common>/worktrees/<name>`, and that dir's `commondir`), so no
+/// process is started on the hook's path.
+pub fn main_checkout_path(dir: &Path) -> Option<PathBuf> {
+    let top = dir.ancestors().find(|a| a.join(".git").exists())?;
+    let dot_git = top.join(".git");
+    if !dot_git.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let gitdir = PathBuf::from(text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim());
+    let gitdir = if gitdir.is_absolute() { gitdir } else { top.join(gitdir) };
+    let common = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let common = PathBuf::from(common.trim());
+    let common = if common.is_absolute() {
+        common
+    } else {
+        gitdir.join(common)
+    };
+    let common = std::fs::canonicalize(&common).unwrap_or(common);
+    if common.file_name()? != ".git" {
+        return None;
+    }
+    let main = common.parent()?;
+    Some(main.join(dir.strip_prefix(top).ok()?))
+}
+
+fn project_at(home: &Home, registry: &Registry, cwd: &Path) -> Option<String> {
     registry
         .projects
         .values()
@@ -835,14 +875,17 @@ fn open_session(store: &Store, row: &SessionIn) {
     }
 }
 
+/// The clients a session row may name (schema 0015 holds the same list, plus `other`). `gw-window` is
+/// the Groundworks window: its config dir sets `GROUNDWORKS_CLIENT=gw-window`.
+pub const CLIENTS: [&str; 5] = ["claude-code", "copilot", "vscode", "cli", "gw-window"];
+
 /// Which client runs this session, from the fixed list: `GROUNDWORKS_CLIENT` when it names one, else
 /// Claude Code's own entrypoint variable, else `claude-code` (the hook only runs under Claude Code).
-fn client_name() -> String {
-    const KNOWN: [&str; 4] = ["claude-code", "copilot", "vscode", "cli"];
+pub fn client_name() -> String {
     if let Ok(c) = std::env::var("GROUNDWORKS_CLIENT")
         && !c.is_empty()
     {
-        return if KNOWN.contains(&c.as_str()) {
+        return if CLIENTS.contains(&c.as_str()) {
             c
         } else {
             "other".to_owned()
@@ -1046,7 +1089,7 @@ fn stop(ctx: &mut Ctx) -> Value {
                 .and_then(|s| s.session_started_at(&ctx.input.session_id).ok().flatten())
         })
         .or_else(|| first_timestamp(&transcript));
-    let uses = count_tool_uses(&transcript, start.as_deref());
+    let mut uses = count_tool_uses(&transcript, start.as_deref());
     let down_flag = std::env::var("GROUNDWORKS_DOWN").is_ok_and(|v| v == "1");
     let writes = match (&ctx.store, &start) {
         (Some(store), Some(start)) => match store.facts_since(&project, start) {
@@ -1066,6 +1109,16 @@ fn stop(ctx: &mut Ctx) -> Value {
         },
         (None, _) => None,
     };
+    // Only when the stop would block on work: one more query, off the common path.
+    if uses.work() > 0
+        && writes == Some(0)
+        && let (Some(store), Some(start)) = (&ctx.store, &start)
+    {
+        match store.session_denies_since(&ctx.input.session_id, start) {
+            Ok(n) => uses.denied = n,
+            Err(e) => ctx.note_error(ErrorCode::StoreDown, &e),
+        }
+    }
     let (decision, rule) = decide_stop(uses, writes, ctx.input.stop_hook_active, down_flag);
     let reason = match rule {
         Some("store-down") => STORE_DOWN_REASON,
@@ -1286,7 +1339,8 @@ not json at all
                 write: 1,
                 bash: 1,
                 run: 1,
-                mcp_write: 1
+                mcp_write: 1,
+                denied: 0
             }
         );
         assert_eq!(all.work(), 4);
@@ -1319,6 +1373,128 @@ not json at all
             ("block", Some("store-down"))
         );
         assert_eq!(decide_stop(edits, None, true, true), ("approve", None));
+        // Decision 2026-10-29: a session whose only changing calls were denied did no work.
+        let denied_bash = ToolUses {
+            bash: 2,
+            denied: 2,
+            ..ToolUses::default()
+        };
+        assert_eq!(denied_bash.work(), 0);
+        assert_eq!(decide_stop(denied_bash, Some(0), false, false), ("approve", None));
+        let one_ran = ToolUses {
+            bash: 3,
+            denied: 2,
+            ..ToolUses::default()
+        };
+        assert_eq!(
+            decide_stop(one_ran, Some(0), false, false),
+            ("block", Some("no-writes"))
+        );
+    }
+
+    /// A home with project `demo` registered at `<workspace>/demo`, a linked worktree of it beside the
+    /// workspace (`<ws>_worktrees/feature`, as Nimbalyst lays them out) written as git writes one, and
+    /// an unrelated folder.
+    fn worktree_fixture(tag: &str) -> (PathBuf, Home) {
+        let base = std::env::temp_dir().join(format!("gw-hook-worktree-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join(".groundworks");
+        let ws = base.join("ws");
+        let main = ws.join("demo");
+        std::fs::create_dir_all(root.join("registry/projects")).unwrap();
+        std::fs::create_dir_all(main.join(".git/worktrees/feature")).unwrap();
+        std::fs::create_dir_all(main.join("rust")).unwrap();
+        let wt = base.join("ws_worktrees/feature");
+        std::fs::create_dir_all(wt.join("rust/src")).unwrap();
+        std::fs::create_dir_all(base.join("elsewhere")).unwrap();
+        std::fs::write(
+            root.join("groundworks.toml"),
+            format!(
+                "workspace = {:?}
+",
+                ws.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("registry/projects/demo.toml"),
+            "name = \"demo\"
+dir = \"demo\"
+summary = \"d\"
+",
+        )
+        .unwrap();
+        let gitdir = main.join(".git/worktrees/feature");
+        std::fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}
+",
+                gitdir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            gitdir.join("commondir"),
+            "../..
+",
+        )
+        .unwrap();
+        std::fs::write(
+            gitdir.join("gitdir"),
+            format!(
+                "{}
+",
+                wt.join(".git").display()
+            ),
+        )
+        .unwrap();
+        (base.clone(), Home::open(&root).unwrap())
+    }
+
+    #[test]
+    fn a_linked_worktree_resolves_to_its_main_checkouts_project() {
+        let (base, home) = worktree_fixture("abs");
+        let wt = base.join("ws_worktrees/feature");
+        assert_eq!(project_for(&home, Some(&wt)).as_deref(), Some("demo"));
+        assert_eq!(project_for(&home, Some(&wt.join("rust/src"))).as_deref(), Some("demo"));
+        let main = std::fs::canonicalize(base.join("ws/demo")).unwrap();
+        assert_eq!(
+            main_checkout_path(&std::fs::canonicalize(&wt).unwrap()),
+            Some(main.clone())
+        );
+        // The main checkout itself is not a linked worktree; a folder in no repository resolves to nothing.
+        assert_eq!(main_checkout_path(&main), None);
+        assert_eq!(project_for(&home, Some(&base.join("elsewhere"))), None);
+        // A relative gitdir (git worktree add --relative-paths) resolves the same way.
+        std::fs::write(
+            wt.join(".git"),
+            "gitdir: ../../ws/demo/.git/worktrees/feature
+",
+        )
+        .unwrap();
+        assert_eq!(project_for(&home, Some(&wt)).as_deref(), Some("demo"));
+        // A worktree of a repository that is not registered stays unregistered.
+        std::fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}
+",
+                base.join("elsewhere").display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(project_for(&home, Some(&wt)), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn every_client_name_is_in_the_schema_list() {
+        let schema = include_str!("../../gw-store/schema/0015_global_client_window.surql");
+        for client in CLIENTS.iter().chain(&["other"]) {
+            assert!(schema.contains(&format!("'{client}'")), "{client}");
+        }
+        assert!(CLIENTS.contains(&"gw-window"));
     }
 
     #[test]
