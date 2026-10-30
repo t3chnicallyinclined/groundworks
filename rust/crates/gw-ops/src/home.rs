@@ -22,6 +22,60 @@ pub struct Config {
     pub scan: ScanConfig,
     #[serde(default)]
     pub store: StoreConfig,
+    #[serde(default)]
+    pub enforce: EnforceConfig,
+}
+
+/// How the plugin's hooks act (`[enforce]` in groundworks.toml). `GROUNDWORKS_ENFORCE=warn|block` in the
+/// environment overrides both for one session; rules marked `hard` in deny.toml deny in every mode.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnforceConfig {
+    /// Stop and SubagentStop: `block` (default) asks once for a journal entry; `warn` only says so.
+    #[serde(default)]
+    pub stop: StopMode,
+    /// PreToolUse on Bash: `deny` (default) refuses a listed command; `warn` lets it through with a message.
+    #[serde(default)]
+    pub pretooluse: ToolMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StopMode {
+    #[default]
+    Block,
+    Warn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolMode {
+    #[default]
+    Deny,
+    Warn,
+}
+
+/// What a hook does with a decision that would block or deny.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnforceMode {
+    Block,
+    Warn,
+}
+
+impl EnforceConfig {
+    pub fn stop_mode(&self) -> EnforceMode {
+        match self.stop {
+            StopMode::Block => EnforceMode::Block,
+            StopMode::Warn => EnforceMode::Warn,
+        }
+    }
+
+    pub fn tool_mode(&self) -> EnforceMode {
+        match self.pretooluse {
+            ToolMode::Deny => EnforceMode::Block,
+            ToolMode::Warn => EnforceMode::Warn,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -81,6 +135,12 @@ impl Home {
                 })?
             }
         };
+        Self::open(&root)
+    }
+
+    /// The home at `root` (a folder holding `groundworks.toml`), with no discovery.
+    pub fn open(root: &Path) -> Result<Self> {
+        let root = root.to_path_buf();
         let config_path = root.join("groundworks.toml");
         let text = std::fs::read_to_string(&config_path).with_context(|| {
             format!(
@@ -126,12 +186,50 @@ pub fn find_home(start: &Path) -> Option<PathBuf> {
         .find(|home| home.join("groundworks.toml").is_file())
 }
 
-/// The machine a result came from, so no result is ever detached from where it ran.
+/// What [`machine`] says when nothing on this box names it; `doctor` fails on it.
+pub const UNKNOWN_MACHINE: &str = "unknown";
+
+/// The machine a result came from, so no result is ever detached from where it ran:
+/// `GROUNDWORKS_MACHINE`, else `COMPUTERNAME` (Windows), else `HOSTNAME`, else what the `hostname`
+/// command prints (asked once per process). Measured 2026-10-29: a Claude Code session on Windows
+/// inherits neither variable, so every pulse and doctor line said "unknown".
 pub fn machine() -> String {
+    machine_known().unwrap_or_else(|| UNKNOWN_MACHINE.to_owned())
+}
+
+/// The machine's name, or None when nothing on this box names it.
+pub fn machine_known() -> Option<String> {
+    static FROM_COMMAND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    machine_from_env().or_else(|| FROM_COMMAND.get_or_init(hostname_command).clone())
+}
+
+fn machine_from_env() -> Option<String> {
     ["GROUNDWORKS_MACHINE", "COMPUTERNAME", "HOSTNAME"]
         .iter()
-        .find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()))
-        .unwrap_or_else(|| "unknown".to_owned())
+        .find_map(|var| {
+            std::env::var(var)
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        })
+}
+
+/// The first line `hostname` prints, if the command exists and prints one.
+fn hostname_command() -> Option<String> {
+    let out = std::process::Command::new("hostname")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
 }
 
 /// Names that become file names: letters, digits, `.`, `_`, `-`, not starting with `.`.
@@ -148,6 +246,21 @@ pub fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_machine_is_named_without_either_variable() {
+        // GROUNDWORKS_MACHINE wins when set; the command answers when no variable does. The test
+        // cannot unset the process environment for other tests safely, so it checks the pieces.
+        let from_command = hostname_command();
+        assert!(
+            from_command
+                .as_deref()
+                .is_some_and(|m| !m.is_empty() && m != UNKNOWN_MACHINE),
+            "hostname must name this machine: {from_command:?}"
+        );
+        assert_ne!(machine(), UNKNOWN_MACHINE);
+        assert_eq!(machine_known().as_deref(), Some(machine().as_str()));
+    }
 
     #[test]
     fn finds_the_nearest_home_walking_up() {

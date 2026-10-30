@@ -26,7 +26,15 @@ use crate::home::Home;
 use crate::registry::Registry;
 use crate::store::{self, Hit, Store};
 
+/// The packet's size. Retrieval-ladder r2 (2026-10-26) found the gold unit in the top 8 of the
+/// packet's own order as often as in the old top 20, and the packet was cut to 8; the ask eval
+/// (ask-v2 r8, the same day) refused it: with 8 the agents asked more (8 turns against 6, 180k
+/// tokens a question against 110k), lost 3 correct answers on the reworded set, and gave two
+/// confidently wrong answers, both on questions whose two disagreeing sources must both be in the
+/// packet. A gold unit in the packet is not the whole packet's job. 20 it stays.
 pub const DEFAULT_K: usize = 20;
+/// How deep each project is read before the packet's order is computed over the whole read.
+pub const READ_DEPTH: usize = 60;
 pub const MAX_K: usize = 200;
 /// Python's `labels.quote_min_words` default.
 pub const QUOTE_MIN_WORDS: usize = 3;
@@ -77,8 +85,16 @@ pub struct AnswerIn {
     #[serde(default)]
     pub not_answerable: bool,
     /// When the check passes, keep the answer as a fact, its first support quote as the evidence.
-    #[serde(default)]
+    /// On unless the caller says `record: false`. Measured 2026-10-28 on the live store: in three
+    /// days of real use 88 answers from real sessions passed and none was kept, with the agent text
+    /// asking for `record: true` on the ones worth keeping; the eval runs turn recording off with
+    /// GROUNDWORKS_NO_RECORD, which still wins over this default.
+    #[serde(default = "default_true")]
     pub record: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Lines `a..=b` (file numbering) of a unit whose locator starts at some line, or None when outside it.
@@ -470,7 +486,7 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
         corpus_total: 0,
     };
     for name in &names {
-        match store.retrieve(name, q.text, q.expert, q.kinds, q.limit) {
+        match store.retrieve(name, q.text, q.expert, q.kinds, READ_DEPTH.max(q.limit)) {
             Ok(hits) => {
                 found.corpus_total += store.corpus_size(name)?;
                 found.searched.push(name.clone());
@@ -480,8 +496,17 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
             Err(e) => found.skipped.push(format!("{name} ({e:#})")),
         }
     }
-    // Facts first (they take the first places of the packet), then the hits that fill the rest, each
-    // project read keeping a few places. A fact's evidence is shown once, as the fact.
+    // Facts first (they take the first places of the packet, as the store ranks them), then the
+    // hits that fill the rest in the packet's own order over the whole read. A fact's evidence is
+    // shown once, as the fact.
+    //
+    // Facts were ranked with the hits for one day (2026-10-26/27, commit 0d58edf): a fact that
+    // merely shares a word with the question took a place (facts about PGO, a row count and an ADC
+    // bench led a packet about a Pi 4 crash loop). Ranked with the hits, the recorded facts that
+    // answer a question dropped out of most packets (ask-v2 r8: a session saw a recorded fact on
+    // 30 of 66 questions against 61 of 66 before), and the agents asked more and answered worse.
+    // The recorded fact is the checked answer; it goes first. Junk facts are a separate fix with
+    // its own measurement.
     found
         .facts
         .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
@@ -491,37 +516,55 @@ pub fn fan_out(home: &Home, store: &Store, q: Query<'_>) -> Result<Found> {
     found
         .hits
         .retain(|h| !seen.contains(&(h.project.clone(), h.key.clone())));
-    found
-        .hits
-        .sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
     let places = q.limit.saturating_sub(found.facts.len()).max(1);
-    found.hits = with_slots(std::mem::take(&mut found.hits), places);
+    found.hits = order_hits(q.text, std::mem::take(&mut found.hits));
+    // The packet is filled by bytes, not by count: hits are taken in order while the packet's
+    // text fits in PACKET_CAP_BYTES (at least one hit), and never more than `places`.
+    let mut used: usize = found.facts.iter().map(|h| h.text.len()).sum();
+    let mut keep = 0usize;
+    for h in found.hits.iter().take(places) {
+        if keep > 0 && used + h.text.len() > PACKET_CAP_BYTES {
+            break;
+        }
+        used += h.text.len();
+        keep += 1;
+    }
+    found.hits.truncate(keep);
     Ok(found)
 }
 
-/// At most this many places each project read is sure of, so a small project (the owner's notes, 800
-/// units) is not crowded out of the packet by a large one (a repo of 7,000). Measured 2026-10-26: the
-/// note answering mem-11 ranked first inside `memory` and never reached a packet of 20.
-pub const SLOTS_PER_PROJECT: usize = 3;
+/// The packet's text budget. A packet of 20 candidates ordered by the store's merged scores
+/// measured 13.7k tokens (2.98 bytes per token) at the median over 114 questions, 2026-10-26;
+/// an order that puts the gold unit nearer the top also puts longer units in the top 20, so the
+/// packet is cut by bytes to keep today's cost (retrieval-ladder r5).
+pub const PACKET_CAP_BYTES: usize = 40_000;
 
-/// `limit` hits from a list sorted best first: every project's top SLOTS_PER_PROJECT first (in score
-/// order), then the best of the rest.
-fn with_slots(sorted: Vec<Hit>, limit: usize) -> Vec<Hit> {
-    let mut per: BTreeMap<String, usize> = BTreeMap::new();
-    let (mut sure, mut rest) = (Vec::new(), Vec::new());
-    for h in sorted {
-        let n = per.entry(h.project.clone()).or_default();
-        if *n < SLOTS_PER_PROJECT {
-            *n += 1;
-            sure.push(h);
-        } else {
-            rest.push(h);
-        }
-    }
-    sure.truncate(limit);
-    sure.extend(rest.into_iter().take(limit.saturating_sub(sure.len())));
-    sure.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-    sure
+/// Indices of `docs` best first for `question`: BM25 over the documents themselves, with the
+/// question's words (split on non-alphanumerics, lowercased, no stemming) and document frequencies
+/// from these documents. Ties keep the given order.
+pub fn order_by_words(question: &str, docs: &[String]) -> Vec<usize> {
+    let query = crate::rerank::words(question, false);
+    let bags: Vec<Vec<String>> = docs.iter().map(|d| crate::rerank::words(d, false)).collect();
+    crate::rerank::order_desc(&crate::rerank::bm25(&query, &bags))
+}
+
+/// The packet's order of a read's hits: reciprocal rank fusion of the store's merged order and
+/// BM25 over the hits themselves with the store's own stemming (`rerank::words` stemmed, document
+/// frequencies from the read). Each project has its own full-text index, so two projects' scores
+/// were never on one scale, and the merged read sorted by them put the gold unit in a 40 KB packet
+/// on 42 of 62 questions; BM25 alone 50; this fusion 53 (retrieval-ladder r5, 2026-10-27; paired
+/// sign test on rank 37 wins to 3; ask-v1 26 to 35 of 42). Ties keep the store's order. The
+/// earlier per-project slots rule (three sure places per project read) is gone: it only mattered
+/// because the merged scores crowded small projects out.
+pub fn order_hits(question: &str, mut hits: Vec<Hit>) -> Vec<Hit> {
+    hits.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    let store: Vec<usize> = (0..hits.len()).collect();
+    let query = crate::rerank::words(question, true);
+    let docs: Vec<Vec<String>> = hits.iter().map(|h| crate::rerank::words(&h.text, true)).collect();
+    let stemmed = crate::rerank::order_desc(&crate::rerank::bm25(&query, &docs));
+    let order = crate::rerank::rrf(&[store, stemmed], crate::rerank::RRF_K);
+    let mut taken: Vec<Option<Hit>> = hits.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| taken[i].take()).collect()
 }
 
 /// "searched: a, b; skipped: c (private)": the line every read ends with, so a reader knows its reach.
@@ -544,6 +587,16 @@ pub fn reach(found: &Found) -> String {
 /// Open a packet: retrieve the best `q.limit` units for the question, record them, and hand the
 /// reader every candidate in full, numbered.
 pub fn open(home: &Home, store: &Store, q: Query<'_>, by: &str) -> Result<String> {
+    // An eval session (recording off) is marked on its packet, so the pulse and a set drawn from
+    // real asks can leave it out. Measured 2026-10-29: 88 passed packets signed "main session" were
+    // eval runs whose sessions never loaded the agent text, and nothing in the store said so.
+    let marked;
+    let by = if std::env::var_os("GROUNDWORKS_NO_RECORD").is_some() {
+        marked = format!("eval:{by}");
+        marked.as_str()
+    } else {
+        by
+    };
     let question = q.text.trim();
     ensure!(!question.is_empty(), "the question is empty");
     let q = Query {
@@ -686,10 +739,7 @@ pub fn answer(
             Err(e) => writeln!(out, "not recorded: {e:#}")?,
         }
     } else if passed {
-        out.push_str(
-            "Every quote was found word for word in a candidate that was read. To keep the answer as a checked \
-             fact for the next session, answer again with record: true.\n",
-        );
+        out.push_str("Not kept as a fact (record: false).\n");
     }
     Ok((out, passed))
 }
@@ -762,7 +812,13 @@ fn record(
         attacks: None,
         stance: None,
     };
-    let id = store.add_fact(&project.path(&home.workspace), &project.name, &fact)?;
+    let id = match store.add_fact(&project.path(&home.workspace), &project.name, &fact) {
+        Ok(id) => id,
+        Err(e) => {
+            crate::ops::record_refusal(store, "ask_record", &project.name, &fact.by, &e);
+            return Err(e);
+        }
+    };
     Ok(format!(
         "recorded {id} in {}: CONFIRMED by {}#L{}-{}",
         project.name,
@@ -774,6 +830,14 @@ fn record(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_answer_records_unless_told_not_to() {
+        let a: super::AnswerIn = serde_json::from_str(r#"{"answer": "x"}"#).unwrap();
+        assert!(a.record, "a passed answer is kept by default");
+        let a: super::AnswerIn = serde_json::from_str(r#"{"answer": "x", "record": false}"#).unwrap();
+        assert!(!a.record);
+    }
+
     use super::*;
 
     fn cand(n: usize, key: &str) -> Candidate {
@@ -1039,8 +1103,8 @@ mod tests {
     }
 
     #[test]
-    fn every_project_read_keeps_its_top_places() {
-        let hit = |project: &str, score: f64| Hit {
+    fn the_packet_orders_the_read_by_its_own_words_not_the_stores_scores() {
+        let hit = |project: &str, score: f64, text: &str| Hit {
             project: project.into(),
             key: format!("{project}{score}"),
             hash: String::new(),
@@ -1049,26 +1113,44 @@ mod tests {
             commit: None,
             experts: vec![],
             score: Some(score),
-            text: String::new(),
+            text: text.into(),
             changed_at: None,
             marked: None,
             marks: vec![],
             fact: None,
             fact_grade: None,
         };
-        let mut sorted: Vec<Hit> = (0..30).map(|i| hit("big", 100.0 - i as f64)).collect();
-        sorted.push(hit("notes", 5.0));
-        sorted.push(hit("notes", 4.0));
-        let out = with_slots(sorted, 20);
-        assert_eq!(out.len(), 20);
-        assert_eq!(
-            out.iter().filter(|h| h.project == "notes").count(),
-            2,
-            "both notes kept"
-        );
+        // The big project's index scored its units higher; the small project's note has the words.
+        let mut read: Vec<Hit> = (0..30)
+            .map(|i| hit("big", 100.0 - i as f64, "frames and rollback in general terms"))
+            .collect();
+        read.push(hit(
+            "notes",
+            5.0,
+            "the save set is 277,288 bytes, every rollback restores it",
+        ));
+        read.push(hit("notes", 4.0, "unrelated note"));
+        let out = order_hits("how many bytes is the save set a rollback restores", read);
+        assert_eq!(out.len(), 32, "nothing dropped: the caller cuts");
+        let note = out.iter().position(|h| h.score == Some(5.0)).unwrap();
         assert!(
-            out[0].score == Some(100.0) && out[19].score == Some(4.0),
-            "still best first"
+            note < 15,
+            "the note with the words rises from 31st to the packet's first half (fusion with the store's rank): {note}"
+        );
+        assert_eq!(
+            out[0].score,
+            Some(100.0),
+            "the store's best, which also matches, stays first"
+        );
+        assert_eq!(out[31].score, Some(4.0), "the unrelated note stays last");
+        // A fact that shares one word with the question ranks below the unit that answers it.
+        let docs = vec![
+            "PGO: the profile is taken from the match tape, every build".to_owned(),
+            "the save set is 277,288 bytes, every rollback restores it".to_owned(),
+        ];
+        assert_eq!(
+            order_by_words("how many bytes is the save set a rollback restores", &docs),
+            [1, 0]
         );
     }
 

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Groundworks: notes and habits for AI coding agents</title>
+<meta name="description" content="A personal project: a place for AI coding agents to keep what they learn, so the next session does not start from zero. MIT.">
+<meta property="og:title" content="Groundworks">
+<meta property="og:description" content="A place for my AI coding agents to keep what they learn, so the next session does not start from zero.">
+<meta property="og:image" content="https://t3chnicallyinclined.github.io/groundworks/brand/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="brand/favicon.ico">
+<link rel="apple-touch-icon" href="brand/icon-256.png">
+<style>
+:root{--blueprint:#0060A5;--electric:#0057FF;--orange:#F26B1D;--yellow:#F5C518;--black:#1F1A17;--paper:#F7F3EC;--night:#0F1A2E;--muted:#5C4A3D;--line:rgba(255,255,255,.14)}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--black);background:var(--paper)}
+a{color:var(--electric)}
+code{font-size:.92em}
+.wrap{max-width:980px;margin:0 auto;padding:0 20px}
+header{background:var(--blueprint);background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:32px 32px;color:#fff;padding:28px 0 40px;border-bottom:6px solid var(--yellow)}
+header img{display:block;width:100%;max-width:820px;height:auto;margin:0 auto;border-radius:10px}
+header p.lead{font-size:1.3rem;line-height:1.4;text-align:center;max-width:720px;margin:24px auto 0;font-weight:600}
+nav{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:22px}
+nav a{color:#fff;text-decoration:none;border:2px solid #fff;border-radius:999px;padding:8px 18px;font-weight:600;min-height:44px;display:inline-flex;align-items:center}
+nav a.primary{background:var(--orange);border-color:var(--orange);color:var(--black)}
+section{padding:44px 0;border-bottom:1px solid #e4ddd0}
+h2{font-size:1.7rem;margin:0 0 14px;letter-spacing:-.01em}
+h2::before{content:"";display:inline-block;width:14px;height:14px;background:var(--orange);border-radius:3px;margin-right:10px;vertical-align:middle}
+.why{display:grid;grid-template-columns:1fr 260px;gap:28px;align-items:start}
+.why img{width:100%;height:auto}
+ul.pain{padding-left:20px} ul.pain li{margin:6px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;margin-top:14px}
+.card{background:#fff;border:1px solid #e4ddd0;border-top:4px solid var(--blueprint);border-radius:10px;padding:16px}
+.card h3{margin:0 0 6px;font-size:1.05rem}
+.card p{margin:0;font-size:.95rem;color:var(--muted)}
+ol.loop li{margin:8px 0}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;margin-top:12px;background:#fff;font-size:.95rem}
+th,td{text-align:left;padding:10px 12px;border:1px solid #e4ddd0;vertical-align:top}
+th{background:var(--blueprint);color:#fff}
+.note{background:#fff8dc;border-left:5px solid var(--yellow);padding:12px 16px;border-radius:6px;margin-top:16px}
+pre{background:var(--night);color:var(--paper);padding:16px;border-radius:10px;overflow-x:auto;font-size:.88rem;line-height:1.5}
+.flow{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;margin:16px 0 8px}.flow .box{background:var(--blueprint);color:#fff;border-radius:10px;padding:14px 16px;text-align:center;font-weight:600;min-width:200px;flex:1 1 200px}.flow .box.main{background:var(--night);border:3px solid var(--yellow)}.flow small{font-weight:400;opacity:.85}.flow .arrow{font-weight:700;color:var(--orange);text-align:center}
+footer{background:var(--night);color:#B8C2D6;padding:28px 0;font-size:.9rem}
+footer a{color:#5B9BFF}
+@media (max-width:720px){.why{grid-template-columns:1fr}.why img{max-width:220px;margin:0 auto}body{font-size:16px}}
+@media (prefers-color-scheme:dark){body{background:var(--night);color:var(--paper)}section{border-color:#24324f}.card,table{background:#172540;border-color:#24324f}th,td{border-color:#24324f}.card p{color:#B8C2D6}.note{background:#2a2510;color:var(--paper)}a{color:#5B9BFF}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <img src="brand/groundworks-logo.png" alt="Groundworks logo: a groundhog in an orange hard hat coming up out of a taped-off hole, drawn on blueprint paper" width="1600" height="897">
+    <p class="lead">A place for my AI coding agents to keep what they learn, so the next session doesn't start from zero.</p>
+    <nav>
+      <a class="primary" href="https://github.com/t3chnicallyinclined/groundworks">View on GitHub</a>
+      <a href="https://github.com/t3chnicallyinclined/groundworks/blob/main/plugin/README.md">Claude Code plugin</a>
+      <a href="https://github.com/t3chnicallyinclined/groundworks/fork">Fork it</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section><div class="wrap why">
+  <div>
+    <h2>What this is</h2>
+    <p>I'm a cloud engineer, not a software company. I have a lot of research and side projects going, and I use AI agents (mostly Claude Code) to help with them. I made Groundworks to make my own life easier on that work. It's a personal project, and I'm sharing it in case it's useful to someone else.</p>
+    <h2 style="margin-top:28px">What I'm trying to fix</h2>
+    <ul class="pain">
+      <li>Every new agent session forgets what the last one figured out, so the same lessons get re-learned.</li>
+      <li>Agents sometimes say something is done or fixed before anything was actually run.</li>
+      <li>Notes end up scattered across files, chats and tickets, and the next session can't find them.</li>
+    </ul>
+    <p>The mascot is the foreman. He digs, keeps a ledger of what was found, and tapes off the dead ends so nobody falls in twice.</p>
+  </div>
+  <img src="brand/mascot.png" alt="The Groundworks mascot: a groundhog in an orange hard hat and a caution-tape collar, paws on the rim of a hole" width="800" height="735">
+</div></section>
+
+<section><div class="wrap">
+  <h2>What works today</h2>
+  <p>A small Rust program plus a Claude Code plugin, a local database next to my projects, and a few tools and habits for the agent.</p>
+  <div class="grid">
+    <div class="card"><h3>A journal per project</h3><p>Decisions, gotchas and dead ends get written down. Anything marked confirmed has to point at proof: a command that ran, or a quote from a file. Text that looks like a secret is refused.</p></div>
+    <div class="card"><h3>Search over my projects</h3><p>Files, docs and commits are indexed so the agent can look things up before re-deriving them. Quotes are checked against the source.</p></div>
+    <div class="card"><h3>Receipts</h3><p>Commands and build checks run through Groundworks and leave a record.</p></div>
+    <div class="card"><h3>Hooks</h3><p>A session starts with that project's notes, even in a git worktree. Risky shell commands and edits to Groundworks' own guard files are blocked. A session that changed things can't stop until it writes down what it learned.</p></div>
+    <div class="card"><h3>Housekeeping</h3><p>A supervisor keeps the database running, backs it up nightly and test-restores the backup. A short health report shows whether things are healthy, including work Groundworks didn't see.</p></div>
+    <div class="card"><h3>Stays local</h3><p>Your notes and data live in your own folder on your machine, never in the repo.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>How it fits together</h2>
+  <div class="flow">
+    <div class="box">Your projects<br><small>code, docs, commits</small></div><div class="arrow">intake &rarr;</div>
+    <div class="box main">Local SurrealDB graph<br><small>fact &rarr; evidence &rarr; source lines or a command receipt</small></div><div class="arrow">&larr; ask, record, run &rarr;</div>
+    <div class="box">Claude Code + plugin<br><small>hooks, tools, expert agents</small></div>
+  </div>
+  <p>A supervisor keeps the store running, exports it nightly, test-restores the export and writes a short health report. Each project's data sits in its own section of the database, and everything runs locally.</p>
+</div></section>
+
+<section><div class="wrap">
+  <h2>The knowledge framework underneath</h2>
+  <p>Groundworks grew out of a method I first built for reading one very large record where getting things wrong was expensive. I called it the Scholar method. The same ideas run through all of it:</p>
+  <div class="grid">
+    <div class="card"><h3>An evidence-gated graph</h3><p>Sources are cut into units with exact locations. A claim becomes confirmed only when the database finds qualifying evidence linked to it. Every rule is shown failing on a bad write before it's trusted.</p></div>
+    <div class="card"><h3>Read everything, and prove it</h3><p>In the original engine, agents label every unit once and a validator proves the coverage and checks each quote, so it can say what it did not read.</p></div>
+    <div class="card"><h3>Dead ends are knowledge</h3><p>Ruled-out claims are stored with what the source actually shows, and shown to the next agent before it repeats them.</p></div>
+    <div class="card"><h3>Challenges are kept</h3><p>Another expert can challenge or support a finding, and nothing gets deleted. In the original engine, a conclusion can't be marked ready until every damaging point is answered.</p></div>
+    <div class="card"><h3>Lenses</h3><p>Each expert records findings through their own lens over the same evidence, which is never copied or edited. Disagreement is shown, not settled by leaving a side out.</p></div>
+    <div class="card"><h3>Panels</h3><p>Several experts judge one question: a blind first round, an anonymised second, a minimum amount of dissent, and a weighted tally under thresholds I set.</p></div>
+    <div class="card"><h3>Evals graded blind</h3><p>Changes are tested on question sets graded blind, with the pass rule written down before the run. What didn't help is written down too.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>How the knowledge base runs</h2>
+  <ol class="loop">
+    <li><b>One home, many projects.</b> A home folder holds the registry, the expert team and a single local SurrealDB store. Each project gets its own section, shared, private or isolated, and walls can keep two apart.</li>
+    <li><b>Intake</b> reads each project's code, docs and commits into units, tagged with the experts whose area covers them.</li>
+    <li><b>Asking</b> returns the best candidates, recorded facts first. A program checks every quote in the answer, and a passed answer is recorded for next time.</li>
+    <li><b>Recording</b> puts decisions, gotchas, status and dead ends in each project's journal, signed and graded confirmed, inferred or unknown.</li>
+    <li><b>Keeping it alive.</b> The supervisor restarts the store, exports it nightly and test-restores the export. The pulse reports whether the knowledge is growing, used and backed up.</li>
+    <li><b>The original engine is still here</b>, as the reference the Rust port is checked against. It can be pointed at any body of material by answering eight questions.</li>
+  </ol>
+</div></section>
+
+<section><div class="wrap">
+  <h2>A few choices I made</h2>
+  <p>There are plenty of good agent memory tools out there, and I'm not claiming this one is better. These choices fit how I work:</p>
+  <div class="grid">
+    <div class="card"><h3>The database holds the line</h3><p>"Confirmed" needs a link to real source, a command receipt, or my say-so. Without one, SurrealDB refuses the write.</p></div>
+    <div class="card"><h3>A program checks quotes</h3><p>A quote in an answer has to be found word for word in what the agent actually read.</p></div>
+    <div class="card"><h3>Dead ends are kept</h3><p>Ruled-out approaches are written down with the reason, so they don't get re-tried.</p></div>
+    <div class="card"><h3>Kept simple</h3><p>One local program and one local database. No cloud service, and no AI model inside Groundworks.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Roadmap</h2>
+  <div class="grid">
+    <div class="card"><h3>Now</h3><p>A Groundworks desktop app: a copy of Nimbalyst with Groundworks built into every session. It's private while in progress, and its first public release is being prepared.</p></div>
+    <div class="card"><h3>Next</h3><p>"Check your notes first" made automatic, a smaller tool set per session, alerts when something stops working, an undoable way to remove a project, and picking up a project's own Claude Code agents, skills and notes when it's added.</p></div>
+    <div class="card"><h3>Later</h3><p>Sandboxed sessions, and a side-by-side check against plain Claude Code.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Try it</h2>
+<p>You need Rust (stable, via rustup), SurrealDB 3.x on your PATH (built and tested on 3.1.6), Git, and Claude Code.</p>
+<pre># 1. Build the program
+cargo install --path rust/crates/gw-mcp --locked
+
+# 2. Make a home folder next to your projects
+mkdir -p ~/projects/.groundworks
+echo 'workspace = "/home/you/projects"' &gt; ~/projects/.groundworks/groundworks.toml
+
+# 3. Start the store and create your owner login, once
+#    (type the password yourself; Groundworks never stores it)
+export GROUNDWORKS_OWNER_PASS=...
+cd ~/projects &amp;&amp; groundworks store init
+unset GROUNDWORKS_OWNER_PASS
+groundworks store supervise &amp;     # keep it running, nightly export, restore drill
+
+# 4. Add the plugin to Claude Code
+claude plugin marketplace add &lt;path to the repository&gt;
+claude plugin install groundworks@groundworks
+
+# 5. Check it
+groundworks selftest
+groundworks doctor</pre>
+  <p>On Windows, <code>groundworks store install</code> runs the supervisor as a logon task instead. Then open one of your projects in Claude Code and run <code>/groundworks:init</code>.</p>
+  <div class="note"><b>If it sounds helpful, give it a fork</b> and make it fit how you work. Issues and ideas are welcome.</div>
+</div></section>
+<section><div class="wrap">
+  <h2>Thanks</h2>
+  <ul class="pain">
+    <li><a href="https://github.com/Nimbalyst/nimbalyst">Nimbalyst</a> (MIT): the base of the desktop app.</li>
+    <li><a href="https://github.com/anthropics/claude-code">Claude Code</a>: the plugins and hooks Groundworks plugs into.</li>
+    <li><a href="https://github.com/modelcontextprotocol/modelcontextprotocol">Model Context Protocol</a> and its <a href="https://github.com/modelcontextprotocol/rust-sdk">Rust SDK</a>: how the tools are served.</li>
+    <li><a href="https://github.com/surrealdb/surrealdb">SurrealDB</a>: the database underneath.</li>
+    <li><a href="https://github.com/0xNyk/council-of-high-intelligence">Council of High Intelligence</a> (MIT): ideas for the expert panels.</li>
+    <li><a href="https://github.com/copier-org/copier">Copier</a> and <a href="https://github.com/astral-sh/uv">uv</a>: the project templates.</li>
+    <li><a href="https://github.com/karpathy/autoresearch">autoresearch</a> and <a href="https://github.com/alexzhang13/rlm">Recursive Language Models</a>: ideas I learned from.</li>
+    <li>The Rust crates in <a href="https://github.com/t3chnicallyinclined/groundworks/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>. The logo was made with Ideogram and Recraft.</li>
+  </ul>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  Groundworks is MIT licensed. SurrealDB, installed separately, is under the Business Source License 1.1.
+  <a href="https://github.com/t3chnicallyinclined/groundworks">Source on GitHub</a>.
+</div></footer>
+</body>
+</html>

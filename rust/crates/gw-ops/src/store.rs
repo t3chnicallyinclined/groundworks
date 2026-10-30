@@ -27,7 +27,11 @@ use crate::home::{Home, machine};
 use crate::journal::{Confidence, Kind};
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8004/sql";
-const AGENT: &str = "agent";
+/// Days a hook_event or session row is kept (TELEMETRY-POLICY.md); the pulse folds them into counters.
+pub const TELEMETRY_DAYS: u64 = 90;
+/// Days a rejection row is kept: the record of what almost leaked.
+pub const REJECTION_DAYS: u64 = 365;
+pub(crate) const AGENT: &str = "agent";
 const OWNER: &str = "owner";
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -87,12 +91,34 @@ impl Store {
         Self::with_launcher(Launcher::for_home(home)?, &read_secret(home, "agent")?)
     }
 
+    /// The home's store only if its server answers now: None when it is down. The hooks use this so a
+    /// session never waits on a server start and a down store is reported, not hidden.
+    pub fn open_if_up(home: &Home) -> Result<Option<Self>> {
+        let url = store_url(home);
+        if !gw_store::healthy(&url) {
+            return Ok(None);
+        }
+        Ok(Some(Self::connect(
+            &url,
+            &read_secret(home, "root")?,
+            &read_secret(home, "agent")?,
+        )))
+    }
+
     /// A store that starts its server through `launcher` now if needed, and again if it stops.
     pub fn with_launcher(launcher: Launcher, agent_master: &str) -> Result<Self> {
         launcher.ensure()?;
         let mut store = Self::connect(&launcher.url, &launcher.root_pass, agent_master);
         store.launcher = Some(launcher);
         Ok(store)
+    }
+
+    /// As [`Store::with_launcher`], without starting the server now: the supervisor starts it itself
+    /// and counts the starts.
+    pub fn with_launcher_lazy(launcher: Launcher, agent_master: &str) -> Self {
+        let mut store = Self::connect(&launcher.url, &launcher.root_pass, agent_master);
+        store.launcher = Some(launcher);
+        store
     }
 
     /// The launcher this store restarts its server with, if any.
@@ -102,6 +128,23 @@ impl Store {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The root password, for the export command's environment (never a command-line argument).
+    pub(crate) fn root_pass(&self) -> &str {
+        &self.root_pass
+    }
+
+    /// Every namespace the server holds, sorted.
+    pub fn namespaces(&self) -> Result<Vec<String>> {
+        let root = self.root(GLOBAL_NS)?;
+        let info = root.sql("INFO FOR ROOT;", Some(1))?;
+        let mut names: Vec<String> = info[0]["namespaces"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        names.sort();
+        Ok(names)
     }
 
     /// Run `f`; if the server could not be reached, start it again and run `f` once more.
@@ -142,6 +185,20 @@ impl Store {
                 level != "isolated",
                 "{ns} is isolated: it has a store of its own, and this store will not open it"
             );
+        }
+        // Fast path: the agent login already works and the namespace holds every file, so the root
+        // round trips (each a password hash on the server) and the re-provision are skipped. Measured
+        // 2026-10-29: they were most of a hook's 200-320 ms. Any failure falls through to the full path,
+        // which creates, migrates and re-provisions exactly as before.
+        let member = connect_member(&self.url, ns, AGENT, &self.agent_pass(ns))?;
+        if gw_store::is_current(&member, ns).unwrap_or(false) {
+            return Ok(Arc::clone(
+                self.agents
+                    .lock()
+                    .expect("agent cache poisoned")
+                    .entry(ns.to_owned())
+                    .or_insert(Arc::new(member)),
+            ));
         }
         let db = self.retrying(|| {
             let root = self.root(ns)?;
@@ -226,6 +283,8 @@ impl Store {
     /// receipt, an owner statement, or a quote that was found word for word (checked here first, so
     /// the refusal can say what the file really contains).
     pub fn add_fact(&self, project_dir: &Path, project: &str, fact: &FactIn) -> Result<String> {
+        // Before any network call: secret-shaped text never leaves this process (JOURNAL-REFUSALS.md).
+        crate::refusal::check_fact(fact)?;
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         self.retrying(|| self.write_fact(&db, project_dir, fact, None))
     }
@@ -238,6 +297,7 @@ impl Store {
         fact: &FactIn,
         owner_pass: &str,
     ) -> Result<String> {
+        crate::refusal::check_fact(fact)?;
         let db = self.owner(&project_ns(&slug(project)?)?, owner_pass)?;
         self.retrying(|| self.write_fact(&db, project_dir, fact, None))
     }
@@ -256,6 +316,7 @@ impl Store {
     ) -> Result<Option<String>> {
         // Refuse bad input before the duplicate check, so a bad entry is never silently "already there".
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
+        crate::refusal::check_fact(fact)?;
         needs_evidence(fact)?;
         let ns = project_ns(&slug(project)?)?;
         self.agent(&ns)?;
@@ -281,6 +342,7 @@ impl Store {
 
     fn write_fact(&self, db: &Db, project_dir: &Path, fact: &FactIn, origin: Option<&Origin>) -> Result<String> {
         ensure!(!fact.text.trim().is_empty(), "a fact needs text");
+        crate::refusal::check_fact(fact)?;
         let quote = fact.quote.as_ref().map(|q| q.verify(project_dir)).transpose()?;
         needs_evidence(fact)?;
         let grade = grade(fact.confidence);
@@ -352,15 +414,39 @@ impl Store {
 
     /// The newest `limit` facts, oldest first, optionally of one kind.
     pub fn facts(&self, project: &str, kind_filter: Option<Kind>, limit: usize) -> Result<Vec<FactRow>> {
+        self.facts_query(project, kind_filter, None, limit)
+    }
+
+    /// Every fact recorded after `since` (RFC 3339), oldest first. The Stop hook asks this to learn
+    /// whether a session wrote anything; the pulse asks it per window.
+    pub fn facts_since(&self, project: &str, since: &str) -> Result<Vec<FactRow>> {
+        self.facts_query(project, None, Some(since), 10_000)
+    }
+
+    /// The newest `limit` facts, oldest first, optionally of one kind and optionally after `since`.
+    pub fn facts_query(
+        &self,
+        project: &str,
+        kind_filter: Option<Kind>,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<FactRow>> {
         let mut vars = Vars::default();
-        let filter = match kind_filter {
-            Some(k) => {
-                vars = vars.set("kind", kind(k));
-                "WHERE kind = $kind"
-            }
-            None => "",
+        let mut clauses: Vec<&str> = Vec::with_capacity(2);
+        if let Some(k) = kind_filter {
+            vars = vars.set("kind", kind(k));
+            clauses.push("kind = $kind");
+        }
+        if let Some(since) = since {
+            vars = vars.set("since", rfc3339(since)?);
+            clauses.push("at > <datetime>$since");
+        }
+        let filter = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
         };
-        self.fact_rows(project, filter, vars, limit)
+        self.fact_rows(project, &filter, vars, limit)
     }
 
     /// The findings made through a lens, and every attack on them, oldest first.
@@ -816,6 +902,7 @@ impl Store {
         sha: &str,
         by: &str,
     ) -> Result<()> {
+        crate::refusal::check_text("text", text)?;
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         let vars = Vars::default()
             .set("key", panel_key(id)?)
@@ -956,6 +1043,25 @@ impl Store {
         })
     }
 
+    /// When each receipt of a project was taken (RFC 3339), in the last `days` (all when None), oldest
+    /// first. The pulse pairs them with denies: a `run` soon after a deny is the sanctioned path taken.
+    pub fn receipt_times_since(&self, project: &str, days: Option<u64>) -> Result<Vec<String>> {
+        let db = self.agent(&project_ns(&slug(project)?)?)?;
+        let (filter, vars) = match days {
+            Some(d) => (
+                " WHERE ran_at > time::now() - <duration>$d",
+                Vars::default().set("d", format!("{d}d")),
+            ),
+            None => ("", Vars::default()),
+        };
+        let sql = format!("SELECT VALUE <string> ran_at FROM receipt{filter} ORDER BY ran_at;");
+        let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
+        Ok(rows[0]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(seconds)).collect())
+            .unwrap_or_default())
+    }
+
     /// Facts recorded from asks in the last `days`.
     pub fn facts_from_asks_since(&self, project: &str, days: u64) -> Result<u64> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
@@ -977,11 +1083,252 @@ impl Store {
         let vars = Vars::default().set("d", format!("{days}d"));
         let rows = self.retrying(|| {
             Ok(global.query(
-                "SELECT status, candidates.*.fact AS facts, candidates FROM ask_packet WHERE at > time::now() - <duration>$d;",
+                "SELECT status, by, candidates.*.fact AS facts, candidates FROM ask_packet WHERE at > time::now() - <duration>$d;",
                 &vars.0,
                 Some(1),
             )?)
         })?;
+        Ok(rows[0].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Ask packets answered and passed in the last `days`, oldest first: question, author, time,
+    /// projects searched, candidates and the answer (for drawing an eval set from real asks).
+    pub fn passed_packets_since(&self, days: u64) -> Result<Vec<Value>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("d", format!("{days}d"));
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT id, question, by, at, searched, candidates, answer FROM ask_packet                  WHERE status = 'PASS' AND at > time::now() - <duration>$d ORDER BY at;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_array().cloned().unwrap_or_default())
+    }
+
+    // ---- hook telemetry (global; counts, ids and timings only; see schema 0014) ----------------------
+
+    /// Whether a session row with this id exists (a resumed session starts again without a new row).
+    pub fn session_exists(&self, id: &str) -> Result<bool> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("id", id);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE id FROM ONLY type::record('session', $id);",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(!rows[0].is_null())
+    }
+
+    /// Open a session row (SessionStart). The id is the client's session id.
+    pub fn session_start(&self, s: &SessionIn) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let mut sql = String::from(
+            "CREATE type::record('session', $id) SET machine = $machine, client = $client, agent = $agent, \
+             started_at = <datetime>$started_at, cwd_class = $cwd_class, injected_entries = $injected_entries, \
+             store_ok = $store_ok, hook_latency_ms = $hook_latency_ms",
+        );
+        let mut vars = Vars::default()
+            .set("id", s.id.as_str())
+            .set("machine", s.machine.as_str())
+            .set("client", s.client.as_str())
+            .set("agent", s.agent.as_str())
+            .set("started_at", rfc3339(&s.started_at)?)
+            .set("cwd_class", s.cwd_class.as_str())
+            .set("injected_entries", s.injected_entries)
+            .set("store_ok", s.store_ok)
+            .set("hook_latency_ms", s.hook_latency_ms);
+        if let Some(p) = &s.project {
+            sql.push_str(", project = $project");
+            vars = vars.set("project", p.as_str());
+        }
+        sql.push_str(" RETURN VALUE id;");
+        self.retrying(|| {
+            global.query(&sql, &vars.0, Some(1))?;
+            Ok(())
+        })
+    }
+
+    /// When a session row started, if there is one.
+    pub fn session_started_at(&self, id: &str) -> Result<Option<String>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("id", id);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE <string> started_at FROM ONLY type::record('session', $id);",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0].as_str().map(seconds))
+    }
+
+    /// One hook run. Append-only.
+    pub fn hook_event(&self, e: &HookEventIn) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let mut sql = String::from(
+            "CREATE hook_event SET session = $sid, agent = $agent, hook = $hook, decision = $decision, \
+             tool_uses = $tool_uses, journal_writes_since_start = $writes, latency_ms = $latency_ms",
+        );
+        // `$session` is a variable SurrealDB reserves; the field keeps its name, the binding does not.
+        let mut vars = Vars::default()
+            .set("sid", e.session.as_str())
+            .set("agent", e.agent.as_str())
+            .set("hook", e.hook)
+            .set("decision", e.decision)
+            .set("tool_uses", e.tool_uses.clone())
+            .set("writes", e.journal_writes_since_start)
+            .set("latency_ms", e.latency_ms);
+        if let Some(p) = &e.project {
+            sql.push_str(", project = $project");
+            vars = vars.set("project", p.as_str());
+        }
+        if let Some(r) = &e.rule_id {
+            sql.push_str(", rule_id = $rule_id");
+            vars = vars.set("rule_id", r.as_str());
+        }
+        if let Some(code) = e.error_code {
+            sql.push_str(", error_code = $error_code");
+            vars = vars.set("error_code", code);
+        }
+        if let Some(exit) = e.error_exit {
+            sql.push_str(", error_exit = $error_exit");
+            vars = vars.set("error_exit", exit);
+        }
+        if let Some(len) = e.error_len {
+            sql.push_str(", error_len = $error_len");
+            vars = vars.set("error_len", len);
+        }
+        // RETURN VALUE id, not RETURN NONE: an empty result reads as a refusal (gw-core db.rs).
+        sql.push_str(" RETURN VALUE id;");
+        self.retrying(|| {
+            global.query(&sql, &vars.0, Some(1))?;
+            Ok(())
+        })
+    }
+
+    /// A write the store refused, by surface (`note`, `journal_add`, ...). Append-only; the reason is
+    /// a code (pattern id or store rule), never the text that was refused. The schema refuses anything
+    /// else, so a caller that slipped text in would be refused here too.
+    pub fn record_rejection(&self, r: &RejectionIn<'_>) -> Result<()> {
+        let global = self.agent(GLOBAL_NS)?;
+        let mut sql = String::from("CREATE rejection SET surface = $surface, reason = $reason");
+        let mut vars = Vars::default().set("surface", r.surface).set("reason", r.reason);
+        if let Some(p) = r.project {
+            sql.push_str(", project = $project");
+            vars = vars.set("project", p);
+        }
+        if let Some(b) = r.by {
+            sql.push_str(", by = $by");
+            vars = vars.set("by", crate::hook::plain_name(b));
+        }
+        if let Some(f) = r.field {
+            sql.push_str(", field = $field");
+            vars = vars.set("field", f);
+        }
+        if let Some(o) = r.offset {
+            sql.push_str(", offset = $offset");
+            vars = vars.set("offset", o);
+        }
+        if let Some(n) = r.match_len {
+            sql.push_str(", match_len = $match_len");
+            vars = vars.set("match_len", n);
+        }
+        // RETURN VALUE id, not RETURN NONE: an empty result reads as a refusal (gw-core db.rs).
+        sql.push_str(" RETURN VALUE id;");
+        self.retrying(|| {
+            global.query(&sql, &vars.0, Some(1))?;
+            Ok(())
+        })
+    }
+
+    /// Session rows started in the last `days` (all when None), oldest first.
+    pub fn sessions_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
+        self.telemetry_rows(
+            "SELECT <string> id AS id, project, machine, client, agent, <string> started_at AS started_at, \
+             cwd_class, injected_entries, store_ok, hook_latency_ms FROM session",
+            "started_at",
+            days,
+        )
+    }
+
+    /// PreToolUse calls the hooks denied in session `session` at or after `since` (RFC 3339): the tool
+    /// calls that changed nothing, which the Stop hook does not count as work.
+    pub fn session_denies_since(&self, session: &str, since: &str) -> Result<u64> {
+        let global = self.agent(GLOBAL_NS)?;
+        let vars = Vars::default().set("sid", session).set("since", rfc3339(since)?);
+        let rows = self.retrying(|| {
+            Ok(global.query(
+                "SELECT VALUE count() FROM hook_event WHERE session = $sid AND hook = 'PreToolUse' \
+                 AND decision = 'deny' AND at >= <datetime>$since GROUP ALL;",
+                &vars.0,
+                Some(1),
+            )?)
+        })?;
+        Ok(rows[0]
+            .as_array()
+            .and_then(|a| a.first())
+            .or(Some(&rows[0]))
+            .and_then(Value::as_u64)
+            .unwrap_or(0))
+    }
+
+    /// Hook events in the last `days` (all when None), oldest first.
+    pub fn hook_events_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
+        self.telemetry_rows(
+            "SELECT session, project, agent, hook, <string> at AS at, decision, rule_id, tool_uses, \
+             journal_writes_since_start, latency_ms, error_code, error_exit, error_len FROM hook_event",
+            "at",
+            days,
+        )
+    }
+
+    /// Store rejections in the last `days` (all when None), oldest first.
+    pub fn rejections_since(&self, days: Option<u64>) -> Result<Vec<Value>> {
+        self.telemetry_rows(
+            "SELECT <string> at AS at, surface, project, by, reason, field, offset, match_len FROM rejection",
+            "at",
+            days,
+        )
+    }
+
+    /// Retention (TELEMETRY-POLICY.md): root deletes hook_event and session rows older than
+    /// [`TELEMETRY_DAYS`] and rejection rows older than [`REJECTION_DAYS`]. Members cannot delete, so this
+    /// runs in the supervisor only. Returns the rows removed per table (hook_event, session, rejection).
+    pub fn prune_telemetry(&self) -> Result<[u64; 3]> {
+        let root = self.root(GLOBAL_NS)?;
+        let vars = Vars::default()
+            .set("t", format!("{TELEMETRY_DAYS}d"))
+            .set("r", format!("{REJECTION_DAYS}d"));
+        let rows = self.retrying(|| {
+            Ok(root.query(
+                "RETURN count(SELECT VALUE id FROM hook_event WHERE at < time::now() - <duration>$t);\
+                 RETURN count(SELECT VALUE id FROM session WHERE started_at < time::now() - <duration>$t);\
+                 RETURN count(SELECT VALUE id FROM rejection WHERE at < time::now() - <duration>$r);\
+                 DELETE hook_event WHERE at < time::now() - <duration>$t RETURN NONE;\
+                 DELETE session WHERE started_at < time::now() - <duration>$t RETURN NONE;\
+                 DELETE rejection WHERE at < time::now() - <duration>$r RETURN NONE;",
+                &vars.0,
+                Some(6),
+            )?)
+        })?;
+        let at = |i: usize| rows.get(i).and_then(Value::as_u64).unwrap_or(0);
+        Ok([at(0), at(1), at(2)])
+    }
+
+    fn telemetry_rows(&self, select: &str, time_field: &str, days: Option<u64>) -> Result<Vec<Value>> {
+        let global = self.agent(GLOBAL_NS)?;
+        let (filter, vars) = match days {
+            Some(d) => (
+                format!(" WHERE {time_field} > time::now() - <duration>$d"),
+                Vars::default().set("d", format!("{d}d")),
+            ),
+            None => (String::new(), Vars::default()),
+        };
+        let sql = format!("{select}{filter} ORDER BY {time_field};");
+        let rows = self.retrying(|| Ok(global.query(&sql, &vars.0, Some(1))?))?;
         Ok(rows[0].as_array().cloned().unwrap_or_default())
     }
 
@@ -1183,6 +1530,52 @@ pub struct ReceiptIn {
     pub commit: Option<String>,
 }
 
+/// A session row (schema 0014): who started where (as a class, never a path), and what the
+/// SessionStart hook did for it.
+#[derive(Debug, Clone)]
+pub struct SessionIn {
+    pub id: String,
+    pub project: Option<String>,
+    pub machine: String,
+    pub client: String,
+    pub agent: String,
+    pub started_at: String,
+    pub cwd_class: crate::hook::CwdClass,
+    pub injected_entries: u64,
+    pub store_ok: bool,
+    pub hook_latency_ms: i64,
+}
+
+/// One hook run (schema 0014). Codes, counts and ids only.
+#[derive(Debug, Clone)]
+pub struct HookEventIn {
+    pub session: String,
+    pub project: Option<String>,
+    pub agent: String,
+    pub hook: &'static str,
+    pub decision: &'static str,
+    pub rule_id: Option<String>,
+    pub tool_uses: Value,
+    pub journal_writes_since_start: u64,
+    pub latency_ms: i64,
+    pub error_code: Option<&'static str>,
+    pub error_exit: Option<i64>,
+    pub error_len: Option<u64>,
+}
+
+/// A refused write, as the rejection table keeps it: codes and numbers, never the text.
+#[derive(Debug, Clone, Default)]
+pub struct RejectionIn<'a> {
+    pub surface: &'a str,
+    pub project: Option<&'a str>,
+    pub by: Option<&'a str>,
+    /// A JOURNAL-REFUSALS pattern id or a store rule code (`[a-z0-9-]{1,40}`).
+    pub reason: &'a str,
+    pub field: Option<&'a str>,
+    pub offset: Option<u64>,
+    pub match_len: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FactIn {
     pub kind: Kind,
@@ -1283,6 +1676,16 @@ pub struct FactRow {
 }
 
 impl FactRow {
+    /// Who signed the row: `owner` (the owner's login), `agent` (the shared agent login) or `imported`
+    /// (the loader, for entries that predate the store). From `written_by`, never from the free-text `by`.
+    pub fn signer(&self) -> &'static str {
+        match self.written_by.as_deref() {
+            Some("member:owner") => "owner",
+            Some(_) => "agent",
+            None => "imported",
+        }
+    }
+
     pub fn render(&self) -> String {
         let mut line = format!(
             "{} [{}] {}{} {}",
@@ -1299,9 +1702,10 @@ impl FactRow {
         let source = self.source.as_deref().filter(|s| !s.is_empty()).unwrap_or("no source");
         let _ = write!(
             line,
-            " ({source}; by {} on {})",
+            " ({source}; by {} on {}; signed {})",
             self.by.as_deref().unwrap_or("?"),
-            self.machine.as_deref().unwrap_or("?")
+            self.machine.as_deref().unwrap_or("?"),
+            self.signer()
         );
         if let Some(said) = &self.owner_statement {
             if self.written_by.as_deref() == Some("member:owner") {
@@ -1458,7 +1862,7 @@ fn secrets_dir(home: &Home) -> PathBuf {
     home.path("secrets")
 }
 
-fn read_secret(home: &Home, name: &str) -> Result<String> {
+pub(crate) fn read_secret(home: &Home, name: &str) -> Result<String> {
     let path = secrets_dir(home).join(format!("{name}.pass"));
     let text = std::fs::read_to_string(&path).with_context(|| {
         format!(
@@ -1527,6 +1931,25 @@ impl Launcher {
             home.root
                 .join(home.config.store.data.as_deref().unwrap_or(Path::new("db"))),
         ))
+    }
+
+    /// The same launcher with the SurrealDB binary named explicitly (the supervisor's task has no
+    /// environment to find it through).
+    pub fn with_binary(mut self, binary: Option<PathBuf>) -> Self {
+        if binary.is_some() {
+            self.binary = binary;
+        }
+        self
+    }
+
+    /// The data directory (the rocksdb store and the server's log live under it).
+    pub fn data(&self) -> &Path {
+        &self.data
+    }
+
+    /// The configured SurrealDB binary, if the home names one.
+    pub fn binary(&self) -> Option<&Path> {
+        self.binary.as_deref()
     }
 
     /// Make sure a server answers at `url`, starting one if none does. Several sessions may race

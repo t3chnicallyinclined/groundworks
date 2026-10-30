@@ -14,13 +14,19 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 |---|---|---|---|
 | SurrealDB server | Business Source License 1.1 (Change Date 2030-01-01, Apache-2.0). Not to be offered as a "Database Service" letting third parties create, manage or control schemas or tables | System of record, separate process over HTTP | Not today. If shipped self-hosted, include its LICENSE conspicuously |
 | Python and standard library | PSF License | All scripts | No |
+| Copier (copier-org/copier) | MIT | Renders project templates and brings later template changes into generated projects (`groundworks bootstrap` / `upgrade`, through `uvx copier`); not modified, not bundled | No |
+| uv (astral-sh/uv) | Apache-2.0 OR MIT | Runs Copier on demand (`uvx copier`); not modified, not bundled | No |
 | git | GPL-2.0 | Development tooling (privacy scan, pre-commit hook) | No |
 | Rust crate `anyhow` | MIT OR Apache-2.0 | Errors in gw-ops and gw-mcp | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `chrono` | MIT OR Apache-2.0 | Local time in the store supervisor's log and daily export (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `ciborium` | Apache-2.0 | CBOR encoding for bound query variables (gw-core) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `clap` | MIT OR Apache-2.0 | The groundworks command line | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `flate2` | MIT OR Apache-2.0 | Gzip of the store's daily exports (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `fs2` | MIT OR Apache-2.0 | Free space of the store's volume, read by the supervisor (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `getrandom` | MIT OR Apache-2.0 | Store credentials from OS randomness | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `regex` | MIT OR Apache-2.0 | Config parsing (gw-core), estate scan globs (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `rmcp` | Apache-2.0 | The Rust MCP SDK: the groundworks MCP server | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `rust-stemmers` | MIT OR BSD-3-Clause | Snowball English stemming in the retrieval ladder's rerank arms (gw-ops), matching the store's analyzer | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `schemars` | MIT | JSON schemas for MCP tool arguments | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `serde` | MIT OR Apache-2.0 | Serialization | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `serde_json` | MIT OR Apache-2.0 | JSON | Compiled into binaries built from `rust/`; no binary is distributed |
@@ -38,6 +44,7 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | Component | License | Note |
 |---|---|---|
 | surrealdb.py, surrealkv | Apache-2.0 | Keep license and NOTICE |
+| Nimbalyst (Nimbalyst/nimbalyst) | MIT | The Groundworks desktop app is a private copy of it with Groundworks added; none of its code is in this repository. Its LICENSE and notices travel with that copy |
 | Other permissive embedding candidates: nomic-embed-text (Apache-2.0), arctic-embed-l-v2.0 (Apache-2.0), mxbai-embed-large-v1 (Apache-2.0) | as listed | **Never jina-embeddings-v3 (CC-BY-NC-4.0)** |
 
 ## Model weights used (local only, not distributed)

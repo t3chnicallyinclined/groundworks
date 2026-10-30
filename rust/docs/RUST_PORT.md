@@ -564,3 +564,73 @@ recorded-fact candidate by the fact's text as well as its evidence; repeats the 
 answered again. A recorded fact's text is kept in the packet (migration 0013). Every project an ask reads keeps
 three places in the packet (a small notes project is otherwise crowded out). None of this is in the Python
 check; each item is a measured deviation.
+
+## store drill, recording by default, eval-draw (2026-10-29)
+
+**Recording by default.** `AnswerIn.record` defaults to true: a passed answer is kept as a fact unless
+the caller says `record: false`. The eval runner's `GROUNDWORKS_NO_RECORD` still wins. Reason: the pulse
+of 2026-10-26 showed 0 facts from asks; recording was opt-in and no real session opted in. A packet
+opened with recording off is signed `eval:<by>` (`ask::open`), the pulse counts those apart (`asks_eval`),
+and `eval-draw` leaves them out. Measured the same day: the 88 PASS packets signed `main session` were
+eval runs whose sessions never loaded the agent text (their questions are set 2's traps; INFERRED), so
+real use in the first week was near zero and nothing in the store said so.
+
+**The export is drilled.** `supervise::export` now writes `COUNTS.json` (per namespace, per table,
+`[rows before, rows after]` the namespace's export) and moves every `INSERT RELATION` line after the
+record inserts (`relations_last`). `supervise::drill` starts a scratch SurrealDB (`gw_store::scratch`,
+free loopback port, rocksdb in a temp folder, stopped by handle), imports each file with `surreal import`,
+counts every table with `INFO FOR DB` plus `count()` by bound table name, and passes only when every
+count is within its export range, every exported file was counted, and every counted table came back.
+It writes `DRILL` beside the export (verdict first); `store drill` exits non-zero on FAIL; the supervisor
+runs it after the daily export and logs `restore drill PASS` or `RESTORE DRILL FAILED`, then takes the
+day's pulse (`pulse: ...` line, appended to `metrics/pulse.jsonl`), so the trend file fills itself.
+
+What the drill found, in order: 2026-10-27, `surreal export ... -` put a log line in stdout (fixed in
+8028a23); 2026-10-29, `surreal export` 3.1.6 writes tables alphabetically, so the ENFORCED `evidence`
+relation's rows came before the `fact` and `unit` rows they join and `surreal import` refused every
+export at the first relation (`The record 'fact:...' does not exist`). Every export taken before
+2026-10-29 was unrestorable as written. The selftest now proves the drill both ways (a count raised by
+one in COUNTS.json fails it naming the table; a truncated file fails it).
+
+Measured on the live home (Windows 11, 2026-10-29, debug binary): export of 20 namespaces 29.6 s;
+drill 210.7 s, 20 namespaces, 51,259 rows, every count exact (no session wrote during the export).
+`main` is a namespace SurrealDB creates itself, 0 tables; the drill's namespace names are checked
+against `[a-z0-9_]+` before they reach a statement. The export writes `[REDACTED]` for the JWT keys in
+`DEFINE ACCESS`, so a database restored from it would sign tokens with a published string: after each
+import the drill runs `gw_store::redefine_access` (the schema's access statement with OVERWRITE and no
+KEY, so SurrealDB generates a fresh one; a test holds the three schema files to that text) and then signs
+in as the real agent credential of that namespace and runs a query, so a restore is proved usable, not
+only complete.
+
+**`eval-draw`.** `eval::draw` writes a JSON Lines skeleton from the passed packets of the last N days
+(question, answer as provisional `gold_answer`, support quotes as provisional `gold`, `category: TODO`,
+`drawn_from`, `by`, `at`). The owner approves or rewrites every line; `eval-check` proves the set. First
+draw (7 days, eval sessions excluded by author only, before the `eval:` mark existed): 88 lines, all of
+them eval questions, which is what led to the mark.
+
+The pulse carries `last_export` and `last_drill` (the newest finished export's day and its DRILL
+verdict), shown on the `ops` line and as the last column of `pulse --history`.
+
+## templates through Copier; the restore drill re-keys access (2026-10-29)
+
+`scaffold::bootstrap` renders a stack's template through Copier (`uvx copier copy --defaults --quiet
+--vcs-ref=HEAD`, data `templates_dir`, `stack`, `name`, `crate`, `dependencies`, `dev_dependencies`)
+from the git repository that holds `home.templates()`, whose root carries `copier.yml`
+(`_subdirectory: "{{ templates_dir }}/{{ stack }}"`, `_templates_suffix: ""`). The project gets
+`.copier-answers.yml` with `_commit` (git describe of the template repository) and `_src_path`.
+`scaffold::upgrade` (CLI `groundworks upgrade <project>`) runs `copier update --vcs-ref=HEAD
+--conflict inline` in the project and reports the commit change and `git status --short`; Copier
+refuses a destination with uncommitted changes. Copier is found as `GROUNDWORKS_COPIER` or `uvx` on
+PATH; under Git Bash `PATHEXT` is unset and Copier's process library then cannot find `git`, so it is
+set for the child. Measured with copier 9.19.1 in a temporary clone: a working-copy render of a
+repository path ignored `_subdirectory` (whole repository copied) and a relative `_src_path` made
+`update` fail with "Unknown revision", so HEAD and an absolute root are always used. The gw-ops test
+`render_records_the_template_commit_and_upgrade_merges_later_changes` runs the real copier against a
+small template repository (render, commit, template change, upgrade, local file survives, dirty
+destination refused) and fails as NOT EXECUTED when copier cannot run. Template files are rendered
+whole, so none may contain a literal `{{` or `{%`.
+
+The restore drill, after each import, re-defines the `member` access with a fresh key
+(`gw_store::redefine_access`; the export carries `KEY '[REDACTED]'`) and signs in as the namespace's
+real agent credential; a test holds the three schema files to the access text.
+

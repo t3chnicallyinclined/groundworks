@@ -34,6 +34,20 @@ enum Command {
         project: String,
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Only journal entries after this RFC 3339 time (e.g. 2026-10-29T20:00:00Z).
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// A project's journal: newest entries, oldest first; one kind, or only entries after a time.
+    Journal {
+        project: String,
+        #[arg(long, value_enum)]
+        kind: Option<Kind>,
+        /// Only entries after this RFC 3339 time (e.g. 2026-10-29T20:00:00Z).
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
     /// Show an env's vars and secret references.
     Env {
@@ -69,6 +83,9 @@ enum Command {
         #[arg(long)]
         no_register: bool,
     },
+    /// Bring later template changes into a project scaffolded by bootstrap (`copier update`, a
+    /// three-way merge; conflicts marked inline). The project must be committed first.
+    Upgrade { project: String },
     /// Record a fact in a project's journal (the store refuses CONFIRMED without evidence).
     Note {
         project: String,
@@ -79,7 +96,8 @@ enum Command {
         source: String,
         #[arg(long, value_enum, default_value = "inferred")]
         confidence: Confidence,
-        #[arg(long, default_value = "owner")]
+        /// Who writes it. An unsigned note is an agent's; the owner signs with --as-owner.
+        #[arg(long, default_value = "agent")]
         by: String,
         /// A receipt id from run or gate.
         #[arg(long)]
@@ -118,8 +136,18 @@ enum Command {
     },
     /// Check registry, templates, secrets and profile.
     Doctor,
-    /// Install team/gw-*.md into ~/.claude/agents.
-    InstallTeam,
+    /// Install team/gw-*.md into ~/.claude/agents. --stamp puts the one shared Groundworks block into
+    /// every agent there (replacing the 2026-09-22 OFF sentence); --check reports any agent whose block
+    /// drifts from the template and exits non-zero.
+    InstallTeam {
+        #[arg(long)]
+        stamp: bool,
+        #[arg(long)]
+        check: bool,
+        /// The agents directory (default ~/.claude/agents). Tests use a copy.
+        #[arg(long)]
+        agents_dir: Option<PathBuf>,
+    },
     /// Ingest a project (or --all) into the store, by kind and by expert area.
     Intake {
         project: Option<String>,
@@ -168,10 +196,25 @@ enum Command {
     Pulse {
         #[arg(long)]
         history: bool,
+        /// Take the pulse, record it, and print only the red conditions (docs/METRICS.md), one per line.
+        #[arg(long)]
+        digest: bool,
     },
     /// Check an eval question set (JSON Lines): every gold quote found word for word in a tracked
     /// file of its project, every trap's premise absent.
     EvalCheck { file: std::path::PathBuf },
+    /// Draw a question-set skeleton from real asks: the passed answers of the last --days, their
+    /// questions and support quotes, one JSON line each with category TODO. The owner approves or
+    /// rewrites every line; then eval-check proves the set. Nothing drawn is gold until then.
+    EvalDraw {
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Authors to leave out (the eval runner's own sessions answer as `agent`).
+        #[arg(long, value_delimiter = ',', default_value = "agent")]
+        exclude_by: Vec<String>,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
     /// Run an eval set: each question with and without Groundworks in fresh headless sessions, each
     /// answer graded blind. Resumes an interrupted run given the same --out.
     EvalRun {
@@ -198,7 +241,18 @@ enum Command {
         record: bool,
     },
     /// Retrieval alone, no model: is every gold line ingested, and where does the ranked read put it?
-    EvalRetrieval { file: std::path::PathBuf },
+    /// With --ladder, the pre-registered rerank ladder over one or more sets (report and rows to --out).
+    EvalRetrieval {
+        #[arg(required = true)]
+        files: Vec<std::path::PathBuf>,
+        #[arg(long)]
+        ladder: bool,
+        /// Candidates in the pool each arm reorders.
+        #[arg(long, default_value_t = 60)]
+        depth: usize,
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
     /// Router test, offline: can a cheap judge tell from the candidates alone that a question is
     /// answerable? Labels come from the gold; no agent sessions.
     EvalRouter {
@@ -214,6 +268,18 @@ enum Command {
     /// Prove it works on this machine: a throwaway home and store, this binary as the MCP server,
     /// every rule an agent relies on. Never touches the real home or store.
     Selftest,
+    /// A Claude Code plugin hook: reads the hook's JSON on stdin, prints the hook's JSON on stdout.
+    /// SessionStart injects the project's journal (gotchas first) and opens a session row; PreToolUse
+    /// (Bash) applies deny.toml, failing closed; Stop and SubagentStop ask once for a journal entry when
+    /// tools changed something and nothing was recorded. Always exits 0; a session is never blocked
+    /// from starting.
+    Hook {
+        /// SessionStart, PreToolUse, Stop or SubagentStop.
+        event: String,
+        /// The rule file for PreToolUse (default: GROUNDWORKS_DENY_RULES, else the compiled-in deny.toml).
+        #[arg(long)]
+        rules: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -229,6 +295,138 @@ enum StoreAction {
     Status,
     /// Import any remaining file journals.
     Import,
+    /// Keep the store answering: adopt one already up, start one when none is, start it again when it
+    /// stops, and export every namespace once a day. Runs until killed; `store install` runs it at logon.
+    Supervise {
+        /// The home to serve (default: discovered from the current directory).
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// The SurrealDB binary (default: the home's setting, then PATH, then the installer's location).
+        #[arg(long)]
+        surreal: Option<PathBuf>,
+        #[arg(long, default_value_t = 5000)]
+        poll_ms: u64,
+        /// Local time of the daily export, HH:MM.
+        #[arg(long, default_value = "03:30")]
+        export_at: String,
+        #[arg(long)]
+        no_export: bool,
+        /// Days of exports to keep under <home>/backup.
+        #[arg(long, default_value_t = 7)]
+        keep: usize,
+        /// Stop after this many starts (the selftest uses it).
+        #[arg(long)]
+        exit_after_starts: Option<usize>,
+        /// Skip the restore drill that follows the daily export.
+        #[arg(long)]
+        no_drill: bool,
+    },
+    /// Export every namespace now, as gzipped SurrealQL under <home>/backup/<date>/.
+    Export {
+        #[arg(long)]
+        home: Option<PathBuf>,
+        #[arg(long, default_value_t = 7)]
+        keep: usize,
+    },
+    /// Restore drill: import a day's export (the newest by default) into a scratch SurrealDB started
+    /// for the purpose and compare every table's row count with the counts taken at export time.
+    /// Writes DRILL beside the export; exits non-zero on FAIL. Never touches the live store.
+    Drill {
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// The export's day folder (YYYY-MM-DD).
+        #[arg(long)]
+        day: Option<String>,
+    },
+    /// Windows: register `store supervise` as a scheduled task for this user that runs at logon with no
+    /// window and no stored password, and start it now.
+    Install {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    /// Windows: remove that task. The store it started keeps running until it stops.
+    Uninstall,
+}
+
+/// The supervisor's commands take their home from `--home`, not the current directory, because a
+/// scheduled task has no session to discover it from.
+fn service_home(home: Option<PathBuf>) -> Result<Home> {
+    match home {
+        Some(root) => Home::open(&root),
+        None => Home::discover(),
+    }
+}
+
+/// `store supervise|export|install|uninstall`, which never go through the shared home discovery.
+async fn store_service(action: &StoreAction) -> Result<Option<String>> {
+    Ok(Some(match action {
+        StoreAction::Supervise {
+            home,
+            surreal,
+            poll_ms,
+            export_at,
+            no_export,
+            keep,
+            exit_after_starts,
+            no_drill,
+        } => {
+            let home = service_home(home.clone())?;
+            let store = gw_ops::supervise::open_store(&home, surreal.clone())?;
+            let opts = gw_ops::supervise::Options {
+                poll: std::time::Duration::from_millis(*poll_ms),
+                export_at: if *no_export {
+                    None
+                } else {
+                    Some(gw_ops::supervise::parse_time(export_at)?)
+                },
+                keep: *keep,
+                exit_after_starts: *exit_after_starts,
+                log: gw_ops::supervise::log_path(&home, &store),
+                backups: gw_ops::supervise::backups_dir(&home),
+                drill: !*no_drill,
+                home_root: Some(home.root.clone()),
+            };
+            store::blocking(move || gw_ops::supervise::run(&store, &opts)).await?;
+            "supervisor stopped".to_owned()
+        }
+        StoreAction::Drill { home, day } => {
+            let home = service_home(home.clone())?;
+            let store = gw_ops::supervise::open_store(&home, None)?;
+            let (dir, day) = (gw_ops::supervise::backups_dir(&home), day.clone());
+            let d = store::blocking(move || gw_ops::supervise::drill(&store, &dir, day.as_deref())).await?;
+            let mut out = format!(
+                "{} restore drill of {} in {:.1}s\n",
+                if d.passed { "PASS" } else { "FAIL" },
+                d.dir.display(),
+                d.seconds
+            );
+            for line in &d.lines {
+                out.push_str(line);
+                out.push('\n');
+            }
+            anyhow::ensure!(d.passed, "{out}");
+            out
+        }
+        StoreAction::Export { home, keep } => {
+            let home = service_home(home.clone())?;
+            let store = gw_ops::supervise::open_store(&home, None)?;
+            let (dir, keep) = (gw_ops::supervise::backups_dir(&home), *keep);
+            let files = store::blocking(move || gw_ops::supervise::export(&store, &dir, keep)).await?;
+            let mut out = String::new();
+            for f in &files {
+                let size = std::fs::metadata(f).map_or(0, |m| m.len());
+                out.push_str(&format!("{} ({} KB)\n", f.display(), size / 1024));
+            }
+            out
+        }
+        StoreAction::Install { home } => {
+            let home = service_home(home.clone())?;
+            let store = gw_ops::supervise::open_store(&home, None)?;
+            gw_ops::supervise::install_task(&home, &store, &std::env::current_exe()?)?
+        }
+        StoreAction::Uninstall => gw_ops::supervise::uninstall_task()?,
+        _ => return Ok(None),
+    }))
 }
 
 #[derive(Subcommand)]
@@ -312,6 +510,15 @@ async fn dispatch(command: Command) -> Result<bool> {
         println!("{report}");
         return Ok(failed == 0);
     }
+    if let Command::Hook { event, rules } = &command {
+        let event: gw_ops::hook::Event = event.parse()?;
+        let mut input = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+        let rules = rules.clone();
+        let out = store::blocking(move || Ok(gw_ops::hook::run(event, &input, rules.as_deref()))).await?;
+        println!("{out}");
+        return Ok(true);
+    }
     if matches!(command, Command::Serve) {
         // The plugin starts this in every session; outside any home it must still start.
         match Home::discover() {
@@ -334,14 +541,33 @@ async fn dispatch(command: Command) -> Result<bool> {
         }
         return Ok(true);
     }
+    if let Command::Store { action } = &command
+        && let Some(text) = store_service(action).await?
+    {
+        println!("{}", text.trim_end());
+        return Ok(true);
+    }
     let home = Arc::new(Home::discover()?);
     let (text, ok) = match command {
-        Command::Serve | Command::Selftest => unreachable!("handled above"),
+        Command::Serve | Command::Selftest | Command::Hook { .. } => unreachable!("handled above"),
         Command::Projects => (ops::projects(&home)?, true),
-        Command::Show { project, limit } => {
+        Command::Show { project, limit, since } => {
             let store = open_store(&home).await.ok();
             let home = Arc::clone(&home);
-            let text = store::blocking(move || ops::show(&home, store.as_deref(), &project, limit)).await?;
+            let text =
+                store::blocking(move || ops::show(&home, store.as_deref(), &project, limit, since.as_deref())).await?;
+            (text, true)
+        }
+        Command::Journal {
+            project,
+            kind,
+            since,
+            limit,
+        } => {
+            let store = open_store(&home).await?;
+            let home = Arc::clone(&home);
+            let text =
+                store::blocking(move || ops::journal(&home, &store, &project, kind, since.as_deref(), limit)).await?;
             (text, true)
         }
         Command::Env { project, env } => (ops::env_show(&home, &project, &env).await?, true),
@@ -377,6 +603,7 @@ async fn dispatch(command: Command) -> Result<bool> {
             ops::bootstrap(&home, &stack, &name, dir.as_deref(), !no_register)?,
             true,
         ),
+        Command::Upgrade { project } => (ops::upgrade(&home, &project)?, true),
         Command::Note {
             project,
             kind,
@@ -403,6 +630,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                     &home,
                     &store,
                     ops::Note {
+                        surface: "note",
                         project: &project,
                         kind,
                         text: &text,
@@ -452,7 +680,18 @@ async fn dispatch(command: Command) -> Result<bool> {
             let store = open_store(&home).await.map_err(|e| format!("{e:#}"));
             ops::doctor(&home, store).await?
         }
-        Command::InstallTeam => (ops::install_team(&home)?, true),
+        Command::InstallTeam {
+            stamp,
+            check,
+            agents_dir,
+        } => ops::install_team(
+            &home,
+            &ops::InstallTeam {
+                stamp,
+                check,
+                agents_dir,
+            },
+        )?,
         Command::Intake {
             project,
             all,
@@ -520,22 +759,49 @@ async fn dispatch(command: Command) -> Result<bool> {
                 true,
             )
         }
-        Command::Pulse { history } => {
+        Command::Pulse { history, digest } => {
             if history {
                 (gw_ops::pulse::history(&home)?, true)
             } else {
                 let store = open_store(&home).await?;
                 let home2 = Arc::clone(&home);
-                let text = store::blocking(move || {
+                store::blocking(move || {
                     let p = gw_ops::pulse::take(&home2, &store)?;
                     let path = gw_ops::pulse::record(&home2, &p)?;
-                    Ok(format!("{}recorded in {}", gw_ops::pulse::render(&p), path.display()))
+                    if digest {
+                        let red = gw_ops::pulse::digest(&p);
+                        let text = if red.is_empty() {
+                            format!(
+                                "nothing red on {} ({} sessions all time)",
+                                p.machine, p.use_.all_time.sessions
+                            )
+                        } else {
+                            red.join("\n")
+                        };
+                        Ok((text, red.is_empty()))
+                    } else {
+                        Ok((
+                            format!("{}recorded in {}", gw_ops::pulse::render(&p), path.display()),
+                            true,
+                        ))
+                    }
                 })
-                .await?;
-                (text, true)
+                .await?
             }
         }
         Command::EvalCheck { file } => gw_ops::eval::check(&home, &file)?,
+        Command::EvalDraw { days, exclude_by, out } => {
+            let store = open_store(&home).await?;
+            let (text, n) = store::blocking(move || gw_ops::eval::draw(&store, days, &exclude_by)).await?;
+            let tail = format!("{n} question(s) drawn (category TODO: approve or rewrite each, then eval-check)");
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &text)?;
+                    (format!("{tail} into {}", path.display()), n > 0)
+                }
+                None => (format!("{text}{tail}"), n > 0),
+            }
+        }
         Command::EvalRun {
             set,
             out,
@@ -606,12 +872,36 @@ async fn dispatch(command: Command) -> Result<bool> {
                 true,
             )
         }
-        Command::EvalRetrieval { file } => {
+        Command::EvalRetrieval {
+            files,
+            ladder,
+            depth,
+            out,
+        } => {
             let store = open_store(&home).await?;
-            (
-                store::blocking(move || gw_ops::eval::retrieval(&store, &file)).await?,
-                true,
-            )
+            if ladder {
+                let home = Arc::clone(&home);
+                let (mut text, rows) =
+                    store::blocking(move || gw_ops::eval::ladder(&home, &store, &files, depth)).await?;
+                if let Some(out) = out {
+                    std::fs::create_dir_all(&out)?;
+                    let mut f = String::new();
+                    for r in &rows {
+                        f.push_str(&serde_json::to_string(r)?);
+                        f.push('\n');
+                    }
+                    std::fs::write(out.join("rows.jsonl"), f)?;
+                    std::fs::write(out.join("REPORT.md"), &text)?;
+                    text.push_str(&format!("\nwritten: {}\n", out.display()));
+                }
+                (text, true)
+            } else {
+                let file = files[0].clone();
+                (
+                    store::blocking(move || gw_ops::eval::retrieval(&store, &file)).await?,
+                    true,
+                )
+            }
         }
         Command::Ask {
             question,
@@ -676,6 +966,13 @@ async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
             let store = open_store(home).await?;
             let home = Arc::clone(home);
             store::blocking(move || ops::import_journals(&home, &store)).await
+        }
+        StoreAction::Supervise { .. }
+        | StoreAction::Export { .. }
+        | StoreAction::Drill { .. }
+        | StoreAction::Install { .. }
+        | StoreAction::Uninstall => {
+            unreachable!("handled by store_service before home discovery")
         }
     }
 }

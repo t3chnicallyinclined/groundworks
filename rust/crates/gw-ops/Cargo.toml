@@ -14,8 +14,16 @@ workspace = true
 gw-core = { path = "../gw-core" }
 gw-store = { path = "../gw-store" }
 anyhow = "1"
+# The supervisor's log lines and its once-a-day export are in local time.
+chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
+# Exports are gzipped SurrealQL.
+flate2 = "1"
+# The supervisor reads the store volume's free space (no unsafe of our own).
+fs2 = "0.4"
 getrandom = "0.3"
+# rerank: the store's analyzer stems with Snowball (English); the local arms must match it.
+rust-stemmers = "1"
 regex = "1"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

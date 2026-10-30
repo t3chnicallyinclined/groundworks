@@ -27,9 +27,8 @@ When the user asks a question about a project (what, why, how many, which is cur
   text. If it fails, fix what the refusal names; never answer past a failed check without saying so.
 - If the candidates do not settle it, say what is missing, then look further with `search`, Grep or Read.
   If nothing records it, or the question's premise is false, say so plainly; do not guess.
-- When the answer passed and it is a decision, a gotcha, or a measured number worth keeping, pass
-  `record: true` to `answer`, so the next session gets it as a checked fact. Do not record anything else
-  unasked.
+- A passed answer is kept as a checked fact, so the next session gets it first. Pass `record: false`
+  only for a throwaway lookup (a path, a one-off value) that no later session should be handed.
 
 When you work on a project (change, build, deploy):
 - Start with `project_show` and its journal; before re-trying an approach, check whether it was ruled out.

@@ -77,6 +77,14 @@ pub const SCHEMA: &[(&str, &str)] = &[
         "0013_global_ask_fact.surql",
         include_str!("../schema/0013_global_ask_fact.surql"),
     ),
+    (
+        "0014_global_telemetry.surql",
+        include_str!("../schema/0014_global_telemetry.surql"),
+    ),
+    (
+        "0015_global_client_window.surql",
+        include_str!("../schema/0015_global_client_window.surql"),
+    ),
 ];
 
 /// Created by the migration engine itself, before the first file, so the version can be read on any database.
@@ -89,6 +97,7 @@ DEFINE FIELD IF NOT EXISTS applied ON schema_version TYPE int;\
 DEFINE FIELD IF NOT EXISTS files ON schema_version TYPE array<string>;\
 DEFINE FIELD IF NOT EXISTS updated_at ON schema_version TYPE datetime;";
 
+pub mod scratch;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 
@@ -264,6 +273,22 @@ pub fn current_version(root: &Db) -> Result<Option<Value>> {
     Ok(rows.into_iter().next().filter(|v| !v.is_null()))
 }
 
+/// Whether the namespace `db` is on already holds every compiled-in migration of its scope, read through
+/// any connection allowed to select `schema_version` (a member is). Read-only: no bootstrap, no root, so
+/// a short-lived process (a hook) can skip the root migration round trips when there is nothing to do.
+/// A never-migrated database, another product or major, or a missing file reads as false.
+pub fn is_current(db: &Db, ns: &str) -> Result<bool> {
+    let scope = scope_of(ns)?;
+    let latest = migrations(scope, SCHEMA)?.last().map_or(0, |(n, _, _)| *n);
+    let rows = db.sql("SELECT * FROM ONLY schema_version:current;", Some(1))?;
+    Ok(rows.first().is_some_and(|v| {
+        v["product"] == PRODUCT
+            && v["scope"] == scope.as_str()
+            && v["major"].as_i64() == Some(SCHEMA_MAJOR)
+            && v["applied"].as_i64() == Some(latest)
+    }))
+}
+
 /// Apply every migration of `scope` above the recorded one, in order, from `files`. Returns the
 /// numbers applied (empty = nothing to do).
 pub fn migrate(root: &Db, scope: Scope, files: &[(&str, &str)], check_server_version: bool) -> Result<Vec<i64>> {
@@ -362,6 +387,21 @@ fn jitter_ms() -> u64 {
         .map_or(0, |d| u64::from(d.subsec_nanos() % 32))
 }
 
+/// The `member` access as every scope's schema defines it, with no KEY clause: SurrealDB generates
+/// a fresh key when the statement runs. A test holds the schema files to this text.
+pub const MEMBER_ACCESS_BODY: &str = "ON DATABASE TYPE RECORD\n  \
+SIGNIN (SELECT * FROM member WHERE id = type::record('member', $id) AND enabled = true AND crypto::argon2::compare(pass, $pass))\n  \
+DURATION FOR TOKEN 8h, FOR SESSION 8h;";
+
+/// Define the `member` access again with a fresh key (root only). `surreal export` 3.1.6 writes the
+/// access with `KEY '[REDACTED]'`, so a database restored from an export would sign every token with
+/// a published string until this runs. The restore drill runs it after each import and then proves it
+/// by signing the agent credential in.
+pub fn redefine_access(root: &Db) -> Result<()> {
+    root.sql(&format!("DEFINE ACCESS OVERWRITE {ACCESS} {MEMBER_ACCESS_BODY}"), None)?;
+    Ok(())
+}
+
 /// Create or reset one member credential in root's namespace (root only).
 pub fn provision(root: &Db, member: &str, role: &str, password: &str) -> Result<()> {
     let plain = !member.is_empty()
@@ -429,6 +469,24 @@ pub fn healthy(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_schema_defines_the_member_access_exactly_as_redefine_access_does() {
+        let squash = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        let want = squash(&format!("DEFINE ACCESS IF NOT EXISTS {ACCESS} {MEMBER_ACCESS_BODY}"));
+        let defining: Vec<&str> = SCHEMA
+            .iter()
+            .filter(|(_, text)| text.contains("DEFINE ACCESS"))
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(defining.len(), 3, "one access definition per scope: {defining:?}");
+        for (name, text) in SCHEMA.iter().filter(|(_, t)| t.contains("DEFINE ACCESS")) {
+            assert!(
+                squash(text).contains(&want),
+                "{name} defines the member access differently from redefine_access"
+            );
+        }
+    }
 
     #[test]
     fn namespaces_are_checked() {

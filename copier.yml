@@ -1,0 +1,33 @@
+# Copier template root for Groundworks' project templates (rust/templates/<stack>/). Groundworks'
+# `bootstrap` renders one stack through Copier so the project records the template's commit in
+# .copier-answers.yml, and `upgrade` brings later template changes with `copier update`. Always
+# rendered at the committed HEAD (--vcs-ref=HEAD). See rust/crates/gw-ops/src/scaffold.rs.
+_min_copier_version: "9.0.0"
+# Every file in the template is rendered (no .jinja suffix), so {{name}} in Cargo.toml, the
+# Dockerfile and the sources is filled. Template files must not contain literal {{ or {%.
+_templates_suffix: ""
+_subdirectory: "{{ templates_dir }}/{{ stack }}"
+
+templates_dir:
+  type: str
+  help: The templates directory inside this repository
+  default: rust/templates
+stack:
+  type: str
+  help: The stack (a directory under templates_dir)
+  choices: [rust-cli, rust-service]
+name:
+  type: str
+  help: Project name (the binary and the registry entry)
+crate:
+  type: str
+  help: Crate name
+  default: "{{ name | replace('-', '_') | replace('.', '_') }}"
+dependencies:
+  type: str
+  help: Cargo [dependencies] lines from the stack
+  default: ""
+dev_dependencies:
+  type: str
+  help: Cargo [dev-dependencies] lines from the stack
+  default: ""

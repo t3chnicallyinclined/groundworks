@@ -5,7 +5,31 @@ output style (`output-styles/groundworks.md`) whenever the plugin is enabled. It
 instructions rather than replacing them, and it is guidance; the hard rules are enforced by the store.
 Disable the plugin to switch it off.
 
-One MCP server (`groundworks serve`) and two skills that run only when you invoke them.
+One MCP server (`groundworks serve`), four hooks that run on their own, and two skills that run only when
+you invoke them.
+
+## Hooks (0.5.0): use is enforced by gates, not remembered
+
+| Hook | What it does |
+|---|---|
+| `SessionStart` | Resolves the project from the folder, injects its journal (gotchas first, 10 entries, each capped, framed as data with `[owner]`/`[agent]` from the signed login), writes `GROUNDWORKS_PROJECT`, `GROUNDWORKS_SESSION_ID` and `GROUNDWORKS_SESSION_START` to the session's env, and opens a `session` row. Store down: one visible notice and `GROUNDWORKS_DOWN=1`; never blocks a session from starting. Not a registered project: says so once. |
+| `PreToolUse` on `Bash` | Applies `hooks/deny.toml` (owned by gw-security): plain reads by listed commands are exempt, then deny rules, then warn rules. A deny refuses the call with the rule's reason, which names the sanctioned path (`groundworks run <project> <env> ...`). Fails closed: a list that does not load, a down store or an internal error refuses every Bash call with a notice. |
+| `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | Refuses edits to the enforcement itself: the installed plugin's `hooks/`, `.claude/settings*.json`, `.claude/hooks/`, the home's `secrets/` and `groundworks.toml`. |
+| `Stop`, `SubagentStop` | Counts tool_use names (Edit, Write, Bash, `run`, `gate`) in the transcript since the session started and asks `show --since` whether the project's journal moved. Work done and nothing recorded: blocks once (`stop_hook_active` is honoured) with "record what you learned, or one status entry saying nothing new was learned". Store down: blocks once with "store down: nothing this session was recorded". |
+
+Modes, in `groundworks.toml`: `[enforce] stop = "block" | "warn"`, `pretooluse = "deny" | "warn"` (defaults block and
+deny); `GROUNDWORKS_ENFORCE=warn` in the environment does the same for one session. Rules marked `hard` in
+`deny.toml` (secret exfiltration) deny in every mode.
+
+Telemetry (`session`, `hook_event`, `rejection` in the store's global namespace) holds codes, counts, ids and
+timestamps only: no command, no path, no tool input, no error text (team/security TELEMETRY-POLICY.md). Rows
+are append-only for members; the supervisor prunes by age (90 days; rejections 365). `groundworks pulse` reads
+them (see `docs/METRICS.md`). The journal refuses secret-shaped text (keys, tokens, `password=...`,
+high-entropy runs) with a message that names the pattern and the Bitwarden-reference alternative; the value is
+never echoed.
+
+Prove the hooks on this machine with `groundworks selftest` (every deny.toml sample both ways, the Stop hook
+blocking and approving, a down store, a canary that must appear in no telemetry).
 
 | Skill | What it does |
 |---|---|

@@ -44,6 +44,8 @@ pub struct ShowArgs {
     pub project: String,
     /// How many recent journal entries to include (default 20).
     pub journal_limit: Option<usize>,
+    /// Only journal entries after this RFC 3339 time (e.g. the session's start).
+    pub since: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -129,6 +131,8 @@ pub struct JournalArgs {
     pub kind: Option<Kind>,
     /// Newest N entries (default 50).
     pub limit: Option<usize>,
+    /// Only entries after this RFC 3339 time (e.g. the session's start).
+    pub since: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -296,9 +300,17 @@ impl Groundworks {
     async fn project_show(&self, args: Parameters<ShowArgs>) -> Result<String, String> {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await.ok());
-        store::blocking(move || ops::show(&home, store.as_deref(), &a.project, a.journal_limit.unwrap_or(20)))
-            .await
-            .map_err(fail)
+        store::blocking(move || {
+            ops::show(
+                &home,
+                store.as_deref(),
+                &a.project,
+                a.journal_limit.unwrap_or(20),
+                a.since.as_deref(),
+            )
+        })
+        .await
+        .map_err(fail)
     }
 
     #[tool(description = "Register a project that already exists in the workspace. Refuses a name that is taken.")]
@@ -318,6 +330,7 @@ impl Groundworks {
                 &home,
                 &store,
                 ops::Note {
+                    surface: "journal_add",
                     project: &a.project,
                     kind: a.kind,
                     text: &a.text,
@@ -338,13 +351,22 @@ impl Groundworks {
         .map_err(fail)
     }
 
-    #[tool(description = "Read a project's journal, optionally one kind only.")]
+    #[tool(description = "Read a project's journal, optionally one kind only, optionally only entries after a time.")]
     async fn journal_read(&self, args: Parameters<JournalArgs>) -> Result<String, String> {
         let a = args.0;
         let (home, store) = (Arc::clone(&self.home), self.store().await?);
-        store::blocking(move || ops::journal(&home, &store, &a.project, a.kind, a.limit.unwrap_or(50)))
-            .await
-            .map_err(fail)
+        store::blocking(move || {
+            ops::journal(
+                &home,
+                &store,
+                &a.project,
+                a.kind,
+                a.since.as_deref(),
+                a.limit.unwrap_or(50),
+            )
+        })
+        .await
+        .map_err(fail)
     }
 
     #[tool(description = "List the team's standard stacks (crates, packages, gate, template).")]
@@ -521,7 +543,7 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Answer an ask packet. Give each quote as a line range: {n, lines: [a, b]} using the file line numbers the candidate shows; the program copies the text, so it cannot be mistyped. The check refuses: a candidate not read, lines outside the candidate, a typed quote not found word for word, a quote from a candidate not read or outside the packet, support from a unit that changed or left since retrieval. A FAILED packet may be answered again. Pass record: true to keep a passed answer as a fact."
+        description = "Answer an ask packet. Give each quote as a line range: {n, lines: [a, b]} using the file line numbers the candidate shows; the program copies the text, so it cannot be mistyped. The check refuses: a candidate not read, lines outside the candidate, a typed quote not found word for word, a quote from a candidate not read or outside the packet, support from a unit that changed or left since retrieval. A FAILED packet may be answered again. A passed answer is kept as a checked fact for the next session unless you pass record: false (a throwaway lookup)."
     )]
     async fn answer(&self, args: Parameters<AnswerArgs>) -> Result<String, String> {
         let a = args.0;
