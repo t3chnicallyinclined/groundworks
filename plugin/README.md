@@ -57,7 +57,7 @@ In any Claude Code session opened under a Groundworks home, the agent has the to
 |---|---|
 | Check it works on this machine | `groundworks selftest` (a throwaway home and store; never touches yours) |
 | Check your real setup | `groundworks doctor` |
-| Ingest a project (files, commits, by kind and expert area) | `groundworks intake <project>` or `--all`; or ask the agent |
+| Ingest a project (files, commits, by kind and expert area) | `groundworks intake <project>` or `--all`; or ask the agent. It also picks up the project's own Claude Code setup: `.claude/agents` (experts for that project; `*.disabled*` folders reported, not loaded), skills, commands, `CLAUDE.md`/`AGENTS.md`, and Claude Code's auto-memory for the folder, each through the secret refusal; session transcripts are only counted. `[intake] claude_setup = false` in `groundworks.toml` turns that off |
 | Ask across everything that is shared, with citations | `groundworks search "..." [--project p] [--expert e] [--kind commit]`; or ask the agent |
 | See the experts | `groundworks experts` |
 | Ask a question and get a checked answer | ask the agent (it uses `ask`, reads every candidate, then `answer`); or `groundworks ask "..."` to see the candidates |

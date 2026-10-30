@@ -3,8 +3,11 @@
 //! Untracked docs that git does not ignore (notes and handoffs nobody committed) are read too, with no
 //! commit, so a quote of one says it was never committed; untracked code and config are not.
 //!
-//! - **Kinds**, so answers can prefer the project's own context: `context` (CLAUDE.md, CONTEXT.md,
-//!   AGENTS.md, READMEs, docs/, handoffs and workstream notes), `doc`, `config`, `code`, `commit`.
+//! - **Kinds**, so answers can prefer the project's own context: `context` (CONTEXT.md, READMEs, docs/,
+//!   handoffs and workstream notes), `doc`, `config`, `code`, `commit`; and the project's own Claude Code
+//!   setup (2026-10-30): `instructions` (CLAUDE.md, AGENTS.md, a disabled `CLAUDE.md.disabled-*`), `agent`
+//!   (`.claude/agents/*.md`), `skill` (`.claude/skills/*/SKILL.md`), `command` (`.claude/commands/`) and
+//!   `memory` (Claude Code's auto-memory for the folder; see `claude_setup`).
 //! - **Experts**: an expert agent's definition cites the files and folders it owns. Every cited path
 //!   that exists in the project becomes part of that expert's area, with the agent file and line as
 //!   its evidence; units under it are tagged with the expert.
@@ -89,6 +92,8 @@ pub struct Expert {
     pub summary: String,
     pub file: PathBuf,
     pub text: String,
+    /// `global` (the user's agents folder) or `project:<name>` (that project's `.claude/agents/`).
+    pub source: String,
 }
 
 #[derive(Debug, Default)]
@@ -104,7 +109,48 @@ pub struct Collected {
     pub areas: Vec<AreaClaim>,
     /// Every tracked path that is still there, for marking vanished units.
     pub paths: Vec<String>,
+    /// What was read of the project's own Claude Code setup (all zero when it is turned off).
+    pub setup: SetupReport,
 }
+
+/// Counts of the Claude Code setup an intake read: files by kind, memory stored and refused, sessions.
+#[derive(Debug, Default)]
+pub struct SetupReport {
+    /// False when `[intake] claude_setup = false`.
+    pub on: bool,
+    pub agents: usize,
+    pub skills: usize,
+    pub commands: usize,
+    pub instructions: usize,
+    /// Of `instructions`, files named `*.disabled*`.
+    pub instructions_disabled: usize,
+    /// Setup files git does not list (ignored), read from disk.
+    pub off_git: usize,
+    /// Setup files (tracked or not) the secret refusal fired on: skipped, never stored.
+    pub setup_refused: usize,
+    pub memory_stored: usize,
+    pub memory_refused: usize,
+    /// Session transcripts counted (never read) and when the newest last changed.
+    pub sessions: usize,
+    pub newest_session: Option<String>,
+}
+
+/// A kind filter as the store applies it: `context` also takes `instructions` and `agent`, which were
+/// `context` (or `doc`) before they got kinds of their own, and are still the project's context.
+pub fn expand_kinds(kinds: &[String]) -> Vec<String> {
+    let mut out = kinds.to_vec();
+    if kinds.iter().any(|k| k == "context") {
+        for k in ["instructions", "agent"] {
+            if !out.iter().any(|o| o == k) {
+                out.push(k.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// The kinds that are the project's own Claude Code setup.
+pub const SETUP_KINDS: [&str; 5] = ["instructions", "agent", "skill", "command", "memory"];
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
@@ -157,6 +203,7 @@ pub fn load_experts(dirs: &[PathBuf]) -> Result<Vec<Expert>> {
                     summary,
                     file: path,
                     text,
+                    source: "global".to_owned(),
                 });
             }
         }
@@ -256,8 +303,27 @@ fn classify(path: &str) -> Option<&'static str> {
     let lower = name.to_lowercase();
     let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
     let lower_path = path.to_lowercase();
+    if matches!(lower.as_str(), "claude.md" | "agents.md") || lower.starts_with("claude.md.disabled") {
+        return Some("instructions");
+    }
+    if ext == "md"
+        && let Some(rest) = lower_path.strip_prefix(".claude/")
+    {
+        if rest.strip_prefix("agents/").is_some_and(|f| !f.contains('/')) {
+            return Some("agent");
+        }
+        if rest
+            .strip_prefix("skills/")
+            .is_some_and(|f| f.split('/').count() == 2 && lower == "skill.md")
+        {
+            return Some("skill");
+        }
+        if rest.starts_with("commands/") {
+            return Some("command");
+        }
+    }
     if lower.starts_with("readme")
-        || matches!(lower.as_str(), "claude.md" | "context.md" | "agents.md")
+        || lower == "context.md"
         || (ext == "md"
             && (lower_path.starts_with("docs/")
                 || lower_path.contains("/docs/")
@@ -284,7 +350,7 @@ fn spans(lines: &[&str], kind: &str) -> Vec<(usize, usize)> {
     if lines.is_empty() {
         return out;
     }
-    let markdown = matches!(kind, "context" | "doc");
+    let markdown = matches!(kind, "context" | "doc") || SETUP_KINDS.contains(&kind);
     let max = if markdown { DOC_MAX } else { CODE_WINDOW };
     let mut start = 0;
     for i in 1..=lines.len() {
@@ -356,7 +422,7 @@ fn frontmatter_date(text: &str) -> Option<String> {
 }
 
 /// A file's modification time as ISO 8601 (seconds), for files git does not track.
-fn mtime_iso(meta: &std::fs::Metadata) -> Option<String> {
+pub(crate) fn mtime_iso(meta: &std::fs::Metadata) -> Option<String> {
     let secs = meta
         .modified()
         .ok()?
@@ -383,9 +449,124 @@ fn mtime_iso(meta: &std::fs::Metadata) -> Option<String> {
     ))
 }
 
+/// Counts one setup file by its kind.
+fn count_setup(r: &mut SetupReport, kind: &str, path: &str) {
+    match kind {
+        "agent" => r.agents += 1,
+        "skill" => r.skills += 1,
+        "command" => r.commands += 1,
+        "instructions" => {
+            r.instructions += 1;
+            if path.to_lowercase().contains(".disabled") {
+                r.instructions_disabled += 1;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A file read for intake outside git's lists: its text, or why it was not stored.
+enum Read {
+    Text(String, std::fs::Metadata),
+    /// The journal's secret refusal fired: skipped, never stored.
+    Refused,
+    Skip(&'static str),
+}
+
+fn read_checked(full: &Path) -> Result<Read> {
+    let Ok(meta) = std::fs::metadata(full) else {
+        return Ok(Read::Skip("vanished while being read"));
+    };
+    if meta.len() > MAX_FILE_BYTES {
+        return Ok(Read::Skip("over 200 KB"));
+    }
+    let bytes = std::fs::read(full)?;
+    if bytes.iter().take(8192).any(|b| *b == 0) {
+        return Ok(Read::Skip("binary"));
+    }
+    let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+    if crate::refusal::check(&text).is_some() {
+        return Ok(Read::Refused);
+    }
+    Ok(Read::Text(text, meta))
+}
+
+/// One file's units (cut by [`spans`]), its path counted as present.
+fn push_file_units(c: &mut Collected, path: &str, kind: &'static str, text: &str, changed_at: Option<String>) {
+    let lines: Vec<&str> = text.lines().collect();
+    let experts = experts_for(&c.areas, path);
+    c.paths.push(path.to_owned());
+    c.files_read += 1;
+    for (start, end) in spans(&lines, kind) {
+        let body = lines[start - 1..end].join("\n");
+        if body.trim().is_empty() {
+            continue;
+        }
+        c.units.push(Unit {
+            path: Some(path.to_owned()),
+            line_start: Some(start),
+            line_end: Some(end),
+            experts: experts.clone(),
+            changed_at: changed_at.clone(),
+            ..Unit::new(format!("{path}#L{start}-{end}"), kind, body)
+        });
+    }
+}
+
+const SETUP_SECRET: &str = "Claude setup file that looks like it holds a secret";
+const MEMORY_SECRET: &str = "memory file that looks like it holds a secret";
+
+/// The project's own Claude setup that git does not list, its auto-memory, and its sessions (counted).
+fn collect_setup(c: &mut Collected, project_dir: &Path, claude: &Path, listed: &BTreeSet<&str>) -> Result<()> {
+    let off_git: Vec<String> = crate::claude_setup::setup_paths(project_dir)
+        .into_iter()
+        .filter(|p| !listed.contains(p.as_str()))
+        .collect();
+    for path in off_git {
+        let Some(kind) = classify(&path) else { continue };
+        match read_checked(&project_dir.join(&path))? {
+            Read::Text(text, meta) => {
+                count_setup(&mut c.setup, kind, &path);
+                c.setup.off_git += 1;
+                let changed_at = frontmatter_date(&text).or_else(|| mtime_iso(&meta));
+                push_file_units(c, &path, kind, &text, changed_at);
+            }
+            Read::Refused => {
+                c.setup.setup_refused += 1;
+                *c.skipped.entry(SETUP_SECRET).or_default() += 1;
+            }
+            Read::Skip(why) => *c.skipped.entry(why).or_default() += 1,
+        }
+    }
+    let sessions = crate::claude_setup::session_dir(claude, project_dir);
+    for file in crate::claude_setup::memory_files(&sessions) {
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let path = format!("{}{name}", crate::claude_setup::MEMORY_PREFIX);
+        match read_checked(&file)? {
+            Read::Text(text, meta) => {
+                c.setup.memory_stored += 1;
+                let changed_at = frontmatter_date(&text).or_else(|| mtime_iso(&meta));
+                push_file_units(c, &path, "memory", &text, changed_at);
+            }
+            Read::Refused => {
+                c.setup.memory_refused += 1;
+                *c.skipped.entry(MEMORY_SECRET).or_default() += 1;
+            }
+            Read::Skip(why) => *c.skipped.entry(why).or_default() += 1,
+        }
+    }
+    (c.setup.sessions, c.setup.newest_session) = crate::claude_setup::sessions(&sessions);
+    c.units.extend(crate::claude_setup::transcript_units(&sessions));
+    Ok(())
+}
+
 /// Read a project: tracked files and untracked docs into units, the last `max_commits` commits into
-/// commit units, and the experts' areas inside it.
-pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Result<Collected> {
+/// commit units, and the experts' areas inside it. With `claude` (Claude Code's user folder), also the
+/// project's own Claude setup that git does not list, its auto-memory, and a count of its sessions.
+pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize, claude: Option<&Path>) -> Result<Collected> {
     let list = |args: &[&str]| -> Result<Vec<String>> {
         Ok(git(project_dir, args)?
             .split('\0')
@@ -406,6 +587,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
         areas: map_areas(experts, &tracked),
         ..Collected::default()
     };
+    c.setup.on = claude.is_some();
     let secrets: Vec<Glob> = SECRET_NAMES.iter().map(|g| Glob::new(g)).collect();
     let files = tracked
         .iter()
@@ -426,7 +608,7 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
             skip(&mut c, "not a kind we read");
             continue;
         };
-        if !is_tracked && !matches!(kind, "context" | "doc") {
+        if !is_tracked && !matches!(kind, "context" | "doc") && !SETUP_KINDS.contains(&kind) {
             skip(&mut c, "untracked, and not a doc");
             continue;
         }
@@ -445,6 +627,16 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
             continue;
         }
         let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+        // Every Claude setup file, tracked or not, passes the journal's secret refusal before it is stored
+        // (gw-security, 2026-10-30). The rest of intake still skips by file name only.
+        if SETUP_KINDS.contains(&kind) && crate::refusal::check(&text).is_some() {
+            c.setup.setup_refused += 1;
+            skip(&mut c, SETUP_SECRET);
+            continue;
+        }
+        if claude.is_some() {
+            count_setup(&mut c.setup, kind, path);
+        }
         let lines: Vec<&str> = text.lines().collect();
         let experts_here = experts_for(&c.areas, path);
         // A note that dates itself (frontmatter `modified:` or `date:`) knows better than git: a folder of
@@ -474,6 +666,10 @@ pub fn collect(project_dir: &Path, experts: &[Expert], max_commits: usize) -> Re
                 ..Unit::new(format!("{path}#L{start}-{end}"), kind, body)
             });
         }
+    }
+    if let Some(claude) = claude {
+        let listed: BTreeSet<&str> = tracked.iter().chain(untracked.iter()).map(String::as_str).collect();
+        collect_setup(&mut c, project_dir, claude, &listed)?;
     }
     if max_commits > 0 && c.head.is_some() {
         let log = git(
@@ -523,12 +719,154 @@ mod tests {
     #[test]
     fn kinds_put_context_first() {
         assert_eq!(classify("README.md"), Some("context"));
-        assert_eq!(classify("CLAUDE.md"), Some("context"));
+        // Since 2026-10-30 a kind of its own; a `context` filter still takes it (`expand_kinds`).
+        assert_eq!(classify("CLAUDE.md"), Some("instructions"));
+        assert!(expand_kinds(&["context".to_owned()]).contains(&"instructions".to_owned()));
         assert_eq!(classify("docs/NETCODE-PLAN.md"), Some("context"));
         assert_eq!(classify("notes/idea.md"), Some("doc"));
         assert_eq!(classify("src/net.rs"), Some("code"));
         assert_eq!(classify("Cargo.toml"), Some("config"));
         assert_eq!(classify("assets/logo.png"), None);
+    }
+
+    #[test]
+    fn a_projects_claude_setup_has_kinds_of_its_own() {
+        assert_eq!(classify("CLAUDE.md"), Some("instructions"));
+        assert_eq!(classify("AGENTS.md"), Some("instructions"));
+        assert_eq!(classify("sub/CLAUDE.md"), Some("instructions"));
+        assert_eq!(classify("CLAUDE.md.disabled-2026-09-21"), Some("instructions"));
+        assert_eq!(classify(".claude/agents/netcode.md"), Some("agent"));
+        assert_eq!(classify(".claude/agents.disabled-2026-09-21/old.md"), Some("doc"));
+        assert_eq!(classify(".claude/skills/panel/SKILL.md"), Some("skill"));
+        assert_eq!(classify(".claude/skills/panel/notes.md"), Some("doc"));
+        assert_eq!(classify(".claude/commands/ops/restart.md"), Some("command"));
+        assert_eq!(classify("CONTEXT.md"), Some("context"));
+        assert_eq!(classify(".claude/settings.json"), Some("config"));
+    }
+
+    fn git_fixture(dir: &Path) {
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@localhost", "-C"])
+                .arg(dir)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "init"]);
+    }
+
+    /// Both ways: with the Claude folder given, the ignored agent, the skill, the memory are read, the
+    /// secret-shaped memory file is refused and counted, transcripts are counted and never read; without
+    /// it (the opt-out) none of that happens.
+    #[test]
+    fn collect_reads_the_claude_setup_and_refuses_secret_memory() {
+        let base = std::env::temp_dir().join(format!("gw-intake-setup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("proj");
+        let claude = base.join("claude");
+        let write = |p: &Path, t: &str| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, t).unwrap();
+        };
+        write(&project.join("src/net.rs"), "fn net() {}\n");
+        write(&project.join("CLAUDE.md"), "# Rules\n\nAlways run the gate.\n");
+        write(&project.join(".gitignore"), ".claude/\n");
+        write(
+            &project.join(".claude/agents/local.md"),
+            "---\nname: local\ndescription: d\n---\nOwns `src/net.rs`.\n",
+        );
+        write(
+            &project.join(".claude/skills/check/SKILL.md"),
+            "---\nname: check\n---\nquokka\n",
+        );
+        // The same kinds holding a fixture secret: one committed (a nested CLAUDE.md), one ignored (a skill).
+        let (_, secret) = crate::refusal::must_refuse().into_iter().next().unwrap();
+        write(
+            &project.join("sub/CLAUDE.md"),
+            &format!("# Sub\n\nquillwort {secret}\n"),
+        );
+        write(
+            &project.join(".claude/skills/leaky/SKILL.md"),
+            &format!("---\nname: leaky\n---\nquillwort {secret}\n"),
+        );
+        git_fixture(&project);
+        let sessions = crate::claude_setup::session_dir(&claude, &project);
+        write(
+            &sessions.join("memory/clean.md"),
+            "---\nname: clean\nmodified: 2026-01-02\n---\nwombat facts\n",
+        );
+        write(&sessions.join("memory/leaky.md"), &format!("numbat {secret}\n"));
+        write(&sessions.join("a.jsonl"), "{\"platypus\": 1}\n");
+        write(&sessions.join("b.jsonl"), "{\"platypus\": 2}\n");
+
+        let (local, _) = crate::claude_setup::project_experts(&project, "proj").unwrap();
+        let on = collect(&project, &local, 0, Some(&claude)).unwrap();
+        let kind_of =
+            |c: &Collected, path: &str| c.units.iter().find(|u| u.path.as_deref() == Some(path)).map(|u| u.kind);
+        assert_eq!(kind_of(&on, "CLAUDE.md"), Some("instructions"));
+        assert_eq!(
+            kind_of(&on, ".claude/agents/local.md"),
+            Some("agent"),
+            "ignored, read from disk"
+        );
+        assert_eq!(kind_of(&on, ".claude/skills/check/SKILL.md"), Some("skill"));
+        let memory = on
+            .units
+            .iter()
+            .find(|u| u.path.as_deref() == Some("~claude-memory/clean.md"))
+            .expect("memory unit");
+        assert_eq!(
+            (memory.kind, memory.changed_at.as_deref()),
+            ("memory", Some("2026-01-02"))
+        );
+        assert!(
+            on.units
+                .iter()
+                .all(|u| !u.text.contains("numbat") && !u.text.contains(&secret))
+        );
+        assert!(
+            on.units.iter().all(|u| !u.text.contains("quillwort")),
+            "secret-shaped setup files are refused"
+        );
+        assert_eq!(kind_of(&on, "sub/CLAUDE.md"), None);
+        assert_eq!(kind_of(&on, ".claude/skills/leaky/SKILL.md"), None);
+        assert!(on.units.iter().all(|u| !u.text.contains("platypus")));
+        let r = &on.setup;
+        assert_eq!(
+            (r.on, r.agents, r.skills, r.instructions, r.off_git, r.setup_refused),
+            (true, 1, 1, 1, 2, 2)
+        );
+        assert_eq!((r.memory_stored, r.memory_refused, r.sessions), (1, 1, 2));
+        assert!(r.newest_session.is_some());
+        assert_eq!(
+            experts_for(&on.areas, "src/net.rs"),
+            vec!["local".to_owned()],
+            "a project expert tags what it cites"
+        );
+        assert!(on.paths.contains(&"~claude-memory/clean.md".to_owned()));
+
+        let off = collect(&project, &[], 0, None).unwrap();
+        assert!(!off.setup.on);
+        assert_eq!(
+            kind_of(&off, ".claude/agents/local.md"),
+            None,
+            "opt-out reads nothing outside git"
+        );
+        assert!(off.units.iter().all(|u| u.kind != "memory"));
+        assert_eq!((off.setup.sessions, off.setup.memory_refused), (0, 0));
+        assert_eq!(
+            off.setup.setup_refused, 1,
+            "the committed one is refused even with the opt-out"
+        );
+        assert!(off.units.iter().all(|u| !u.text.contains(&secret)));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -547,6 +885,7 @@ mod tests {
             summary: "s".into(),
             file: PathBuf::from("netcode.md"),
             text: "See `sg_runner/src/net_sim.rs` and `docs/NETCODE-PLAN.md`, the `sg_net` crate, and `mod.rs`.".into(),
+            source: "global".into(),
         };
         let tracked: Vec<String> = [
             "runner/sg_runner/src/net_sim.rs",

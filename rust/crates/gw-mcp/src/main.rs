@@ -163,7 +163,7 @@ enum Command {
         project: Option<String>,
         #[arg(long)]
         expert: Option<String>,
-        /// Only these kinds (repeatable): context, doc, code, config, commit, quote.
+        /// Only these kinds (repeatable): context, doc, code, config, commit, quote, instructions, agent, skill, command, memory (context also takes instructions and agent).
         #[arg(long = "kind")]
         kinds: Vec<String>,
         #[arg(long, default_value_t = 10)]

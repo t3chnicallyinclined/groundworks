@@ -3,6 +3,7 @@
 //! Absorbed from an earlier standalone prototype, 2026-10-24.
 
 pub mod ask;
+pub mod claude_setup;
 pub mod eval;
 pub mod eval_router;
 pub mod eval_run;

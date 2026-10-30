@@ -1036,6 +1036,7 @@ the parser now accepts empty input
     );
 
     supervisor_checks(exe, base, &mut c)?;
+    claude_setup_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines
@@ -1049,6 +1050,206 @@ the parser now accepts empty input
     };
     c.lines.push(summary);
     Ok((c.lines.join("\n"), c.failed))
+}
+
+/// A project's own Claude Code setup, picked up by a plain intake (2026-10-30), both ways: its agent maps
+/// areas and a disabled folder's does not; a skill (git-ignored, read from disk), CLAUDE.md and a memory file
+/// become units of their own kinds; a memory file holding a secret-shaped string is skipped, counted and never
+/// stored; transcripts are counted and never read; the brief names the project's experts and skills; and
+/// `[intake] claude_setup = false` turns all of it off (the memory unit is then marked gone, the line leaves
+/// the brief).
+fn claude_setup_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks) -> Result<()> {
+    let demo = base.join("work/demo");
+    let (home_env, experts_env, claude_env) = (
+        home.display().to_string(),
+        base.join("experts").display().to_string(),
+        base.join("claude").display().to_string(),
+    );
+    let mut client = Client::start(
+        exe,
+        &[
+            ("GROUNDWORKS_HOME", &home_env),
+            ("GROUNDWORKS_MACHINE", "SELFTEST"),
+            ("GROUNDWORKS_EXPERTS", &experts_env),
+            ("GROUNDWORKS_CLAUDE_DIR", &claude_env),
+        ],
+        &["GROUNDWORKS_START"],
+    )?;
+    let s = &mut client;
+    let write = |path: PathBuf, text: &str| -> Result<()> {
+        std::fs::create_dir_all(path.parent().context("a parent")?)?;
+        std::fs::write(path, text)?;
+        Ok(())
+    };
+    write(
+        demo.join(".claude/agents/demo-local.md"),
+        "---\nname: demo-local\ndescription: The demo's own expert.\n---\n\nOwns `notes.txt`.\n",
+    )?;
+    write(
+        demo.join(".claude/agents.disabled-2026-09-21/old-expert.md"),
+        "---\nname: old-expert\ndescription: Switched off by the owner.\n---\n\nOwns `docs/GUIDE.md`.\n",
+    )?;
+    write(
+        demo.join(".claude/skills/rollback-check/SKILL.md"),
+        "---\nname: rollback-check\ndescription: Check a rollback.\n---\n\nThe quokka procedure.\n",
+    )?;
+    // Ignored by git, so only the read from disk can find the skill.
+    write(demo.join(".git/info/exclude"), ".claude/skills/\n")?;
+    write(
+        demo.join("CLAUDE.md"),
+        "# Rules\n\nThe quillwort rule: run the gate first.\n",
+    )?;
+    let sessions = gw_ops::claude_setup::session_dir(&base.join("claude"), &demo);
+    write(
+        sessions.join("memory/clean.md"),
+        "---\nname: clean\nmodified: 2026-01-02\n---\n\nThe wombat lives in the demo.\n",
+    )?;
+    let (_, secret) = gw_ops::refusal::must_refuse()
+        .into_iter()
+        .find(|(id, _)| id == "kv-secret")
+        .context("a kv-secret sample")?;
+    write(
+        sessions.join("memory/leaky.md"),
+        &format!("The numbat note: {secret}\n"),
+    )?;
+    // The same secret in a skill and in AGENTS.md: both refused by the journal's filter, never stored.
+    write(
+        demo.join(".claude/skills/leaky-skill/SKILL.md"),
+        &format!("---\nname: leaky-skill\n---\n\nThe kiwano step: {secret}\n"),
+    )?;
+    write(
+        demo.join("AGENTS.md"),
+        &format!("# Agents\n\nThe kiwano rule: {secret}\n"),
+    )?;
+    write(sessions.join("one.jsonl"), "{\"text\": \"the platypus transcript\"}\n")?;
+    write(sessions.join("two.jsonl"), "{\"text\": \"the platypus transcript\"}\n")?;
+
+    let (err, text) = s.call("intake", json!({"project": "demo"}))?;
+    c.check(
+        "intake picks up the project's own setup: its expert, the disabled folder reported, memory stored and refused, sessions counted",
+        !err && text.contains("project experts 1 loaded (demo-local)")
+            && text.contains("demo-local [project] (")
+            && text.contains("1 disabled, not loaded (.claude/agents.disabled-2026-09-21: 1)")
+            && text.contains("skills 1;")
+            && text.contains("memory files 1 stored, 1 skipped for secrets")
+            && text.contains("2 refused as secret-shaped")
+            && text.contains("sessions 2 counted")
+            && !text.contains("old-expert"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "search",
+        json!({"query": "rejects empty", "project": "demo", "expert": "demo-local"}),
+    )?;
+    c.check(
+        "a project's own expert tags the units its definition cites",
+        !err && text.contains("demo:notes.txt#L1-2") && text.contains("demo-local"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "search",
+        json!({"query": "guide", "project": "demo", "expert": "old-expert"}),
+    )?;
+    c.check(
+        "an expert in a disabled folder tags nothing",
+        !err && text.contains("no units match"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "search",
+        json!({"query": "quokka", "project": "demo", "kinds": ["skill"]}),
+    )?;
+    c.check(
+        "a git-ignored skill is read from disk as a skill unit",
+        !err && text.contains("[skill] demo:.claude/skills/rollback-check/SKILL.md"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "search",
+        json!({"query": "quillwort", "project": "demo", "kinds": ["context"]}),
+    )?;
+    c.check(
+        "CLAUDE.md is an instructions unit, and a context filter still finds it",
+        !err && text.contains("[instructions] demo:CLAUDE.md"),
+        &text,
+    );
+    let (err, text) = s.call(
+        "search",
+        json!({"query": "wombat", "project": "demo", "kinds": ["memory"]}),
+    )?;
+    c.check(
+        "Claude Code's auto-memory for the folder is a memory unit",
+        !err && text.contains("[memory] demo:~claude-memory/clean.md"),
+        &text,
+    );
+    let (err, text) = s.call("grep", json!({"pattern": "numbat", "project": "demo"}))?;
+    c.check(
+        "a memory file holding a secret-shaped string is absent from the store",
+        !err && text.contains("no ingested unit contains"),
+        &text,
+    );
+    let (err, text) = s.call("grep", json!({"pattern": "kiwano", "project": "demo"}))?;
+    let (_, clean) = s.call("grep", json!({"pattern": "quokka", "project": "demo"}))?;
+    c.check(
+        "a skill and AGENTS.md holding a secret-shaped string are absent from the store; the clean skill is present",
+        !err && text.contains("no ingested unit contains") && clean.contains("rollback-check/SKILL.md"),
+        &format!("{text}\n{clean}"),
+    );
+    let (err, text) = s.call("grep", json!({"pattern": "platypus", "project": "demo"}))?;
+    c.check(
+        "session transcripts are counted, their content never stored",
+        !err && text.contains("no ingested unit contains"),
+        &text,
+    );
+    let start = json!({"session_id": "selftest-setup-1", "cwd": demo.display().to_string(), "source": "startup",
+                       "hook_event_name": "SessionStart"});
+    let out = hook(exe, home, "SessionStart", &start, &[], None)?;
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    c.check(
+        "the brief names the project's own experts and skills, inside the data frame",
+        context.contains(
+            "this repo's own Claude setup (names only): experts demo-local | skills leaky-skill, rollback-check",
+        ) && context.find("own Claude setup") < context.find("</groundworks-journal>"),
+        context,
+    );
+
+    // The opt-out, from the CLI as the owner runs it.
+    let toml = home.join("groundworks.toml");
+    let before = std::fs::read_to_string(&toml)?;
+    std::fs::write(&toml, format!("{before}\n[intake]\nclaude_setup = false\n"))?;
+    let out = Command::new(exe)
+        .args(["intake", "demo"])
+        .env("GROUNDWORKS_HOME", home)
+        .env("GROUNDWORKS_MACHINE", "SELFTEST")
+        .env("GROUNDWORKS_CLAUDE_DIR", base.join("claude"))
+        .env("GROUNDWORKS_EXPERTS", base.join("experts"))
+        .env_remove("GROUNDWORKS_START")
+        .stdin(Stdio::null())
+        .output()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (_, found) = s.call(
+        "search",
+        json!({"query": "wombat", "project": "demo", "kinds": ["memory"]}),
+    )?;
+    let start = json!({"session_id": "selftest-setup-2", "cwd": demo.display().to_string(), "source": "startup",
+                       "hook_event_name": "SessionStart"});
+    let brief = hook(exe, home, "SessionStart", &start, &[], None)?;
+    let context = brief["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
+    std::fs::write(&toml, before)?;
+    c.check(
+        "[intake] claude_setup = false turns it off: no setup read, the memory unit gone, no brief line",
+        out.status.success()
+            && text.contains("claude setup: off")
+            && found.contains("no units match")
+            && !context.contains("own Claude setup")
+            && context.contains("<groundworks-journal"),
+        &format!("{text}\n{found}\n{context}"),
+    );
+    Ok(())
 }
 
 /// Run one plugin hook as Claude Code would: the event's JSON on stdin, the answer on stdout. The

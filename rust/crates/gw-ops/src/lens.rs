@@ -234,6 +234,7 @@ mod tests {
             summary: "Security engineer.".into(),
             file: "gw-security.md".into(),
             text: text.into(),
+            source: "global".into(),
         }
     }
 

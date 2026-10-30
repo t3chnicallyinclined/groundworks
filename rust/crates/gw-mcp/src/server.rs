@@ -201,7 +201,7 @@ pub struct SearchArgs {
     pub project: Option<String>,
     /// Only units in this expert's area (see expert_list).
     pub expert: Option<String>,
-    /// Only these kinds: context, doc, code, config, commit, quote.
+    /// Only these kinds: context, doc, code, config, commit, quote, instructions, agent, skill, command, memory (context also takes instructions and agent).
     pub kinds: Option<Vec<String>>,
     /// Most results (default 10, at most 50).
     pub limit: Option<usize>,
@@ -228,7 +228,7 @@ pub struct AskArgs {
     pub project: Option<String>,
     /// Only units in this expert's area.
     pub expert: Option<String>,
-    /// Only these kinds: context, doc, code, config, commit, quote.
+    /// Only these kinds: context, doc, code, config, commit, quote, instructions, agent, skill, command, memory (context also takes instructions and agent).
     pub kinds: Option<Vec<String>>,
     /// How many candidates to retrieve and read (default 20, at most 200).
     pub k: Option<usize>,

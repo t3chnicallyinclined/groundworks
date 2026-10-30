@@ -497,6 +497,15 @@ filters, across shared projects, naming what it skipped. Measured on the live st
 existing rows on rocksdb cannot see an analyzer defined in the same transaction, so the index is its own
 migration (0008); the testkit now runs rocksdb, like the real store.
 
+**A project's own Claude Code setup (2026-10-30).** `crates/gw-ops/src/claude_setup.rs`: intake also loads
+`<project>/.claude/agents/*.md` as experts tagged `project:<name>` (they map areas in that project only and win a
+name collision there; schema 0016 makes an expert unique per name and source), reports `.claude/*.disabled*`
+folders without loading them, and reads `CLAUDE.md`/`AGENTS.md`, skills, commands (kinds `instructions`, `agent`,
+`skill`, `command`, from disk even when git ignores them) and Claude Code's auto-memory for the folder (kind
+`memory`, path `~claude-memory/<file>`, re-checked against the memory folder). Each such file passes the journal's
+secret refusal (`refusal::check`); a hit is skipped and counted. Session transcripts are counted only
+(`transcript_units` is the seam for gw-security's review). `[intake] claude_setup = false` turns it off.
+
 ## ask (2026-10-25): step 1 of porting the engine
 
 `crates/gw-ops/src/ask.rs` ports the Python engine's `ask` (packet.py, check.py; v0.2.0). The check is ported

@@ -24,6 +24,24 @@ pub struct Config {
     pub store: StoreConfig,
     #[serde(default)]
     pub enforce: EnforceConfig,
+    #[serde(default)]
+    pub intake: IntakeConfig,
+}
+
+/// What intake reads (`[intake]` in groundworks.toml).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeConfig {
+    /// A project's own Claude Code setup (its `.claude/agents`, skills, commands, instruction files, its
+    /// auto-memory, a count of its sessions) and the brief's line naming them. On unless set to false.
+    #[serde(default)]
+    pub claude_setup: Option<bool>,
+}
+
+impl IntakeConfig {
+    pub fn claude_setup(&self) -> bool {
+        self.claude_setup.unwrap_or(true)
+    }
 }
 
 /// How the plugin's hooks act (`[enforce]` in groundworks.toml). `GROUNDWORKS_ENFORCE=warn|block` in the

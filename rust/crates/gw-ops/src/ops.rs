@@ -265,6 +265,12 @@ pub fn session_brief(home: &Home, store: &Store, name: &str, limit: usize) -> Re
             format!(" | docs: {}", project.docs.join(", "))
         }
     );
+    if home.config.intake.claude_setup()
+        && let Some(line) = crate::claude_setup::brief_line(&project.path(&home.workspace))
+    {
+        out.push_str(&line);
+        out.push('\n');
+    }
     if entries.is_empty() {
         out.push_str("(the journal is empty: record what you learn with journal_add)\n");
     }
@@ -1237,12 +1243,21 @@ pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> 
     let project = registry.project(project)?;
     let dir = project.path(&home.workspace);
     ensure!(dir.is_dir(), "{} is not on this machine", dir.display());
-    let experts = crate::intake::load_experts(&expert_dirs())?;
-    store.upsert_experts(&experts)?;
+    let global = crate::intake::load_experts(&expert_dirs())?;
+    let setup_on = home.config.intake.claude_setup();
+    let (local, disabled) = if setup_on {
+        crate::claude_setup::project_experts(&dir, &project.name)?
+    } else {
+        Default::default()
+    };
+    store.upsert_experts(&global)?;
+    store.upsert_experts(&local)?;
+    let experts = crate::claude_setup::merge(&global, &local);
     let started = std::time::Instant::now();
-    let collected = crate::intake::collect(&dir, &experts, max_commits)?;
+    let claude = claude_dir();
+    let collected = crate::intake::collect(&dir, &experts, max_commits, setup_on.then_some(claude.as_path()))?;
     let report = store.intake(&project.name, &collected)?;
-    let stale_quotes = store.recheck_quotes(&dir, &project.name)?;
+    let stale_quotes = store.recheck_quotes(&dir, &project.name, &claude)?;
     let mut out = format!(
         "{}: {} files read ({} untracked docs) into {} units ({} written, {} unchanged, {} marked gone) in {:.1}s on {}\n",
         project.name,
@@ -1298,11 +1313,16 @@ pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> 
             "  experts whose definitions cite paths here: {}",
             by_expert
                 .iter()
-                .map(|(e, n)| format!("{e} ({n})"))
+                .map(|(e, n)| if local.iter().any(|l| l.name == *e) {
+                    format!("{e} [project] ({n})")
+                } else {
+                    format!("{e} ({n})")
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         )?;
     }
+    out.push_str(&setup_summary(&collected.setup, &local, &disabled));
     if let Some(head) = &collected.head {
         writeln!(
             out,
@@ -1316,6 +1336,54 @@ pub fn intake(home: &Home, store: &Store, project: &str, max_commits: usize) -> 
         )?;
     }
     Ok(out)
+}
+
+/// The intake summary's line on the project's own Claude Code setup.
+fn setup_summary(
+    r: &crate::intake::SetupReport,
+    local: &[crate::intake::Expert],
+    disabled: &[crate::claude_setup::Disabled],
+) -> String {
+    if !r.on {
+        return "  claude setup: off ([intake] claude_setup = false)\n".to_owned();
+    }
+    let names: Vec<&str> = local.iter().map(|e| e.name.as_str()).collect();
+    let experts = if names.is_empty() {
+        "0 loaded".to_owned()
+    } else {
+        format!("{} loaded ({})", names.len(), names.join(", "))
+    };
+    let disabled = if disabled.is_empty() {
+        "0 disabled folders".to_owned()
+    } else {
+        format!(
+            "{} disabled, not loaded ({})",
+            disabled.iter().map(|d| d.definitions).sum::<usize>(),
+            disabled
+                .iter()
+                .map(|d| format!("{}: {}", d.folder, d.definitions))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let newest = r
+        .newest_session
+        .as_deref()
+        .map_or(String::new(), |d| format!(", newest {}", &d[..d.len().min(10)]));
+    format!(
+        "  claude setup: project experts {experts}, {disabled}; skills {}; commands {}; instruction files {} ({} disabled); \
+         {} setup files read from outside git, {} refused as secret-shaped (tracked or not); memory files {} stored, {} skipped for secrets; \
+         sessions {} counted{newest} (content not read)\n",
+        r.skills,
+        r.commands,
+        r.instructions,
+        r.instructions_disabled,
+        r.off_git,
+        r.setup_refused,
+        r.memory_stored,
+        r.memory_refused,
+        r.sessions,
+    )
 }
 
 /// Search units: excerpts of the best hits, with where each is, and what the search could reach.

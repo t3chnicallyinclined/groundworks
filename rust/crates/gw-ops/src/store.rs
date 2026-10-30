@@ -510,37 +510,34 @@ impl Store {
         Ok(())
     }
 
-    /// Write an intake: new and changed units in batches (unchanged ones are skipped by hash; a
+    /// Write an intake: new and changed units in batches (unchanged ones are skipped; a hash
     /// changed one marks the facts citing it stale), units of vanished files marked not present, and
     /// one intake_run row.
     pub fn intake(&self, project: &str, c: &crate::intake::Collected) -> Result<IntakeReport> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         let existing = self.retrying(|| {
             Ok(db.query(
-                "SELECT VALUE [record::id(id), hash, changed_at] FROM unit WHERE kind != 'quote';",
+                "SELECT VALUE [record::id(id), [hash, changed_at, kind, experts, present]] FROM unit WHERE kind != 'quote';",
                 &serde_json::Map::new(),
                 Some(1),
             )?)
         })?;
-        // A unit is rewritten when its text or its file's last-change date differs from what is stored.
-        let known: HashMap<String, (String, Option<String>)> = existing[0]
+        // A unit is rewritten when anything intake decides about it differs from what is stored: its text, its
+        // file's last-change date, its kind (classification changes: CLAUDE.md went from context to
+        // instructions on 2026-10-30), its experts (a new or edited definition, a project's own expert) or its
+        // presence (a file that comes back, or a setup turned off and on again).
+        let known: HashMap<String, Value> = existing[0]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|row| {
-                Some((
-                    row[0].as_str()?.to_owned(),
-                    (row[1].as_str()?.to_owned(), row[2].as_str().map(str::to_owned)),
-                ))
-            })
+            .filter_map(|row| Some((row[0].as_str()?.to_owned(), row[1].clone())))
             .collect();
         let changed: Vec<&crate::intake::Unit> = c
             .units
             .iter()
             .filter(|u| {
-                known
-                    .get(&u.key)
-                    .is_none_or(|(h, d)| *h != u.hash || *d != u.changed_at)
+                let now = serde_json::json!([u.hash, u.changed_at, u.kind, u.experts, true]);
+                known.get(&u.key).is_none_or(|stored| *stored != now)
             })
             .collect();
         for batch in changed.chunks(200) {
@@ -565,10 +562,14 @@ impl Store {
                 )?)
             })?;
         }
-        let vars = Vars::default().set("paths", c.paths.clone());
+        let mut file_kinds = vec!["context", "doc", "code", "config"];
+        file_kinds.extend(crate::intake::SETUP_KINDS);
+        let vars = Vars::default()
+            .set("paths", c.paths.clone())
+            .set("file_kinds", file_kinds);
         let gone = self.retrying(|| {
             Ok(db.query(
-                "LET $gone = (SELECT VALUE id FROM unit WHERE kind IN ['context', 'doc', 'code', 'config'] \
+                "LET $gone = (SELECT VALUE id FROM unit WHERE kind IN $file_kinds \
                  AND present = true AND path NOT IN $paths);\n\
                  IF array::len($gone) > 0 { UPDATE $gone SET present = false RETURN NONE; };\n\
                  RETURN array::len($gone);",
@@ -611,7 +612,7 @@ impl Store {
     /// Re-check every quoted span against the project's files on disk. A span whose text changed, or
     /// whose file or lines are gone, gets the new hash, which marks every fact citing it stale (R1).
     /// Returns how many spans changed.
-    pub fn recheck_quotes(&self, project_dir: &Path, project: &str) -> Result<usize> {
+    pub fn recheck_quotes(&self, project_dir: &Path, project: &str, claude: &Path) -> Result<usize> {
         let db = self.agent(&project_ns(&slug(project)?)?)?;
         let rows = self.retrying(|| {
             Ok(db.query(
@@ -625,7 +626,7 @@ impl Store {
             let (Some(key), Some(locator), Some(hash)) = (row[0].as_str(), row[1].as_str(), row[2].as_str()) else {
                 continue;
             };
-            let now = current_span_hash(project_dir, locator);
+            let now = current_span_hash(project_dir, locator, claude);
             if now.as_deref() != Some(hash) {
                 changed.push(serde_json::json!({"key": key, "hash": now.unwrap_or_else(|| "gone".to_owned())}));
             }
@@ -675,7 +676,7 @@ impl Store {
         }
         if !kinds.is_empty() {
             sql.push_str(" AND kind IN $kinds");
-            vars = vars.set("kinds", kinds.to_vec());
+            vars = vars.set("kinds", crate::intake::expand_kinds(kinds));
         }
         sql.push_str(" ORDER BY score DESC LIMIT $limit;");
         let rows = self.retrying(|| Ok(db.query(&sql, &vars.0, Some(1))?))?;
@@ -1337,12 +1338,25 @@ impl Store {
         let global = self.agent(GLOBAL_NS)?;
         let rows: Vec<Value> = experts
             .iter()
-            .map(|e| serde_json::json!({"name": e.name, "summary": e.summary, "file": e.file.display().to_string()}))
+            .map(|e| {
+                // A global expert keeps its name as its key; a project's own is keyed by name and project,
+                // so the directory keeps both when the names collide.
+                let key = if e.source == "global" {
+                    e.name.clone()
+                } else {
+                    format!("{}@{}", e.name, e.source)
+                };
+                serde_json::json!({"key": key, "v": {"name": e.name, "summary": e.summary,
+                    "file": e.file.display().to_string(), "source": e.source}})
+            })
             .collect();
+        if rows.is_empty() {
+            return Ok(());
+        }
         let vars = Vars::default().set("rows", rows);
         self.retrying(|| {
             Ok(global.query(
-                "FOR $e IN $rows { UPSERT type::record('expert', $e.name) MERGE $e; };",
+                "FOR $e IN $rows { UPSERT type::record('expert', $e.key) MERGE $e.v; };",
                 &vars.0,
                 None,
             )?)
@@ -1474,11 +1488,12 @@ fn any_word(query: &str) -> Result<AnyWord> {
 }
 
 /// The hash a quote's span (`path#Lstart-end`) has on disk now, or None if the file or lines are gone.
-fn current_span_hash(project_dir: &Path, locator: &str) -> Option<String> {
+fn current_span_hash(project_dir: &Path, locator: &str, claude: &Path) -> Option<String> {
     let (path, lines) = locator.rsplit_once("#L")?;
     let (start, end) = lines.split_once('-')?;
     let (start, end): (usize, usize) = (start.parse().ok()?, end.parse().ok()?);
-    let content = std::fs::read_to_string(project_dir.join(path)).ok()?.replace('\r', "");
+    let file = crate::claude_setup::resolve(project_dir, path, claude);
+    let content = std::fs::read_to_string(file).ok()?.replace('\r', "");
     let all: Vec<&str> = content.lines().collect();
     if start == 0 || end > all.len() || start > end {
         return None;
