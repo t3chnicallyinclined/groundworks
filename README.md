@@ -50,22 +50,25 @@ and no AI model inside Groundworks.
 Groundworks grew out of a method I first built for reading one very large record where getting things wrong was
 expensive. I called it the Scholar method ([docs/METHOD.md](docs/METHOD.md)). The same ideas run through all of it:
 
-- **An evidence-gated graph.** Sources are cut into units with exact locations, and each is graded on separate
-  axes: are these the exact words, and may this source be used at all. A claim only becomes confirmed when the
-  database finds qualifying evidence linked to it at the moment of writing. Every rule is tested both ways: it has
-  to refuse a bad write and accept a good one.
+- **An evidence-gated graph.** Sources are cut into units with exact locations. Claims are graded confirmed,
+  inferred or unknown, and a claim only becomes confirmed when the database finds qualifying evidence linked to it
+  at the moment of writing. Every rule is shown failing on a bad write before it's trusted to pass a good one. (The
+  original engine goes further and grades each source on separate axes, such as exact wording and whether it may
+  be used at all.)
 - **Read everything, and prove it.** In the original engine, agents label every unit once, and a validator proves
   the coverage and checks each quote word for word. So it can say what it did not read.
 - **Dead ends are knowledge.** Ruled-out claims are stored with what the source actually shows, and they're shown
   to the next agent before it repeats them.
-- **Attacked before ready.** A conclusion can't be marked ready until it has been challenged and every damaging
-  point answered. Nobody, the coordinator included, can delete the challenge.
-- **Lenses.** Each expert sees the same evidence through their own lens; the evidence itself is never copied or
-  edited. Findings and every dispute of them sit side by side, and disagreement is kept as data.
+- **Challenges are kept.** Another expert can challenge or support a finding, and nothing gets deleted. In the
+  original engine, a conclusion can't be marked ready until it has been challenged and every damaging point
+  answered.
+- **Lenses.** Each expert records findings through their own lens over the same evidence, which is never copied or
+  edited. Findings and every dispute of them sit side by side, and disagreement is shown rather than settled by
+  leaving one side out.
 - **Panels.** Several experts judge one question under a checked protocol: a blind first round, an anonymised second
-  round, a minimum amount of dissent, and a tally that hands close splits back to me.
-- **A fixed evaluator.** A change to how Groundworks works is kept only if a test written in advance, which the
-  agents can't edit, says it helped. The changes that didn't help are written down too.
+  round, a minimum amount of dissent, and a weighted tally under thresholds I set.
+- **Evals graded blind.** Changes to how Groundworks answers are tested on question sets graded blind, with the pass
+  rule written down before the run. The changes that didn't help are written down too.
 
 ## How the knowledge base runs
 
