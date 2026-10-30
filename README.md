@@ -45,6 +45,46 @@ supervisor: keeps the store running, nightly export, restore drill, health repor
 Each project's data sits in its own section of the database, and everything runs locally. There's no cloud service
 and no AI model inside Groundworks.
 
+## The knowledge framework underneath
+
+Groundworks grew out of a method I first built for reading one very large record where getting things wrong was
+expensive. I called it the Scholar method ([docs/METHOD.md](docs/METHOD.md)). The same ideas run through all of it:
+
+- **An evidence-gated graph.** Sources are cut into units with exact locations, and each is graded on separate
+  axes: are these the exact words, and may this source be used at all. A claim only becomes confirmed when the
+  database finds qualifying evidence linked to it at the moment of writing. Every rule is tested both ways: it has
+  to refuse a bad write and accept a good one.
+- **Read everything, and prove it.** In the original engine, agents label every unit once, and a validator proves
+  the coverage and checks each quote word for word. So it can say what it did not read.
+- **Dead ends are knowledge.** Ruled-out claims are stored with what the source actually shows, and they're shown
+  to the next agent before it repeats them.
+- **Attacked before ready.** A conclusion can't be marked ready until it has been challenged and every damaging
+  point answered. Nobody, the coordinator included, can delete the challenge.
+- **Lenses.** Each expert sees the same evidence through their own lens; the evidence itself is never copied or
+  edited. Findings and every dispute of them sit side by side, and disagreement is kept as data.
+- **Panels.** Several experts judge one question under a checked protocol: a blind first round, an anonymised second
+  round, a minimum amount of dissent, and a tally that hands close splits back to me.
+- **A fixed evaluator.** A change to how Groundworks works is kept only if a test written in advance, which the
+  agents can't edit, says it helped. The changes that didn't help are written down too.
+
+## How the knowledge base runs
+
+- **One home, many projects.** A home folder next to my projects holds the registry, the expert team and the store.
+  The store is a single local SurrealDB server, listening only on this machine. Each project gets its own section,
+  shared, private or isolated, and walls can keep two projects apart.
+- **Intake.** `groundworks intake` reads each project's code, docs and commits into units, and tags each one with
+  the experts whose area covers it.
+- **Asking.** An agent asks a question and gets a packet of the best candidates, with recorded facts first. It
+  reads them and answers, and a program checks every quote. A passed answer is recorded, so the next session gets
+  it first.
+- **Recording.** Decisions, gotchas, status and dead ends go into each project's journal, signed by whoever wrote
+  them and graded confirmed, inferred or unknown.
+- **Keeping it alive.** The supervisor restarts the store, exports it nightly and test-restores the export. The
+  pulse reports whether the knowledge is growing, being used and backed up.
+- **The original engine is still here.** The Python version ([its README](docs/ENGINE-PYTHON-V0.2.md)) is the
+  reference the Rust port is checked against. It can be pointed at any body of material by answering eight
+  questions, and it ships a demo you can run.
+
 ## Roadmap
 
 - **Now:** a Groundworks desktop app, a copy of Nimbalyst with Groundworks built into every session. It's private
@@ -101,7 +141,7 @@ stores it. PowerShell steps and every command are in [plugin/README.md](plugin/R
 | `rust/` | The `groundworks` program, its store schema and the eval report |
 | `rust/templates/` | Project templates for `/groundworks:bootstrap` (run through Copier) |
 | `plugin/` | The Claude Code plugin: hooks, deny list, the Groundworks agent, `/groundworks:init` and `/groundworks:bootstrap` |
-| `docs/` | Architecture, decisions, roadmap, and `METRICS.md` (what the health report measures) |
+| `docs/` | The method (`METHOD.md`), architecture, decisions, roadmap, and `METRICS.md` (what the health report measures) |
 | `docs/brand/`, `site/` | Logo, mascot, icon and colours; the project website |
 | `scripts/` | The privacy scan and license check that run before every commit |
 | `.claude/` | The repo's own agent and skills (instance design, panels) |
