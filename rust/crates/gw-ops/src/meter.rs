@@ -2878,8 +2878,10 @@ mod tests {
 
     #[test]
     fn the_red_lines_fire_and_stay_quiet() {
-        let mut line = CostLine::default();
-        line.window_days = 7;
+        let mut line = CostLine {
+            window_days: 7,
+            ..CostLine::default()
+        };
         line.totals.window.overhead_share = Some(0.11);
         line.totals.previous_window.tokens_per_human_turn = 100.0;
         line.totals.window.tokens_per_human_turn = 130.0;
