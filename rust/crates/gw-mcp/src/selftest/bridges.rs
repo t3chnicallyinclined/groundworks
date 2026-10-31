@@ -601,7 +601,8 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     let foreign = [&gamma_card, &privy_card, &delta_card];
     c.check(
         "B3 (gw-security 3): propose sweeps only shared, unwalled projects: no walled, private or isolated card is read",
-        !err && searched.starts_with("searched: beta, demo, red;")
+        // envcheck is run_env_checks' project in the same home (run-env-allowlist, merged before this lane).
+        !err && searched.starts_with("searched: beta, demo, envcheck, red;")
             && searched.contains("gamma (walled from alpha)")
             && searched.contains("privy (private: never a bridge source)")
             && foreign.iter().all(|k| !text2.contains(k.trim_start_matches("card:"))),
@@ -636,8 +637,9 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     );
 
     // ---- B4 bridge eval ---------------------------------------------------------------------------------------
-    // Gold planted after the cutoff: a demo fact citing a red fact (shared, unwalled: counts); an alpha fact
-    // citing a gamma fact (walled: does not); a privy fact citing a beta fact (privy is private: never read).
+    // Gold planted after the cutoff: a demo fact citing a beta fact (shared, unwalled: counts; demo and red are
+    // walled by wall_checks since init-s2, so demo -> red no longer can); an alpha fact citing a gamma fact
+    // (walled: does not); a privy fact citing a beta fact (privy is private: never read).
     let fact = |s: &mut Client, project: &str, text: &str| -> Result<String> {
         let (err, reply) = s.call(
             "journal_add",
@@ -653,15 +655,14 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
             .map(|w| w.trim_end_matches(':').to_owned())
             .context("a fact id")
     };
-    let red_fact = fact(s, "red", "The relay drops datagrams over twelve hundred bytes.")?;
+    let beta_fact = fact(s, "beta", "The hysteresis band is two degrees wide.")?;
     fact(
         s,
         "demo",
-        &format!("The demo keeps datagrams small because of {red_fact}."),
+        &format!("The demo keeps its band narrow because of {beta_fact}."),
     )?;
     let gamma_fact = fact(s, "gamma", "The ring buffer holds eight frames.")?;
     fact(s, "alpha", &format!("Alpha sizes its buffer from {gamma_fact}."))?;
-    let beta_fact = fact(s, "beta", "The hysteresis band is two degrees wide.")?;
     fact(s, "privy", &format!("A private note leaning on {beta_fact}."))?;
     let out = Command::new(exe)
         .args(["bridge-eval", "--cutoff", "2000-01-01T00:00:00Z"])
@@ -679,7 +680,7 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
         "B4: bridge-eval counts the gold links: one fact citing another shared project's fact",
         out.status.success()
             && text.contains("gold links after the cutoff: 1 (fact links 1, packet links 0)")
-            && text.contains("  demo -> red: 1"),
+            && text.contains("  demo -> beta: 1"),
         &text,
     );
     c.check(
