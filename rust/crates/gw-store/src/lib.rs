@@ -16,8 +16,8 @@
 //!
 //! Roles are `owner` (the human) and `agent`. Root is the migration and loader identity only.
 
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gw_core::db::{Db, DbError};
 use serde_json::Value;
@@ -461,13 +461,84 @@ pub fn find_surreal() -> Option<PathBuf> {
     installed.is_file().then_some(installed)
 }
 
+/// How long the health probe's connect may take on loopback, and elsewhere. ureq's default agent sets a
+/// 30 s connect timeout that overrides a request's own timeout, so a refused loopback connect ran the
+/// Windows stack's retries in full: 2,029-2,031 ms per hook with the store down (PERF-BASELINE.md A.1).
+/// A loopback connect to a listening server completes in well under a millisecond (the kernel accepts,
+/// however busy the server is); 250 ms put a store-down Bash hook at 300 ms p50 on THERIGXD, so 150.
+const CONNECT_LOOPBACK: Duration = Duration::from_millis(150);
+const CONNECT_REMOTE: Duration = Duration::from_millis(800);
+
+/// How long a store found down stays down for later processes without a new probe ([`healthy_or_down`]).
+pub const DOWN_FOR: Duration = Duration::from_secs(10);
+
 /// Whether a SurrealDB answers `/health` at the base of `url` (`.../sql` or the bare origin).
 pub fn healthy(url: &str) -> bool {
     let base = url.strip_suffix("/sql").unwrap_or(url.trim_end_matches('/'));
-    ureq::get(&format!("{base}/health"))
+    let connect = if loopback(base) {
+        CONNECT_LOOPBACK
+    } else {
+        CONNECT_REMOTE
+    };
+    ureq::AgentBuilder::new()
+        .timeout_connect(connect)
         .timeout(Duration::from_millis(800))
+        .build()
+        .get(&format!("{base}/health"))
         .call()
         .is_ok()
+}
+
+/// Whether `base` (`scheme://host[:port][/...]`) names this machine.
+fn loopback(base: &str) -> bool {
+    let rest = base.split_once("://").map_or(base, |(_, r)| r);
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => authority.rsplit_once(':').map_or(authority, |(h, _)| h),
+    };
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// As [`healthy`], remembering "down" across processes: each hook is its own process, and with the
+/// store down every one of them paid the probe. A store found down writes `marker` (the time and the
+/// url); while it is younger than [`DOWN_FOR`] the store is down at once, without a probe. The first
+/// probe after that retries, and a store found up removes the marker. A marker that cannot be read,
+/// names another url or lies in the future is ignored: the probe runs, as before.
+pub fn healthy_or_down(url: &str, marker: &Path) -> bool {
+    if recently_down(url, marker, SystemTime::now()) {
+        return false;
+    }
+    let up = healthy(url);
+    if up {
+        let _ = std::fs::remove_file(marker);
+    } else {
+        let _ = mark_down(url, marker, SystemTime::now());
+    }
+    up
+}
+
+fn millis(t: SystemTime) -> u128 {
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
+}
+
+fn mark_down(url: &str, marker: &Path, now: SystemTime) -> std::io::Result<()> {
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(marker, format!("{}\n{url}\n", millis(now)))
+}
+
+fn recently_down(url: &str, marker: &Path, now: SystemTime) -> bool {
+    let Ok(text) = std::fs::read_to_string(marker) else {
+        return false;
+    };
+    let mut lines = text.lines();
+    let (Some(at), Some(for_url)) = (lines.next().and_then(|l| l.parse::<u128>().ok()), lines.next()) else {
+        return false;
+    };
+    let now = millis(now);
+    for_url == url && at <= now && now - at < DOWN_FOR.as_millis()
 }
 
 #[cfg(test)]
@@ -522,6 +593,77 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A loopback port nothing listens on (bound, then released).
+    fn closed_port() -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    }
+
+    /// A loopback port that answers one `/health` request with 200, then closes.
+    fn health_once() -> u16 {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = l.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        port
+    }
+
+    fn marker(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("gw-store-down-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d.join("state").join("store-down")
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised() {
+        assert!(loopback("http://127.0.0.1:8004"));
+        assert!(loopback("http://localhost:8004/x"));
+        assert!(loopback("http://[::1]:8004"));
+        assert!(loopback("http://127.9.9.9"));
+        assert!(!loopback("http://10.0.0.5:8004"));
+        assert!(!loopback("https://store.example.com"));
+    }
+
+    #[test]
+    fn a_refused_loopback_connect_is_down_within_the_connect_timeout() {
+        let url = format!("http://127.0.0.1:{}/sql", closed_port());
+        let t = std::time::Instant::now();
+        assert!(!healthy(&url));
+        // Before: about 2 s on Windows (the stack's SYN retries under ureq's 30 s connect timeout).
+        assert!(t.elapsed() < Duration::from_millis(1000), "{:?}", t.elapsed());
+        assert!(healthy(&format!("http://127.0.0.1:{}/sql", health_once())));
+    }
+
+    #[test]
+    fn down_is_remembered_across_processes_for_a_while_then_probed_again() {
+        let m = marker("remember");
+        let down = format!("http://127.0.0.1:{}/sql", closed_port());
+        assert!(!healthy_or_down(&down, &m));
+        assert!(m.is_file(), "a down store leaves the marker");
+        // While the marker is fresh the probe is skipped: even a store that answers is down.
+        let up = format!("http://127.0.0.1:{}/sql", health_once());
+        std::fs::write(&m, format!("{}\n{up}\n", millis(SystemTime::now()))).unwrap();
+        assert!(!healthy_or_down(&up, &m));
+        // Expired, from the future, or for another url: the probe runs, and up removes the marker.
+        let now = SystemTime::now();
+        assert!(!recently_down(&up, &m, now + DOWN_FOR));
+        std::fs::write(&m, format!("{}\n{up}\n", millis(now + Duration::from_secs(60)))).unwrap();
+        assert!(!recently_down(&up, &m, now));
+        std::fs::write(&m, format!("{}\n{down}\n", millis(now))).unwrap();
+        assert!(!recently_down(&up, &m, now));
+        std::fs::write(&m, "garbage").unwrap();
+        assert!(!recently_down(&up, &m, now));
+        assert!(healthy_or_down(&up, &m));
+        assert!(!m.exists(), "an up store removes the marker");
+        let _ = std::fs::remove_dir_all(m.parent().unwrap().parent().unwrap());
     }
 
     #[test]

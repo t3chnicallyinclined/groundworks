@@ -92,10 +92,11 @@ impl Store {
     }
 
     /// The home's store only if its server answers now: None when it is down. The hooks use this so a
-    /// session never waits on a server start and a down store is reported, not hidden.
+    /// session never waits on a server start and a down store is reported, not hidden. A store found
+    /// down is remembered for a few seconds under `<home>/state/store-down` (gw_store::healthy_or_down).
     pub fn open_if_up(home: &Home) -> Result<Option<Self>> {
         let url = store_url(home);
-        if !gw_store::healthy(&url) {
+        if !gw_store::healthy_or_down(&url, &home.path("state/store-down")) {
             return Ok(None);
         }
         Ok(Some(Self::connect(
