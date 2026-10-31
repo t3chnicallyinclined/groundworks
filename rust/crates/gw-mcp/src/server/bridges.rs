@@ -28,7 +28,7 @@ pub struct BridgeAddArgs {
     pub project: String,
     /// The problem card of the target project (`card:...`).
     pub target: String,
-    /// The source project: shared, and on neither side of a wall.
+    /// The source project: shared, not walled from the target.
     pub source: String,
     /// The capability card of the source project (`card:...`).
     pub card: String,

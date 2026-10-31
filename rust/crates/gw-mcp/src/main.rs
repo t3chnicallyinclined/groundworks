@@ -603,7 +603,9 @@ async fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
-    match dispatch(Cli::parse().command).await {
+    // Boxed: the dispatch future holds every command's state; in a debug build it outgrew the 1 MB main
+    // thread stack once the merged lanes' commands were all in it (A3.1 step 6, e2e selftest overflowed).
+    match Box::pin(dispatch(Cli::parse().command)).await {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(e) => {

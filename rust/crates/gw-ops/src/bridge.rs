@@ -4,10 +4,9 @@
 //! testable (an assumption check per source assumption, each quoting the target; the novelty search this
 //! program ran; a written test) -> supported (an ok receipt) or refuted (a receipt, or a quoted mismatch).
 //!
-//! Reach (gw-security rulings 1, 3 and 5, 2026-10-30): a bridge's source is a project at level `shared` on
-//! neither side of any wall between shared projects ([`Store::reach`] with no project named), never the target
-//! itself; a private project is never a source (editing `related` does not change that), an isolated one is
-//! never read. Reach is checked when a bridge is written and again
+//! Reach (gw-security rulings 1, 3 and 5, 2026-10-30): a bridge's source is a project at level `shared`, not
+//! walled from the target, never the target itself; a private project is never a source (editing `related`
+//! does not change that), an isolated one is never read. Reach is checked when a bridge is written and again
 //! every time one is read, so a wall or level set later stops an existing bridge from rendering. Every read
 //! takes its reach from [`reach`] alone.
 
@@ -47,24 +46,53 @@ impl Reach {
     }
 }
 
-/// The one reach function every card, bridge and evaluator read goes through: the store's reach rule
-/// ([`Store::reach`] with no project named; gw-security rulings 1, 3 and 5), less the target itself. A source is
-/// a shared project (private and isolated ones never are, ruling 3) on neither side of any wall between two
-/// shared projects: the store's rule picks neither side of a wall over the other. A wall or level that cannot
-/// be read fails the whole read.
+/// The one reach function every card, bridge and evaluator read goes through (gw-security rulings 1, 3 and 5).
+/// Walls and levels come from the store's own readers ([`Store::walls`], [`Store::level`]), the owner-signed rows
+/// in `global`: a source must be at level `shared` (isolated and private are refused, ruling 3), and no wall may
+/// join it with the target (ruling 1). Unlike [`Store::reach`] with no project named, a wall between two other
+/// projects does not take them out of this target's reach. A wall or level that cannot be read refuses.
 pub fn reach(home: &Home, store: &Store, project: &str) -> Result<Reach> {
     let registry = Registry::load(home)?;
     let target = registry.project(project)?.name.clone();
-    let all = store.reach(&registry, None)?;
-    Ok(Reach {
-        sources: all.names.into_iter().filter(|n| *n != target).collect(),
-        skipped: all
-            .skipped
-            .into_iter()
-            .filter(|s| s.split(' ').next() != Some(target.as_str()))
-            .collect(),
-        target,
-    })
+    let target_ns = gw_store::project_ns(&store::slug(&target)?)?;
+    let mut out = Reach {
+        target: target.clone(),
+        sources: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let walls = match store.walls() {
+        Ok(walls) => walls,
+        Err(e) => {
+            for name in registry.projects.keys().filter(|n| **n != target) {
+                out.skipped.push(format!("{name} (walls unreadable, refused: {e:#})"));
+            }
+            return Ok(out);
+        }
+    };
+    for name in registry.projects.keys() {
+        if *name == target {
+            continue;
+        }
+        let ns = gw_store::project_ns(&store::slug(name)?)?;
+        let level = match store.level(&ns) {
+            Ok(level) => level,
+            Err(e) => {
+                out.skipped.push(format!("{name} (level unreadable, refused: {e:#})"));
+                continue;
+            }
+        };
+        if walls
+            .iter()
+            .any(|(a, b)| (*a == ns && *b == target_ns) || (*a == target_ns && *b == ns))
+        {
+            out.skipped.push(format!("{name} (walled from {target})"));
+        } else if level != "shared" {
+            out.skipped.push(format!("{name} ({level}: never a bridge source)"));
+        } else {
+            out.sources.push(name.clone());
+        }
+    }
+    Ok(out)
 }
 
 /// A card of `source` read for a bridge: live, servable, and the kind asked for.
