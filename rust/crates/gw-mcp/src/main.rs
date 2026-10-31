@@ -614,14 +614,31 @@ async fn main() -> ExitCode {
         .init();
     // Boxed: the dispatch future holds every command's state; in a debug build it outgrew the 1 MB main
     // thread stack once the merged lanes' commands were all in it (A3.1 step 6, e2e selftest overflowed).
+    let json = std::env::args().any(|a| a == "--json");
     match Box::pin(dispatch(Cli::parse().command)).await {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(e) => {
+            if json {
+                println!("{}", json_error(&e));
+            }
             eprintln!("error: {e:#}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// The one failure shape of every `--json` command (A3.21), printed on stdout where the caller reads the
+/// JSON: `{"error": {"code": ..., "message": ...}}`. `code` is `store_unreachable` when the store did not
+/// answer, else `failed`; `message` is the error chain as text.
+fn json_error(e: &anyhow::Error) -> String {
+    let message = format!("{e:#}");
+    let code = if message.contains("store is not answering") {
+        "store_unreachable"
+    } else {
+        "failed"
+    };
+    serde_json::json!({"error": {"code": code, "message": message}}).to_string()
 }
 
 /// Ok(false) means the operation ran and reported a failure (a red gate, a non-zero exit).
@@ -1270,5 +1287,21 @@ async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
         | StoreAction::Uninstall => {
             unreachable!("handled by store_service before home discovery")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_json_failure_is_one_error_object() {
+        let e = anyhow::anyhow!("the store is not answering; store status --json never starts it");
+        let v: serde_json::Value = serde_json::from_str(&super::json_error(&e)).unwrap();
+        assert_eq!(v["error"]["code"], "store_unreachable");
+        assert!(v["error"]["message"].as_str().unwrap().contains("never starts it"));
+        assert_eq!(v.as_object().unwrap().len(), 1);
+        let e = anyhow::anyhow!("inner").context("outer");
+        let v: serde_json::Value = serde_json::from_str(&super::json_error(&e)).unwrap();
+        assert_eq!(v["error"]["code"], "failed");
+        assert_eq!(v["error"]["message"], "outer: inner");
     }
 }

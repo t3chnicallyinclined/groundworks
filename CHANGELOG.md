@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **One failure shape for every `--json` command** (2026-10-31, Rust workspace; A3.21). When a command run with
+  `--json` fails, stdout carries one object, `{"error": {"code": "store_unreachable" | "failed", "message": ...}}`,
+  printed once in gw-mcp's error path (the error still goes to stderr, exit non-zero). Unit test
+  `a_json_failure_is_one_error_object`; selftest: `store status --json` against a closed port; shown red without
+  the print (empty stdout).
+
 - **Integration of the 2026-10-30 lanes, and two read-only surfaces** (2026-10-30, Rust workspace; A3.1 steps 1-7,
   integration engineer). Merged in the architect's order: init-s0-s1, init-s2, run-env-allowlist, attack-verdicts,
   kpi-cost-w2, idea-bridges. Schema numbers retaken at merge: attack 0019 -> **0018**, card 0017 -> **0019**,

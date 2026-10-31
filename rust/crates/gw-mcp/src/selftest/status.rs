@@ -82,5 +82,21 @@ pub(super) fn status_checks(exe: &Path, base: &Path, home: &Path, c: &mut Checks
             && unopened.1["current"] == false,
         &second,
     );
+
+    // A --json command that fails prints one error object on stdout (A3.21): a home whose store port is closed.
+    let down = base.join("down-home");
+    std::fs::create_dir_all(down.join("registry/projects"))?;
+    let workspace = base.display().to_string().replace('\\', "/");
+    std::fs::write(
+        down.join("groundworks.toml"),
+        format!("workspace = \"{workspace}\"\n\n[store]\nurl = \"http://127.0.0.1:9/sql\"\n"),
+    )?;
+    let (ok, out) = cli(exe, &down, &["store", "status", "--json"])?;
+    let v: Value = serde_json::from_str(out.trim()).unwrap_or(Value::Null);
+    c.check(
+        "a --json command that fails prints one {error: {code, message}} object: store status on a closed port",
+        !ok && v["error"]["code"] == "store_unreachable" && v["error"]["message"].is_string(),
+        &out,
+    );
     Ok(())
 }
