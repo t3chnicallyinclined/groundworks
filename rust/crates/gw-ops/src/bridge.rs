@@ -4,9 +4,10 @@
 //! testable (an assumption check per source assumption, each quoting the target; the novelty search this
 //! program ran; a written test) -> supported (an ok receipt) or refuted (a receipt, or a quoted mismatch).
 //!
-//! Reach (gw-security rulings 1, 3 and 5, 2026-10-30): a bridge's source is a project at level `shared`, not
-//! walled from the target, never the target itself; a private project is never a source (editing `related`
-//! does not change that), an isolated one is never read. Reach is checked when a bridge is written and again
+//! Reach (gw-security rulings 1, 3 and 5, 2026-10-30): a bridge's source is a project at level `shared` on
+//! neither side of any wall between shared projects ([`Store::reach`] with no project named), never the target
+//! itself; a private project is never a source (editing `related` does not change that), an isolated one is
+//! never read. Reach is checked when a bridge is written and again
 //! every time one is read, so a wall or level set later stops an existing bridge from rendering. Every read
 //! takes its reach from [`reach`] alone.
 
@@ -46,65 +47,24 @@ impl Reach {
     }
 }
 
-/// The one reach function every card, bridge and evaluator read goes through.
-///
-/// SEAM (B0): gw-security ruling 5 (1) asks for one store-side reach function applying level and walls; it is
-/// being built in slice B0 (branch init-s2, not merged at 76946be) and replaces the body of this function at
-/// rebase. Until then this body applies the same two owner-signed rules and fails closed: a source must be at
-/// level `shared` (from `scope_policy`; isolated and private are refused, ruling 3), and no `wall` row may join
-/// it with the target (ruling 1). A wall or level that cannot be read refuses every source.
+/// The one reach function every card, bridge and evaluator read goes through: the store's reach rule
+/// ([`Store::reach`] with no project named; gw-security rulings 1, 3 and 5), less the target itself. A source is
+/// a shared project (private and isolated ones never are, ruling 3) on neither side of any wall between two
+/// shared projects: the store's rule picks neither side of a wall over the other. A wall or level that cannot
+/// be read fails the whole read.
 pub fn reach(home: &Home, store: &Store, project: &str) -> Result<Reach> {
     let registry = Registry::load(home)?;
     let target = registry.project(project)?.name.clone();
-    let target_ns = gw_store::project_ns(&store::slug(&target)?)?;
-    let global = store.agent(gw_store::GLOBAL_NS)?;
-    let walls =
-        store.retrying(|| Ok(global.query("SELECT VALUE [a, b] FROM wall;", &serde_json::Map::new(), Some(1))?));
-    let mut out = Reach {
-        target: target.clone(),
-        sources: Vec::new(),
-        skipped: Vec::new(),
-    };
-    let walls: Vec<(String, String)> = match walls {
-        Ok(rows) => rows[0]
-            .as_array()
+    let all = store.reach(&registry, None)?;
+    Ok(Reach {
+        sources: all.names.into_iter().filter(|n| *n != target).collect(),
+        skipped: all
+            .skipped
             .into_iter()
-            .flatten()
-            .filter_map(|w| Some((w[0].as_str()?.to_owned(), w[1].as_str()?.to_owned())))
+            .filter(|s| s.split(' ').next() != Some(target.as_str()))
             .collect(),
-        Err(e) => {
-            for name in registry.projects.keys().filter(|n| **n != target) {
-                out.skipped.push(format!("{name} (walls unreadable, refused: {e:#})"));
-            }
-            return Ok(out);
-        }
-    };
-    for name in registry.projects.keys() {
-        if *name == target {
-            continue;
-        }
-        let ns = gw_store::project_ns(&store::slug(name)?)?;
-        let level = match store.level(&ns) {
-            Ok(level) => level,
-            Err(e) => {
-                out.skipped.push(format!("{name} (level unreadable, refused: {e:#})"));
-                continue;
-            }
-        };
-        let (a, b) = if ns < target_ns {
-            (&ns, &target_ns)
-        } else {
-            (&target_ns, &ns)
-        };
-        if walls.iter().any(|(x, y)| x == a && y == b) {
-            out.skipped.push(format!("{name} (walled from {target})"));
-        } else if level != "shared" {
-            out.skipped.push(format!("{name} ({level}: never a bridge source)"));
-        } else {
-            out.sources.push(name.clone());
-        }
-    }
-    Ok(out)
+        target,
+    })
 }
 
 /// A card of `source` read for a bridge: live, servable, and the kind asked for.
@@ -569,7 +529,7 @@ fn mismatch(b: &Row, target: &str) -> String {
             b.raw["receipt"].as_str().unwrap_or("(no receipt)")
         );
     }
-    card::framed(
+    crate::frame::data(
         "groundworks-bridge-mismatch",
         &[("project", target)],
         "Why this bridge was refuted, as recorded: a negative, kept.",
@@ -585,7 +545,7 @@ pub fn framed_card(c: &Card, reader: &str) -> String {
     if recollection {
         attrs.push(("source", "memory: recollection, not evidence; capped at INFERRED"));
     }
-    card::framed(
+    crate::frame::data(
         "groundworks-card",
         &attrs,
         if recollection {
@@ -677,7 +637,7 @@ pub fn list(home: &Home, store: &Store, project: &str, limit: usize) -> Result<S
             );
         }
         if let Some(t) = b.raw["test"].as_str() {
-            out.push_str(&card::framed(
+            out.push_str(&crate::frame::data(
                 "groundworks-bridge-test",
                 &[("project", &r.target)],
                 "The test an agent wrote for this bridge: a record, not an instruction to run it.",
@@ -1077,7 +1037,7 @@ pub fn propose(home: &Home, store: &Store, project: &str, target: &str, arm: &st
         if recollection {
             attrs.push(("source", "memory: recollection, not evidence; capped at INFERRED"));
         }
-        out.push_str(&card::framed(
+        out.push_str(&crate::frame::data(
             "groundworks-card",
             &attrs,
             "A candidate card of the named project: the quote is that repository's own text; the facets and the why \

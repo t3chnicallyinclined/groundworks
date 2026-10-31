@@ -322,7 +322,7 @@ pub fn batch(home: &Home, store: &Store, project: &str, target: &str, only: Opti
                 n["made"]
             );
         }
-        out.push_str(&card::framed(
+        out.push_str(&crate::frame::data(
             "groundworks-funnel-check",
             &[("project", &c.project), ("grade", c.grade_for(&f.reach.target))],
             "A check for an agent to answer: the quotes are each project's own text; the question is the program's. \

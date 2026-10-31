@@ -348,13 +348,13 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     let (err, text) = s.call("bridge_add", bridge("privy", &privy_card))?;
     c.check(
         "B2 (gw-security 3): a private project is never a bridge source, even listed in related",
-        err && text.contains("private: never a bridge source"),
+        err && text.contains("privy (private)"),
         &text,
     );
     let (err, text) = s.call("bridge_add", bridge("secret", "card:nothere0000"))?;
     c.check(
         "B2: an isolated project is never a bridge source",
-        err && text.contains("isolated: never a bridge source"),
+        err && text.contains("secret (isolated)"),
         &text,
     );
 
@@ -541,7 +541,7 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     let (err, text2) = s.call("bridge_list", json!({"project": "alpha"}))?;
     c.check(
         "B2 (gw-security 3): reach is re-checked when a bridge is read: a wall set later hides its source",
-        delta_ok && !err && text2.contains("source hidden: out of reach now (delta (walled from alpha))"),
+        delta_ok && !err && text2.contains("source hidden: out of reach now (delta (walled from alpha"),
         &format!("{text}\n{text2}"),
     );
     let opens = text2.matches("<groundworks-card ").count();
@@ -602,8 +602,8 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     c.check(
         "B3 (gw-security 3): propose sweeps only shared, unwalled projects: no walled, private or isolated card is read",
         !err && searched.starts_with("searched: beta, demo, red;")
-            && searched.contains("gamma (walled from alpha)")
-            && searched.contains("privy (private: never a bridge source)")
+            && searched.contains("gamma (walled from alpha")
+            && searched.contains("privy (private)")
             && foreign.iter().all(|k| !text2.contains(k.trim_start_matches("card:"))),
         &format!("{searched}\n{text2}"),
     );
