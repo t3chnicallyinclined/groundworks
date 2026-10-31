@@ -393,7 +393,7 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Run a shell command in a project's env, locally (vars and secrets injected) or over ssh (vars only). Output is redacted, names the machine, and leaves a receipt in the store. A non-zero exit is returned as an error."
+        description = "Run a shell command in a project's env, locally (vars and secrets injected) or over ssh (vars only). Output is redacted, names the machine, and leaves a receipt in the store. A non-zero exit is returned as an error. A protected env (prod) runs only after the owner's explicit go for this action; confirm repeats that go, it does not replace it."
     )]
     async fn run(&self, args: Parameters<RunArgs>) -> Result<String, String> {
         let a = args.0;
@@ -413,7 +413,7 @@ impl Groundworks {
     }
 
     #[tool(
-        description = "Run the project's gate (format, lint, test...) in order, stopping at the first failure, and leave one receipt in the store. RED is returned as an error."
+        description = "Run the project's gate (format, lint, test...) in order, stopping at the first failure, and leave one receipt in the store. RED is returned as an error. A gate must be able to fail: 'it compiles' is not green."
     )]
     async fn gate(&self, args: Parameters<GateArgs>) -> Result<String, String> {
         let a = args.0;
