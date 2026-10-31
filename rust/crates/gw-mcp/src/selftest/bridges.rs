@@ -601,8 +601,10 @@ pub(super) fn bridge_checks(exe: &Path, base: &Path, home: &Path, owner: &Store,
     let foreign = [&gamma_card, &privy_card, &delta_card];
     c.check(
         "B3 (gw-security 3): propose sweeps only shared, unwalled projects: no walled, private or isolated card is read",
-        // envcheck is run_env_checks' project in the same home (run-env-allowlist, merged before this lane).
-        !err && searched.starts_with("searched: beta, demo, envcheck, red;")
+        // envcheck is run_env_checks' project in the same home (run-env-allowlist, merged before this lane);
+        // red is walled from demo (wall_checks), and demo is admitted first, so red is not (A3.20).
+        !err && searched.starts_with("searched: beta, demo, envcheck;")
+            && searched.contains("red (walled from demo)")
             && searched.contains("gamma (walled from alpha)")
             && searched.contains("privy (private: never a bridge source)")
             && foreign.iter().all(|k| !text2.contains(k.trim_start_matches("card:"))),

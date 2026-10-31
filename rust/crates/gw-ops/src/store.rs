@@ -270,6 +270,7 @@ impl Store {
             Some(p) => {
                 let asked = registry.project(p)?;
                 reach.names.push(asked.name.clone());
+                let mut admitted = vec![(asked.name.clone(), ns(&asked.name)?)];
                 for r in &asked.related {
                     let name = registry.project(r)?.name.clone();
                     if reach.names.contains(&name) {
@@ -281,16 +282,12 @@ impl Store {
                         reach.skipped.push(format!("{name} (isolated)"));
                         continue;
                     }
-                    let mut wall = None;
-                    for n in &reach.names {
-                        if walled(&ns(n)?, &scope) {
-                            wall = Some(n.clone());
-                            break;
-                        }
-                    }
-                    match wall {
+                    match walled_from(&walls, &scope, &admitted) {
                         Some(other) => reach.skipped.push(format!("{name} (walled from {other})")),
-                        None => reach.names.push(name),
+                        None => {
+                            admitted.push((name.clone(), scope));
+                            reach.names.push(name);
+                        }
                     }
                 }
             }
@@ -1517,6 +1514,21 @@ impl Store {
             .query("CREATE wall SET a = $a, b = $b, why = $why;", &vars.0, Some(1))?;
         Ok(())
     }
+}
+
+/// The one pairwise wall rule of a read (A3.20): the first project already admitted to the read (in admission
+/// order, the asked or target project first) that a wall joins with `scope`, if any. `walls` are scope pairs
+/// as [`Store::walls`] reads them, either way round; `admitted` holds (name, scope) pairs. [`Store::reach`] and
+/// `bridge::reach` both admit through it, so a read never holds both sides of a wall.
+pub fn walled_from<'a>(walls: &[(String, String)], scope: &str, admitted: &'a [(String, String)]) -> Option<&'a str> {
+    admitted
+        .iter()
+        .find(|(_, s)| {
+            walls
+                .iter()
+                .any(|(x, y)| (x == s && y == scope) || (x == scope && y == s))
+        })
+        .map(|(name, _)| name.as_str())
 }
 
 /// What a read may combine ([`Store::reach`]): the projects in it, and each one left out with why.

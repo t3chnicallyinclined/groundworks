@@ -4,8 +4,8 @@
 //! testable (an assumption check per source assumption, each quoting the target; the novelty search this
 //! program ran; a written test) -> supported (an ok receipt) or refuted (a receipt, or a quoted mismatch).
 //!
-//! Reach (gw-security rulings 1, 3 and 5, 2026-10-30): a bridge's source is a project at level `shared`, not
-//! walled from the target, never the target itself; a private project is never a source (editing `related`
+//! Reach (gw-security rulings 1, 3 and 5, 2026-10-30; A3.20): a bridge's source is a project at level `shared`,
+//! not walled from the target nor from a source admitted before it (registry order), never the target itself; a private project is never a source (editing `related`
 //! does not change that), an isolated one is never read. Reach is checked when a bridge is written and again
 //! every time one is read, so a wall or level set later stops an existing bridge from rendering. Every read
 //! takes its reach from [`reach`] alone.
@@ -46,53 +46,75 @@ impl Reach {
     }
 }
 
-/// The one reach function every card, bridge and evaluator read goes through (gw-security rulings 1, 3 and 5).
-/// Walls and levels come from the store's own readers ([`Store::walls`], [`Store::level`]), the owner-signed rows
-/// in `global`: a source must be at level `shared` (isolated and private are refused, ruling 3), and no wall may
-/// join it with the target (ruling 1). Unlike [`Store::reach`] with no project named, a wall between two other
-/// projects does not take them out of this target's reach. A wall or level that cannot be read refuses.
+/// The one reach function every card, bridge and evaluator read goes through (gw-security rulings 1, 3 and 5;
+/// A3.20). Walls and levels come from the store's own readers ([`Store::walls`], [`Store::level`]), the
+/// owner-signed rows in `global`; [`admit`] decides.
 pub fn reach(home: &Home, store: &Store, project: &str) -> Result<Reach> {
     let registry = Registry::load(home)?;
     let target = registry.project(project)?.name.clone();
     let target_ns = gw_store::project_ns(&store::slug(&target)?)?;
-    let mut out = Reach {
-        target: target.clone(),
-        sources: Vec::new(),
-        skipped: Vec::new(),
-    };
     let walls = match store.walls() {
         Ok(walls) => walls,
         Err(e) => {
-            for name in registry.projects.keys().filter(|n| **n != target) {
-                out.skipped.push(format!("{name} (walls unreadable, refused: {e:#})"));
-            }
-            return Ok(out);
+            let skipped = registry
+                .projects
+                .keys()
+                .filter(|n| **n != target)
+                .map(|name| format!("{name} (walls unreadable, refused: {e:#})"))
+                .collect();
+            return Ok(Reach {
+                target,
+                sources: Vec::new(),
+                skipped,
+            });
         }
     };
-    for name in registry.projects.keys() {
-        if *name == target {
-            continue;
-        }
+    let mut candidates = Vec::new();
+    for name in registry.projects.keys().filter(|n| **n != target) {
         let ns = gw_store::project_ns(&store::slug(name)?)?;
-        let level = match store.level(&ns) {
+        let level = store.level(&ns).map_err(|e| format!("{e:#}"));
+        candidates.push((name.clone(), ns, level));
+    }
+    Ok(admit(&target, &target_ns, &walls, candidates))
+}
+
+/// Who a bridge into `target` may take its source from, in registry order (A3.20). Eligibility first: a source
+/// walled from the target, or whose level cannot be read, or that is not `shared` (isolated and private never
+/// are, ruling 3), is refused. Then each eligible source is admitted unless a wall joins it with a source
+/// already admitted ([`store::walled_from`], the rule [`Store::reach`] uses), so one read never holds both sides
+/// of a wall: the first of a walled pair is admitted, the second is skipped "walled from <first>".
+pub fn admit(
+    target: &str,
+    target_ns: &str,
+    walls: &[(String, String)],
+    candidates: Vec<(String, String, std::result::Result<String, String>)>,
+) -> Reach {
+    let mut out = Reach {
+        target: target.to_owned(),
+        sources: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let mut admitted = vec![(target.to_owned(), target_ns.to_owned())];
+    for (name, ns, level) in candidates {
+        let level = match level {
             Ok(level) => level,
             Err(e) => {
-                out.skipped.push(format!("{name} (level unreadable, refused: {e:#})"));
+                out.skipped.push(format!("{name} (level unreadable, refused: {e})"));
                 continue;
             }
         };
-        if walls
-            .iter()
-            .any(|(a, b)| (*a == ns && *b == target_ns) || (*a == target_ns && *b == ns))
-        {
-            out.skipped.push(format!("{name} (walled from {target})"));
-        } else if level != "shared" {
-            out.skipped.push(format!("{name} ({level}: never a bridge source)"));
-        } else {
-            out.sources.push(name.clone());
+        let wall = store::walled_from(walls, &ns, &admitted).map(str::to_owned);
+        match wall {
+            Some(w) if w == target => out.skipped.push(format!("{name} (walled from {target})")),
+            _ if level != "shared" => out.skipped.push(format!("{name} ({level}: never a bridge source)")),
+            Some(w) => out.skipped.push(format!("{name} (walled from {w})")),
+            None => {
+                out.sources.push(name.clone());
+                admitted.push((name, ns));
+            }
         }
     }
-    Ok(out)
+    out
 }
 
 /// A card of `source` read for a bridge: live, servable, and the kind asked for.
@@ -1212,6 +1234,48 @@ mod tests {
         assert!(
             super::below(0.5, &[0.0, 0.5]).is_some(),
             "level with p99 does not stand out"
+        );
+    }
+
+    /// A3.20: three shared projects and a wall between two of them; a bridge read for the third admits the
+    /// first of the walled pair (registry order) and skips the second as walled from it. Eligibility still
+    /// refuses a project walled from the target and one that is not shared.
+    #[test]
+    fn a_bridge_read_never_holds_both_sides_of_a_wall() {
+        let shared = || Ok("shared".to_owned());
+        let walls = vec![("proj_a".to_owned(), "proj_b".to_owned())];
+        let r = super::admit(
+            "c",
+            "proj_c",
+            &walls,
+            vec![
+                ("a".into(), "proj_a".into(), shared()),
+                ("b".into(), "proj_b".into(), shared()),
+            ],
+        );
+        assert_eq!(r.sources, ["a"]);
+        assert_eq!(r.skipped, ["b (walled from a)"]);
+        assert_eq!(r.refuses("b").as_deref(), Some("b (walled from a)"));
+
+        let walls = vec![("proj_c".to_owned(), "proj_d".to_owned())];
+        let r = super::admit(
+            "c",
+            "proj_c",
+            &walls,
+            vec![
+                ("d".into(), "proj_d".into(), shared()),
+                ("p".into(), "proj_p".into(), Ok("private".to_owned())),
+                ("q".into(), "proj_q".into(), Err("down".to_owned())),
+            ],
+        );
+        assert!(r.sources.is_empty());
+        assert_eq!(
+            r.skipped,
+            [
+                "d (walled from c)",
+                "p (private: never a bridge source)",
+                "q (level unreadable, refused: down)"
+            ]
         );
     }
 }
