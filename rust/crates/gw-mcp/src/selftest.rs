@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 mod attack;
 mod bridges;
+mod status;
 
 /// The canary every hook input carries in the selftest (a cwd, a command, a tool input, a transcript
 /// line); it must appear in no telemetry row, env file or hook stderr afterwards (TELEMETRY-POLICY.md).
@@ -1191,6 +1192,7 @@ the parser now accepts empty input
     run_env_checks(exe, base, &home, &mut c)?;
     attack::attack_checks(exe, base, &home, &owner, &mut c)?;
     bridges::bridge_checks(exe, base, &home, &owner, &mut c)?;
+    status::status_checks(exe, base, &home, &mut c)?;
 
     let total = c
         .lines

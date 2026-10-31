@@ -31,5 +31,6 @@ pub mod scaffold;
 pub mod scan;
 pub mod secrets;
 pub mod store;
+pub mod store_status;
 pub mod supervise;
 pub mod survey;

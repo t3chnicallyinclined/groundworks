@@ -122,8 +122,20 @@ pub struct UseSection {
     pub hook_p95_ms_by_event: BTreeMap<String, i64>,
 }
 
+/// The pulse JSON contract's version (docs/PULSE.md). A line without `schema` is version 1.
+pub const SCHEMA: u32 = 2;
+
+fn schema_v1() -> u32 {
+    1
+}
+
+/// One pulse: the object `pulse --json` prints and `metrics/pulse.jsonl` gets one line of. Its shape is the
+/// contract in docs/PULSE.md: within a version fields are only added, and a missing section is `null`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Pulse {
+    /// [`SCHEMA`] on every pulse this build takes; 1 when read from a line written before the field existed.
+    #[serde(default = "schema_v1")]
+    pub schema: u32,
     pub at: String,
     pub machine: String,
     pub projects: u64,
@@ -156,6 +168,12 @@ pub struct Pulse {
     /// transcript itself.
     #[serde(default)]
     pub cost: Option<crate::meter::CostLine>,
+    /// The reading pipeline's newest run per project (W3, docs/PULSE.md); `null` until W3 adds it.
+    #[serde(default)]
+    pub read: Option<Value>,
+    /// The red conditions of this pulse ([`digest`]), as text.
+    #[serde(default)]
+    pub red: Vec<String>,
 }
 
 impl Pulse {
@@ -173,6 +191,7 @@ impl Pulse {
 pub fn take(home: &Home, store: &Store) -> Result<Pulse> {
     let registry = Registry::load(home)?;
     let mut pulse = Pulse {
+        schema: SCHEMA,
         at: now_iso(),
         machine: crate::home::machine(),
         ..Pulse::default()
@@ -215,6 +234,7 @@ pub fn take(home: &Home, store: &Store) -> Result<Pulse> {
     }
     pulse.use_ = take_use(home, store, &registry, &pulse.at)?;
     pulse.cost = crate::meter::latest(home);
+    pulse.red = digest(&pulse);
     Ok(pulse)
 }
 
@@ -607,12 +627,19 @@ fn exports_status(home: &Home) -> (Option<String>, Option<String>) {
 
 /// Append the pulse to `metrics/pulse.jsonl` in the home; returns the path.
 pub fn record(home: &Home, pulse: &Pulse) -> Result<std::path::PathBuf> {
+    Ok(record_line(home, pulse)?.0)
+}
+
+/// Append the pulse to `metrics/pulse.jsonl` in the home; returns the path and the exact line written
+/// (without its newline), which `pulse --json` prints, so the two can never differ.
+pub fn record_line(home: &Home, pulse: &Pulse) -> Result<(std::path::PathBuf, String)> {
     let dir = home.root.join("metrics");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("pulse.jsonl");
+    let line = serde_json::to_string(pulse)?;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
-    writeln!(f, "{}", serde_json::to_string(pulse)?)?;
-    Ok(path)
+    writeln!(f, "{line}")?;
+    Ok((path, line))
 }
 
 fn counts(map: &BTreeMap<String, u64>) -> String {
@@ -1148,5 +1175,47 @@ mod tests {
         );
         let text = render(&p);
         assert!(text.contains("digest: RED"), "{text}");
+    }
+
+    /// The pulse JSON contract (docs/PULSE.md): a schema-2 golden object parses and writes back exactly
+    /// (no field renamed, retyped or dropped without the golden and PULSE.md changing with it); the first
+    /// line ever recorded on THERIGXD (2026-10-26, schema 1, counts only, project names replaced by p01..)
+    /// still parses; and an optional section with nothing in it is `null`, never absent.
+    #[test]
+    fn the_pulse_json_contract_holds_for_schema_2_and_schema_1_lines() {
+        let golden: Value = serde_json::from_str(include_str!("../fixtures/pulse_schema2_golden.json")).unwrap();
+        let p: Pulse = serde_json::from_value(golden.clone()).unwrap();
+        assert_eq!(p.schema, SCHEMA);
+        assert_eq!(SCHEMA, 2);
+        assert!(p.read.is_none() && p.cost.is_none());
+        assert_eq!(p.red.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            golden,
+            "the struct no longer writes the golden object"
+        );
+
+        let line = include_str!("../fixtures/pulse_schema1_first_line.jsonl")
+            .lines()
+            .next()
+            .unwrap();
+        let old: Pulse = serde_json::from_str(line).unwrap();
+        assert_eq!(old.schema, 1, "a line without schema is schema 1");
+        assert_eq!((old.projects, old.totals.units, old.per_project.len()), (18, 49187, 18));
+        assert!(old.read.is_none() && old.cost.is_none() && old.red.is_empty());
+
+        let fresh = serde_json::to_value(Pulse {
+            schema: SCHEMA,
+            ..Pulse::default()
+        })
+        .unwrap();
+        for key in ["cost", "read", "last_export", "last_drill"] {
+            assert!(
+                fresh.get(key).is_some_and(Value::is_null),
+                "{key} must be present as null"
+            );
+        }
+        let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys(&fresh), keys(&golden), "top-level fields differ from the golden");
     }
 }

@@ -217,6 +217,10 @@ enum Command {
         /// Take the pulse, record it, and print only the red conditions (docs/METRICS.md), one per line.
         #[arg(long)]
         digest: bool,
+        /// Take the pulse, record it, and print the recorded line itself: the schema-2 object of
+        /// docs/PULSE.md, byte for byte what was appended to metrics/pulse.jsonl.
+        #[arg(long, conflicts_with_all = ["history", "digest"])]
+        json: bool,
     },
     /// The meter: tokens per session, per human turn and per project from Claude Code's transcripts
     /// (counts only; fenced folders never opened), one line appended to metrics/cost.jsonl, which the
@@ -346,7 +350,12 @@ enum StoreAction {
         no_owner: bool,
     },
     /// Is the store up, which version, which namespaces.
-    Status,
+    Status {
+        /// Print JSON: every registered namespace with its schema_version:current {product, major, applied},
+        /// read through the agent login. Read-only: never starts the store, never bootstraps or migrates.
+        #[arg(long)]
+        json: bool,
+    },
     /// Import any remaining file journals.
     Import,
     /// Keep the store answering: adopt one already up, start one when none is, start it again when it
@@ -1013,7 +1022,7 @@ async fn dispatch(command: Command) -> Result<bool> {
                 true,
             )
         }
-        Command::Pulse { history, digest } => {
+        Command::Pulse { history, digest, json } => {
             if history {
                 (gw_ops::pulse::history(&home)?, true)
             } else {
@@ -1021,8 +1030,10 @@ async fn dispatch(command: Command) -> Result<bool> {
                 let home2 = Arc::clone(&home);
                 store::blocking(move || {
                     let p = gw_ops::pulse::take(&home2, &store)?;
-                    let path = gw_ops::pulse::record(&home2, &p)?;
-                    if digest {
+                    let (path, line) = gw_ops::pulse::record_line(&home2, &p)?;
+                    if json {
+                        Ok((line, true))
+                    } else if digest {
                         let red = gw_ops::pulse::digest(&p);
                         let text = if red.is_empty() {
                             format!(
@@ -1232,9 +1243,20 @@ async fn store_action(home: &Arc<Home>, action: StoreAction) -> Result<String> {
             })
             .await
         }
-        StoreAction::Status => {
+        StoreAction::Status { json: false } => {
             let store = open_store(home).await?;
             store::blocking(move || store.status()).await
+        }
+        StoreAction::Status { json: true } => {
+            let home = Arc::clone(home);
+            store::blocking(move || {
+                let store = Store::open_if_up(&home)?.ok_or_else(|| {
+                    anyhow::anyhow!("the store is not answering; store status --json never starts it")
+                })?;
+                let registry = gw_ops::registry::Registry::load(&home)?;
+                Ok(serde_json::to_string_pretty(&store.schema_status(&registry))?)
+            })
+            .await
         }
         StoreAction::Import => {
             let store = open_store(home).await?;

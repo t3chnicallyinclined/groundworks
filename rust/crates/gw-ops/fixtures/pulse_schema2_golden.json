@@ -1,0 +1,140 @@
+{
+  "schema": 2,
+  "at": "2026-10-30T23:00:00Z",
+  "machine": "THERIGXD",
+  "projects": 1,
+  "totals": {
+    "units": 120,
+    "units_gone": 0,
+    "facts_live": 0,
+    "facts_stale": 0,
+    "facts_confirmed": 0,
+    "facts_from_asks": 0,
+    "attacks": 0,
+    "evidence_links": 0
+  },
+  "per_project": {
+    "p01": {
+      "units": 120,
+      "units_gone": 0,
+      "facts_live": 0,
+      "facts_stale": 0,
+      "facts_confirmed": 0,
+      "facts_from_asks": 0,
+      "attacks": 0,
+      "evidence_links": 0
+    }
+  },
+  "asks": 3,
+  "asks_eval": 0,
+  "asks_passed": 2,
+  "asks_failed": 1,
+  "asks_not_executed": 0,
+  "asks_served_from_knowledge": 0,
+  "recorded_in_window": 0,
+  "last_export": "2026-10-30",
+  "last_drill": "PASS",
+  "use": {
+    "window_days": 7,
+    "telemetry_since": null,
+    "window": {
+      "sessions": 0,
+      "sessions_that_wrote": 0,
+      "write_rate": 0.0,
+      "blocks_at_stop": 0,
+      "blocks_converted": 0,
+      "denies": 0,
+      "denies_converted": 0,
+      "hook_errors": 0,
+      "hook_latency_p50_ms": 0,
+      "hook_latency_p95_ms": 0,
+      "journal_writes": 0,
+      "writes_by_kind": {
+        "status": 1
+      },
+      "writes_by_confidence": {},
+      "writes_by_agent": {},
+      "confirmed_share": 0.0,
+      "store_rejections": 0,
+      "commits": null,
+      "commits_without_sessions": null,
+      "commits_unseen": null
+    },
+    "all_time": {
+      "sessions": 0,
+      "sessions_that_wrote": 0,
+      "write_rate": 0.0,
+      "blocks_at_stop": 0,
+      "blocks_converted": 0,
+      "denies": 0,
+      "denies_converted": 0,
+      "hook_errors": 0,
+      "hook_latency_p50_ms": 0,
+      "hook_latency_p95_ms": 0,
+      "journal_writes": 0,
+      "writes_by_kind": {},
+      "writes_by_confidence": {},
+      "writes_by_agent": {},
+      "confirmed_share": 0.0,
+      "store_rejections": 0,
+      "commits": null,
+      "commits_without_sessions": null,
+      "commits_unseen": null
+    },
+    "per_project": {
+      "p01": {
+        "window": {
+          "sessions": 0,
+          "sessions_that_wrote": 0,
+          "write_rate": 0.0,
+          "blocks_at_stop": 0,
+          "blocks_converted": 0,
+          "denies": 0,
+          "denies_converted": 0,
+          "hook_errors": 0,
+          "hook_latency_p50_ms": 0,
+          "hook_latency_p95_ms": 0,
+          "journal_writes": 0,
+          "writes_by_kind": {},
+          "writes_by_confidence": {},
+          "writes_by_agent": {},
+          "confirmed_share": 0.0,
+          "store_rejections": 0,
+          "commits": null,
+          "commits_without_sessions": null,
+          "commits_unseen": null
+        },
+        "all_time": {
+          "sessions": 0,
+          "sessions_that_wrote": 0,
+          "write_rate": 0.0,
+          "blocks_at_stop": 0,
+          "blocks_converted": 0,
+          "denies": 0,
+          "denies_converted": 0,
+          "hook_errors": 0,
+          "hook_latency_p50_ms": 0,
+          "hook_latency_p95_ms": 0,
+          "journal_writes": 0,
+          "writes_by_kind": {},
+          "writes_by_confidence": {},
+          "writes_by_agent": {},
+          "confirmed_share": 0.0,
+          "store_rejections": 0,
+          "commits": null,
+          "commits_without_sessions": null,
+          "commits_unseen": null
+        }
+      }
+    },
+    "rejections_previous_week": 0,
+    "hook_p95_ms_by_event": {
+      "Stop": 1
+    }
+  },
+  "cost": null,
+  "read": null,
+  "red": [
+    "RED example: a digest line, as text"
+  ]
+}

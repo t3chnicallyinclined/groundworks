@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Integration of the 2026-10-30 lanes, and two read-only surfaces** (2026-10-30, Rust workspace; A3.1 steps 1-7,
+  integration engineer). Merged in the architect's order: init-s0-s1, init-s2, run-env-allowlist, attack-verdicts,
+  kpi-cost-w2, idea-bridges. Schema numbers retaken at merge: attack 0019 -> **0018**, card 0017 -> **0019**,
+  bridge 0018 -> **0020**, judgement 0019 -> **0021** (files, migration list, tests and docs). idea-bridges now frames
+  through `frame::data` and reads walls and levels through `Store::walls`/`Store::level` (its SEAM copies
+  removed); its reach stays target-relative, because `Store::reach` with no project drops both sides of every
+  wall for every target (3 bridge checks red); that choice is returned to gw-architect. `main` awaits a boxed
+  dispatch future (the debug e2e overflowed the 1 MB main stack once every lane's commands were merged). Then:
+  - `groundworks pulse --json` prints the exact line it appends to `metrics/pulse.jsonl`; every pulse carries
+    `"schema": 2`, `read: null` until W3, and `red` (the digest lines). The contract is `docs/PULSE.md` (A3.5,
+    verbatim); a test parses a schema-2 golden object and the first schema-1 line recorded on THERIGXD, and was
+    shown red on a renamed golden field and on a missing schema default.
+  - `groundworks store status --json`: every registered namespace with its `schema_version:current`
+    `{product, major, applied}` and whether it is at this build's number, read through each namespace's agent
+    login. Never starts the store, never bootstraps or migrates (selftest: an unopened namespace stays unopened
+    across two runs).
+
 - **R2: the owner's confirm rule** (2026-10-30; owner statement in session projects-c7, journaled in groundworks at 2026-10-30T20:19:10Z; in 0017, which no store has applied yet). The rule:
   - a tracked doc (`.md`, `.txt`, `.rst`, a README) confirms only a `decision`, never a fact, gotcha, status or eliminated entry;
   - on `supergun` no doc confirms anything, because its byte gates are its proof;
