@@ -548,6 +548,7 @@ dependencies = [
  "getrandom 0.3.4",
  "gw-core",
  "gw-store",
+ "memchr",
  "regex",
  "rust-stemmers",
  "schemars",

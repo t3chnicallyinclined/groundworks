@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 use crate::home::{EnforceMode, Home, find_home};
 use crate::registry::Registry;
 use crate::store::{HookEventIn, SessionIn, Store};
+use crate::transcript_tail;
 
 /// The rule list the plugin ships (`plugin/hooks/deny.toml`, owned by gw-security), compiled in so the
 /// CLI works without the plugin on disk. The plugin passes its own copy with `--rules`.
@@ -349,7 +350,7 @@ impl ToolUses {
 }
 
 /// Which counter a tool name feeds, if any.
-fn classify(name: &str) -> Option<fn(&mut ToolUses)> {
+pub(crate) fn classify(name: &str) -> Option<fn(&mut ToolUses)> {
     match name {
         "Edit" | "MultiEdit" | "NotebookEdit" => Some(|t| t.edit += 1),
         "Write" => Some(|t| t.write += 1),
@@ -364,8 +365,10 @@ fn classify(name: &str) -> Option<fn(&mut ToolUses)> {
 }
 
 /// Count the tool_use blocks of assistant messages at or after `since` (RFC 3339, compared to the second).
-/// A line that is not JSON, or has no timestamp, is counted: the hook would rather ask once too often.
-/// Reads `type`, `timestamp` and each block's `type` and `name`; nothing else.
+/// An assistant line with no timestamp is counted: the hook would rather ask once too often.
+/// Reads `type`, `timestamp` and each block's `type` and `name`; nothing else. The Stop hook uses
+/// [`crate::transcript_tail::count`], which gives this count or more without reading the whole file;
+/// this full read is its reference (tests and `examples/transcript_differential.rs`).
 pub fn count_tool_uses(transcript: &str, since: Option<&str>) -> ToolUses {
     let since = since.map(|s| &s[..s.len().min(19)]);
     let mut t = ToolUses::default();
@@ -391,14 +394,6 @@ pub fn count_tool_uses(transcript: &str, since: Option<&str>) -> ToolUses {
         }
     }
     t
-}
-
-/// The earliest timestamp in a transcript, when the session's start is not known otherwise.
-fn first_timestamp(transcript: &str) -> Option<String> {
-    transcript
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find_map(|r| r["timestamp"].as_str().map(str::to_owned))
 }
 
 // ---- the hook run ------------------------------------------------------------------------------------
@@ -1069,17 +1064,9 @@ fn stop(ctx: &mut Ctx) -> Value {
         ctx.log(&outcome, ToolUses::default(), 0);
         return outcome.output;
     };
-    // The transcript is opened for counts only (names and timestamps); its path is written nowhere.
-    let transcript = match ctx.input.transcript_path.as_deref() {
-        Some(p) => match std::fs::read_to_string(p) {
-            Ok(text) => text,
-            Err(e) => {
-                ctx.note_error(ErrorCode::TranscriptUnreadable, &anyhow::Error::from(e));
-                String::new()
-            }
-        },
-        None => String::new(),
-    };
+    // The transcript is opened for counts only (names and timestamps); its path is written nowhere (the
+    // checkpoint under <home>/state/stop keeps its hash). Only its tail is read (transcript_tail.rs).
+    let transcript = ctx.input.transcript_path.as_deref().map(Path::new);
     let start = std::env::var("GROUNDWORKS_SESSION_START")
         .ok()
         .filter(|s| !s.is_empty())
@@ -1088,8 +1075,30 @@ fn stop(ctx: &mut Ctx) -> Value {
                 .as_ref()
                 .and_then(|s| s.session_started_at(&ctx.input.session_id).ok().flatten())
         })
-        .or_else(|| first_timestamp(&transcript));
-    let mut uses = count_tool_uses(&transcript, start.as_deref());
+        .or_else(|| {
+            transcript
+                .and_then(|p| std::fs::File::open(p).ok())
+                .and_then(transcript_tail::first_timestamp)
+        });
+    let mut uses = match transcript {
+        Some(p) => {
+            let ckpt = ctx.home.as_ref().map(|h| transcript_tail::dir(&h.root));
+            match transcript_tail::count(
+                p,
+                start.as_deref(),
+                &ctx.input.session_id,
+                ckpt.as_deref(),
+                transcript_tail::MARGIN,
+            ) {
+                Ok((uses, _)) => uses,
+                Err(e) => {
+                    ctx.note_error(ErrorCode::TranscriptUnreadable, &anyhow::Error::from(e));
+                    ToolUses::default()
+                }
+            }
+        }
+        None => ToolUses::default(),
+    };
     let down_flag = std::env::var("GROUNDWORKS_DOWN").is_ok_and(|v| v == "1");
     let writes = match (&ctx.store, &start) {
         (Some(store), Some(start)) => match store.facts_since(&project, start) {
@@ -1351,7 +1360,10 @@ not json at all
             count_tool_uses(TRANSCRIPT, Some("2026-10-29T11:00:00Z")),
             ToolUses::default()
         );
-        assert_eq!(first_timestamp(TRANSCRIPT).as_deref(), Some("2026-10-29T10:00:00.000Z"));
+        assert_eq!(
+            transcript_tail::first_timestamp(TRANSCRIPT.as_bytes()).as_deref(),
+            Some("2026-10-29T10:00:00.000Z")
+        );
     }
 
     #[test]

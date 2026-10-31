@@ -22,6 +22,8 @@ flate2 = "1"
 # The supervisor reads the store volume's free space (no unsafe of our own).
 fs2 = "0.4"
 getrandom = "0.3"
+# The Stop hook splits transcript lines on bytes (transcript_tail.rs). Already in the build through regex.
+memchr = "2"
 # rerank: the store's analyzer stems with Snowball (English); the local arms must match it.
 rust-stemmers = "1"
 regex = "1"

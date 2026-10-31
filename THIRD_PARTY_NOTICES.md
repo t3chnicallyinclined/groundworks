@@ -24,6 +24,7 @@ Every third-party item this repository adapts, depends on, or credits for ideas.
 | Rust crate `flate2` | MIT OR Apache-2.0 | Gzip of the store's daily exports (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `fs2` | MIT OR Apache-2.0 | Free space of the store's volume, read by the supervisor (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `getrandom` | MIT OR Apache-2.0 | Store credentials from OS randomness | Compiled into binaries built from `rust/`; no binary is distributed |
+| Rust crate `memchr` | Unlicense OR MIT | Splitting transcript lines on bytes in the Stop hook (gw-ops); already in the build through `regex` | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `regex` | MIT OR Apache-2.0 | Config parsing (gw-core), estate scan globs (gw-ops) | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `rmcp` | Apache-2.0 | The Rust MCP SDK: the groundworks MCP server | Compiled into binaries built from `rust/`; no binary is distributed |
 | Rust crate `rust-stemmers` | MIT OR BSD-3-Clause | Snowball English stemming in the retrieval ladder's rerank arms (gw-ops), matching the store's analyzer | Compiled into binaries built from `rust/`; no binary is distributed |
